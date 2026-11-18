@@ -201,6 +201,9 @@ public struct Node: Sendable, Identifiable {
     public var inside: Level?
     public var detail: String?
     public var actions: [Action] = []
+    /// What this node does, operation by operation: the queries it runs, endpoints it serves,
+    /// messages it publishes or consumes, keys it reads (docs/manifest.md, Operations).
+    public var ops: [Operation] = []
     public var line: Int?               // source line, for diagnostics
 
     public init(id: String, kind: NodeKind, label: String? = nil) {
@@ -272,9 +275,87 @@ public struct Step: Sendable {
     public var retries: Int?
     public var backoff: Double?
     public var breaker: Breaker?
+    /// The operation this step performs: an op id on the calling node, then on the target, or "node/op".
+    public var op: String?
     public var line: Int?
     public init(_ action: StepAction) { self.action = action }
 }
+
+// MARK: - Operations
+
+public enum OpKind: String, Sendable, CaseIterable {
+    case sql, cache, publish, consume, rpc, http, search, storage, llm, call
+
+    /// SF Symbol for rows and badges.
+    public var symbol: String {
+        switch self {
+        case .sql: "tablecells"
+        case .cache: "bolt.horizontal"
+        case .publish: "paperplane"
+        case .consume: "tray.and.arrow.down"
+        case .rpc: "point.3.connected.trianglepath.dotted"
+        case .http: "globe"
+        case .search: "magnifyingglass"
+        case .storage: "externaldrive"
+        case .llm: "brain"
+        case .call: "arrow.right.circle"
+        }
+    }
+}
+
+public enum OpAccess: String, Sendable, CaseIterable { case read, write, readWrite = "read-write" }
+
+/// Inbound: something the node serves (an endpoint, an RPC method, a consumer).
+/// Outbound: something it calls on `target`.
+public enum OpDirection: String, Sendable { case inbound = "in", outbound = "out" }
+
+/// One thing a node does. Every field except `id`, `kind` and `label` is optional; kinds use the
+/// fields that make sense for them (docs/manifest.md, Operations).
+public struct Operation: Sendable, Identifiable {
+    public var id: String
+    public var kind: OpKind
+    public var label: String
+    public var direction: OpDirection
+    public var target: String?          // node id (outbound)
+    public var access: OpAccess?
+    public var doc: String?
+    public var code: [String] = []
+    public var risks: [String] = []
+    public var tags: [String] = []
+    // sql / search
+    public var query: String?
+    public var tables: [String] = []
+    public var indexes: [String] = []
+    public var tx: Bool?
+    public var locks: String?
+    // cache
+    public var command: String?         // "GET", "SET EX 300", "HINCRBY", "EVAL"
+    public var key: String?             // key pattern, routing key or partition key
+    public var ttl: Double?
+    // publish / consume
+    public var topic: String?           // topic, exchange or queue name
+    public var group: String?           // consumer group / queue
+    public var payload: String?         // example message or schema
+    // rpc / http
+    public var method: String?          // "POST", or "orders.v1.Orders/Create"
+    public var path: String?            // "/orders/{id}"
+    public var request: String?
+    public var response: String?
+    public var streaming: String?       // unary | server | client | bidi
+    public var status: [String] = []    // "201", "409 duplicate", ...
+    public var calls: String?           // "node/op": the inbound op this outbound call reaches
+    // free-form facts shown as a table (timeout, auth, idempotency, ...)
+    public var facts: [(key: String, value: String)] = []
+    // deeper
+    public var inside: Level?
+    public var detail: String?
+    public var line: Int?
+
+    public init(id: String, kind: OpKind, label: String? = nil, direction: OpDirection = .outbound) {
+        self.id = id; self.kind = kind; self.label = label ?? id; self.direction = direction
+    }
+}
+
 
 /// A scalar value for parameters and controls.
 public enum Value: Sendable, Hashable, CustomStringConvertible {

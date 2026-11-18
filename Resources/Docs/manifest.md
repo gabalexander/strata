@@ -202,6 +202,101 @@ Defaults: `replicas: 1`, `errors: 0`, no timeout, no retries, `backoff: 100ms`, 
 Explicit limits are 64 replicas, 100,000 concurrency or prefetch per replica, and 1,000,000 for
 `capacity` or the `queue` waiting room. Runtime updates above these limits are clamped and logged.
 
+## Operations
+
+Operations are what a node actually does: the queries it runs, the endpoints it serves, the messages
+it publishes or consumes, the cache keys it touches. They're the bridge between the diagram and the code.
+
+- The inspector lists a node's operations grouped by kind, and clicking one opens its detail.
+- Databases, caches and buffers show the reverse view: every operation on any node of the level
+  that targets them, grouped by table, key pattern or topic.
+
+```yaml
+- id: orders
+  kind: service
+  ops:
+    - id: create-order              # unique within the node
+      kind: http                    # sql | cache | publish | consume | rpc | http | search | storage | llm | call
+      label: POST /orders
+      method: POST
+      path: /orders
+      request: '{ "sku": "A-1", "qty": 2 }'
+      status: ["201 created", "409 duplicate idempotency key"]
+      doc: Validates the cart, writes the order and its outbox row in one transaction.
+    - id: insert-order
+      kind: sql
+      target: db                    # an outbound op names the node it talks to
+      label: INSERT order + outbox
+      access: write                 # read | write | read-write
+      tables: [orders, outbox]
+      tx: true
+      locks: row
+      query: |
+        INSERT INTO orders (id, user_id, total) VALUES ($1, $2, $3);
+        INSERT INTO outbox (topic, payload) VALUES ('OrderPlaced', $4);
+      code: services/orders/repo.go:88
+      risks: [hot rows for very large customers]
+    - id: price
+      kind: cache
+      target: cache
+      label: GET price
+      command: GET
+      key: "price:{sku}"
+      ttl: 5m
+    - id: order-placed
+      kind: publish
+      target: events
+      label: OrderPlaced
+      topic: order-events
+      key: order_id                 # partition / routing key
+      payload: '{ "order_id": "…", "total": 4200 }'
+    - id: charge
+      kind: rpc
+      target: payments
+      label: Charge card
+      method: payments.v1.Payments/Charge
+      streaming: unary
+      calls: payments/charge        # the inbound op it reaches on the target ("node/op")
+      facts: { deadline: 800ms, idempotent: "yes, by order id" }
+```
+
+**Direction.** An op with a `target` is outbound: something this node calls. One without a target
+is inbound: an endpoint or RPC method it serves (`http`, `rpc`), or a consumer (`consume`, which
+names its buffer in `topic` or `target`). Override with `direction: in|out`.
+
+**Fields by kind.** Every field is optional except `id`, `kind` and `label`. Use the ones that fit the kind:
+
+| Kind | Fields |
+|---|---|
+| `sql`, `search` | `query`, `tables`, `indexes`, `access`, `tx`, `locks` |
+| `cache` (Redis, Valkey, Memcached) | `command`, `key` (pattern), `ttl`, `access` |
+| `publish`, `consume` (Kafka, RabbitMQ, SQS, NATS) | `topic`, `key` (partition/routing), `group`, `payload` |
+| `rpc` (gRPC, Thrift), `http` | `method`, `path`, `request`, `response`, `streaming`, `status`, `calls` |
+| any kind | `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts), `inside` / `detail` |
+
+**Going deeper.**
+
+- `calls: node/op` links an outbound call to the endpoint it reaches, so you can follow a request
+  through the code: gateway → orders-svc `POST /orders` → `INSERT order + outbox`.
+- `inside:` gives an op its own level (for example the lock and transaction sequence of a query),
+  and `detail:` opens another manifest.
+
+**Live numbers.** A step names the op it performs with `op:`. That counts its rate, errors and
+latency on the op:
+
+```yaml
+- call: db
+  op: insert-order          # resolved on the calling node, then the target; or "orders/insert-order"
+```
+
+Validation checks:
+
+- op ids are unique within a node;
+- targets exist and fit the kind: `sql` → database or search, `cache` → cache, `publish`/`consume`
+  → queue or topic, `rpc`/`http` → a server;
+- `calls` and step `op` references resolve;
+- an op that no flow step references is fine. It still documents the code.
+
 ## Edges
 
 ```yaml

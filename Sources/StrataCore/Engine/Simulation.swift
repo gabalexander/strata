@@ -233,6 +233,12 @@ public final class Simulation {
         return flowState(index)
     }
 
+    /// Live numbers for an operation on a node of this level (PLACEHOLDER until the ops engine work lands).
+    public func opMetrics(node: String, op: String) -> OpMetrics { OpMetrics() }
+
+    /// Recent samples (one per 0.25 s, up to 240) of an operation's rate, errors, p50 or p99.
+    public func opSeries(node: String, op: String, metric: String) -> [Double] { [] }
+
     /// Headless: advance `seconds` of sim time as fast as possible, stopping at safety limits.
     public func run(seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
