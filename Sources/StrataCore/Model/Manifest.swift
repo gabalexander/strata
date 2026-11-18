@@ -24,6 +24,10 @@ public struct Manifest: Sendable, Identifiable {
     public var terms: [Term] = []
     public var notes: String?
     public var links: [Link] = []
+    /// Value dictionaries such as status codes (docs/manifest.md, Enums). Shared by every level.
+    public var enums: [EnumDef] = []
+    /// `auto` (default): the layout engine places every node; `at` positions are only hints.
+    public var layout: LayoutMode = .auto
     public var root: Level
     public var source: ManifestSource
 
@@ -216,6 +220,10 @@ public struct Node: Sendable, Identifiable {
     public var schema: [TableSchema] = []
     /// Services: the domain objects they load and save, assembled from tables (docs/manifest.md, Data).
     public var entities: [Entity] = []
+    /// Step-by-step explanations of mechanisms this node implements (docs/manifest.md, How it works).
+    public var how: [Mechanism] = []
+    /// A formula this node computes, shown on hover (docs/manifest.md, Formulas).
+    public var formula: Formula?
     public var line: Int?               // source line, for diagnostics
 
     public init(id: String, kind: NodeKind, label: String? = nil) {
@@ -365,6 +373,8 @@ public struct Operation: Sendable, Identifiable {
     // free-form facts shown as a table (timeout, auth, idempotency, ...)
     public var facts: [(key: String, value: String)] = []
     // deeper
+    public var how: [Mechanism] = []
+    public var formula: Formula?
     public var inside: Level?
     public var detail: String?
     public var line: Int?
@@ -541,6 +551,8 @@ public struct Column: Sendable, Hashable {
     public var nullable: Bool?
     public var unique = false
     public var note: String?
+    /// Id of an `enums:` entry whose values this column holds (YAML key `enum`).
+    public var enumRef: String?
     public init(name: String) { self.name = name }
 }
 
@@ -590,4 +602,107 @@ public struct SLO: Sendable, Hashable {
     public var p99: Double?              // seconds
     public var errors: Double?           // max error ratio, 0...1
     public init() {}
+}
+
+
+// MARK: - Layout
+
+public enum LayoutMode: String, Sendable, CaseIterable { case auto, manual }
+
+// MARK: - How it works (mechanisms as playable sequences)
+
+/// One actor in a mechanism: an instance, a store, a client. `node` links it to a node of the level.
+public struct Participant: Sendable, Hashable, Identifiable {
+    public var id: String
+    public var label: String
+    public var node: String?
+    public var kind: NodeKind?
+    public init(id: String, label: String? = nil) { self.id = id; self.label = label ?? id }
+}
+
+/// A key (or any named piece of state) shown in the state panel while the sequence plays.
+public struct StateEntry: Sendable, Hashable {
+    public var key: String
+    public var value: String?            // nil = absent/deleted
+    public var ttl: Double?              // seconds left when the step completes
+    public init(key: String, value: String?, ttl: Double? = nil) { self.key = key; self.value = value; self.ttl = ttl }
+}
+
+/// One message in the sequence: `from` sends `label` (and optionally an exact `command`) to `to`.
+public struct MechStep: Sendable, Identifiable {
+    public var id: String                // stable within the mechanism ("s1", or given)
+    public var from: String
+    public var to: String
+    public var label: String
+    public var command: String?          // exact command / query / call, e.g. "SET roster:42 inst-a NX PX 15000"
+    public var reply: String?            // e.g. "OK", "(nil)", "1"
+    public var note: String?             // markdown, shown beside the step
+    public var at: Double?               // seconds since the start (for timelines like heartbeats)
+    public var state: [StateEntry] = []  // state changes this step causes
+    public var line: Int?
+    public init(id: String, from: String, to: String, label: String) { self.id = id; self.from = from; self.to = to; self.label = label }
+}
+
+/// An alternative path (failure case, race) that branches after a step of the main sequence.
+public struct MechBranch: Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    public var after: String?            // step id it branches from (nil = from the start)
+    public var note: String?
+    public var steps: [MechStep] = []
+    public init(id: String, label: String) { self.id = id; self.label = label }
+}
+
+public struct Mechanism: Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var summary: String?          // markdown: the idea in a paragraph
+    public var participants: [Participant] = []
+    public var initial: [StateEntry] = []
+    public var steps: [MechStep] = []
+    public var branches: [MechBranch] = []
+    public var code: [String] = []
+    public var line: Int?
+    public init(id: String, title: String) { self.id = id; self.title = title }
+}
+
+// MARK: - Formulas
+
+public struct Formula: Sendable {
+    public var expr: String                              // "score = w_r · recency + w_c · ctr − penalty"
+    public var vars: [(name: String, meaning: String)] = []
+    public var example: String?                          // a worked example with numbers
+    public var doc: String?
+    public var code: [String] = []
+    public init(expr: String) { self.expr = expr }
+}
+
+// MARK: - Enums (value dictionaries and state machines)
+
+public struct EnumValue: Sendable, Hashable {
+    public var value: String             // "3100" or "pending"
+    public var name: String              // "draft"
+    public var doc: String?
+    public var terminal = false
+    public init(value: String, name: String) { self.value = value; self.name = name }
+}
+
+public struct EnumTransition: Sendable, Hashable {
+    public var from: String
+    public var to: String
+    public var label: String?
+    public var by: String?               // "node" or "node/op" that performs it
+    public init(from: String, to: String) { self.from = from; self.to = to }
+}
+
+public struct EnumDef: Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    public var doc: String?
+    public var values: [EnumValue] = []
+    public var transitions: [EnumTransition] = []
+    public var code: [String] = []
+    public var line: Int?
+    public init(id: String, label: String? = nil) { self.id = id; self.label = label ?? id }
+    public func value(_ v: String) -> EnumValue? { values.first { $0.value == v } }
 }

@@ -90,6 +90,8 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `repo` | | absolute path (or `~/…`) of the code this describes; node `code:` paths are relative to it |
 | `glossaries` | | built-in glossary packs to import: `rabbitmq`, `kafka`, `http`, `grpc`, `postgres`, `postgres-internals`, `clickhouse`, `redis`, `elasticsearch`, `go`, `linux`, `tcp-udp`, `connections`, `cdn-dns`, `kubernetes`, `raft`, `replication`, `consistency`, `resilience`, `scaling`, `queueing`, `cpu-memory`, `llm` |
 | `terms` | | local glossary, see [Terms](#terms) |
+| `enums` | | value dictionaries such as status codes, see [Enums](#enums) |
+| `layout` | | `auto` (default: the layout engine places every node; `at` is a hint) or `manual` (use `at` exactly) |
 | `notes` | | long markdown shown in the sim's About tab |
 | `links` | | `[{label, url}]`, `[{label, note: "path/in/vault.md"}]`, or `[{label, sim: other-id}]` |
 | everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `narration`. The top level is the root diagram |
@@ -395,6 +397,106 @@ it comes from.
 
 `strata data <file|id>` prints every table with its keys and sample rows, then each entity assembled
 from the first row of its root table.
+
+## How it works
+
+Some nodes and operations implement a mechanism that a diagram can't show: leader election, a
+roster with heartbeats, a distributed lock, a rate limiter, sharding, a retry protocol. Describe
+it as a **sequence you can play**. Each step is a message between participants, with the exact
+command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases are branches.
+
+```yaml
+- id: scheduler
+  kind: service
+  how:
+    - id: roster
+      title: Roster membership with heartbeats
+      summary: |
+        Each instance registers itself in a Valkey key with a TTL and renews it twice per TTL.
+        An instance whose key expires is dropped from the roster, and its shards are reassigned.
+      code: internal/roster/roster.go:40
+      participants:
+        - { id: a, label: instance A, node: scheduler }
+        - { id: b, label: instance B, node: scheduler }
+        - { id: v, label: Valkey, node: valkey }
+      initial:
+        - { key: "roster:members", value: "{}" }
+      steps:
+        - id: join
+          from: a
+          to: v
+          label: register
+          command: "SET roster:inst:a 1 NX PX 15000"
+          reply: OK
+          at: 0s
+          state: [ { key: "roster:inst:a", value: "1", ttl: 15s } ]
+        - { id: hb1, from: a, to: v, label: heartbeat 1, command: "PEXPIRE roster:inst:a 15000", reply: "1", at: 5s,
+            state: [ { key: "roster:inst:a", value: "1", ttl: 15s } ] }
+        - { id: hb2, from: a, to: v, label: heartbeat 2, command: "PEXPIRE roster:inst:a 15000", reply: "1", at: 10s,
+            note: "Two heartbeats per TTL: one lost heartbeat never drops a healthy member." }
+      branches:
+        - id: crash
+          label: A crashes
+          after: hb1
+          steps:
+            - { id: expire, from: v, to: v, label: key expires, at: 20s, state: [ { key: "roster:inst:a", value: null } ] }
+            - { id: take, from: b, to: v, label: B sees A gone and takes its shards, command: "SCAN 0 MATCH roster:inst:*" }
+```
+
+- Steps play in order and branches leave the main sequence after the step named in `after`.
+- `from: v, to: v` is a self-step: an expiry, a timer, internal work.
+- `at` builds a timeline, `command` and `reply` are shown verbatim, and `state` changes the
+  state panel. `value: null` deletes a key, and `ttl` counts down while playing.
+- Participants with `node:` link to the diagram.
+- An operation can have `how:` too.
+
+## Formulas
+
+A node or operation that computes something gets a `formula`, shown on hover and in the inspector.
+
+```yaml
+- id: ranker
+  kind: service
+  formula:
+    expr: "score = w_r · e^(−age / τ) + w_c · ctr − p · spam"
+    where:
+      w_r: weight of recency (0.6)
+      τ: half-life of a post in hours (6)
+      ctr: click-through rate over the last 24 h
+      p: spam penalty (0.9)
+    example: "age 3 h, ctr 0.04, not spam → 0.6 · e^(−0.5) + 0.4 · 0.04 = 0.38"
+    code: internal/rank/score.go:22
+```
+
+## Enums
+
+Status codes and other value dictionaries, with their meaning and the allowed transitions.
+
+```yaml
+enums:
+  - id: campaign-status
+    label: Campaign status
+    doc: Stored as an integer in campaigns.status.
+    code: internal/campaign/status.go:8
+    values:
+      - { value: 3100, name: draft }
+      - { value: 3200, name: scheduled, doc: Waiting for start_at. }
+      - { value: 3300, name: running }
+      - { value: 3400, name: paused }
+      - { value: 3900, name: finished, terminal: true }
+    transitions:
+      - { from: 3100, to: 3200, label: schedule, by: campaigns/schedule }
+      - { from: 3200, to: 3300, label: start_at reached, by: scheduler }
+      - { from: 3300, to: 3400, label: pause }
+      - { from: 3400, to: 3300, label: resume }
+      - { from: 3300, to: 3900, label: budget spent or end_at }
+```
+
+- A column points at an enum with `enum: campaign-status`. Its sample values then show their names.
+- Wherever a value of a linked column appears (sample rows, queries, payloads), hovering it shows
+  its meaning.
+- The inspector draws the transitions as a small state machine.
+- ⌘K finds an enum by value (`3200`) or by name (`scheduled`).
 
 ## Edges
 
