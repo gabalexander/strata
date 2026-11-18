@@ -416,6 +416,7 @@ private func expectClean(_ result: (Manifest?, [Diagnostic])) -> Manifest? {
             let (inline, diagnostics) = ManifestParser.parseEmbed("nodes: [{id: in, kind: port}]\nheight: 500", note: "Notes/a.md", index: 2)
             if case .inline(let manifest)? = inline?.target {
                 check(manifest.id == "Notes/a.md#2" && manifest.root.node("in")?.at != nil && inline?.height == 500 && diagnostics.isEmpty, "inline defaults")
+                check(manifest.title == "Diagram in a", "inline title names the note: \(manifest.title)")
             } else {
                 check(false, "inline target: \(diagnostics)")
             }

@@ -15,9 +15,13 @@ enum Decode {
         let id = root["id"].id(required: !inline)
         let title = root["title"].text(required: !inline, nonempty: true)
         let level = decodeLevel(root, root: true)
-        let fallback: String
-        if case .inline(let note, let index) = source { fallback = "\(note)#\(index)" } else { fallback = "" }
-        var manifest = Manifest(id: id ?? fallback, title: title ?? fallback, root: level, source: source)
+        var fallback = "", fallbackTitle = ""
+        if case .inline(let note, let index) = source {
+            fallback = "\(note)#\(index)"
+            // Shown on the embed and in breadcrumbs: name the note, not the internal id.
+            fallbackTitle = "Diagram in " + ((note as NSString).lastPathComponent as NSString).deletingPathExtension
+        }
+        var manifest = Manifest(id: id ?? fallback, title: title ?? fallbackTitle, root: level, source: source)
         manifest.kind = root["kind"].choice(ManifestKind.self) ?? .sim
         manifest.category = root["category"].text()
         manifest.summary = root["summary"].text()
