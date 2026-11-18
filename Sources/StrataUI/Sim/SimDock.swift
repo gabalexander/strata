@@ -20,7 +20,7 @@ import StrataCore
 }
 
 @MainActor
-struct SimDock: View {
+struct SimDock: View, Equatable {
     let sim: Simulation
     let model: AppModel
     let terms: TermIndex
@@ -30,6 +30,17 @@ struct SimDock: View {
     var still = false
     @SwiftUI.Binding var tab: SimDockTab
     @State private var filterNode = true
+
+    /// Only the log shows the selection, so selecting something elsewhere leaves the dock alone. Rows
+    /// observe the simulation themselves; the closures in `actions` act on the same session either way.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.sim === rhs.sim && lhs.pulse === rhs.pulse && lhs.still == rhs.still && lhs.tab == rhs.tab
+                && lhs.logSelection == rhs.logSelection
+        }
+    }
+
+    private var logSelection: StageSelection? { tab == .log ? selection : nil }
 
     var body: some View {
         VStack(spacing: 0) {
