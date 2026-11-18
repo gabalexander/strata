@@ -69,7 +69,16 @@ Hidden mode:
 - `Simulation` is a discrete-event engine on the main actor. The stage is a SwiftUI `Canvas` inside `TimelineView(.animation)`. Each frame calls `sim.tick(dt)` and then `sim.frame()`, and draws from that.
 - Token positions come from sim time, so pausing, speed changes and stepping are exact.
 - Tokens are sampled: at most about 12 visible requests per flow per second. Metrics count every request.
-- Panels outside the canvas refresh from `TimelineView(.periodic(by: 0.25))`, or when `sim.revision` changes.
+- Panels outside the canvas never re-render on a timer, and nothing outside the stage does work on an animation frame.
+  - Selection, dock tabs and control values are observed state, so they update on the frame they change.
+  - Live numbers (metrics, sparklines, flow stats, scenario steps, the clock) sit in `SimLive` leaves. A leaf re-renders when `sim.revision` changes (a command, a parameter, a log entry, a step) and on each `SimPulse` beat.
+  - The stage's frame clock beats the pulse four times a second while the sim plays and the stage is on screen, so nothing refreshes while paused or hidden.
+  - Don't wrap panels in `TimelineView(.periodic)`: it rebuilds everything inside it on every tick.
+- Stage input goes through the stage's AppKit event layer (`StageEvents`), not SwiftUI gestures:
+  - a left mouse down selects at once, with no wait for the double-click interval;
+  - the second click of a double-click dives into the node;
+  - a drag from empty space pans, and a click on empty space clears the selection on mouse up;
+  - the click that activates the window counts too.
 
 ## Ownership while agents build in parallel
 
