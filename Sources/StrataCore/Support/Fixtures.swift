@@ -298,3 +298,190 @@ public enum Fixtures {
         return m
     }
 }
+
+public extension Fixtures {
+    /// `checkoutWithOps` with data (docs/manifest.md, Data): the orders database's tables with columns,
+    /// keys, notes, indexes, volumes and sample rows whose ids really join (users → orders → order_items
+    /// and payments, the outbox, a price history keyed on a composite key, NULLs), and the Order and
+    /// Price entities orders-svc assembles from them. payments-svc writes `payments`, so tables have
+    /// different owners, and both orders-svc and reporting write `orders`.
+    static var checkoutWithData: Manifest {
+        var m = checkoutWithOps
+        m.id = "checkout-data"
+        func column(_ name: String, _ type: String, pk: Bool = false, ref: String? = nil, unique: Bool = false,
+                    nullable: Bool? = nil, note: String? = nil) -> Column {
+            var c = Column(name: name)
+            c.type = type; c.pk = pk; c.ref = ref; c.unique = unique; c.nullable = nullable; c.note = note
+            return c
+        }
+        func table(_ name: String, rows: Double?, growth: Double? = nil, _ edit: (inout TableSchema) -> Void) -> TableSchema {
+            var t = TableSchema(name: name)
+            var volume = TableVolume()
+            volume.rows = rows; volume.growthPerDay = growth
+            t.volume = volume
+            edit(&t)
+            return t
+        }
+
+        let users = table("users", rows: 2_400_000, growth: 3_000) {
+            $0.doc = "Accounts, written by the accounts service (not on this map)."
+            $0.columns = [
+                column("id", "uuid", pk: true),
+                column("email", "text", unique: true),
+                column("name", "text"),
+                column("created_at", "timestamptz"),
+                column("deleted_at", "timestamptz", nullable: true, note: "soft delete; NULL while active"),
+            ]
+            $0.indexes = ["users_pkey (id)", "users_email_key (email)"]
+            $0.rows = [
+                ["u-42", "ada@example.com", "Ada Lovelace", "2025-03-02 10:20", nil],
+                ["u-77", "grace@example.com", "Grace Hopper", "2025-06-18 08:05", nil],
+                ["u-90", "alan@example.com", "Alan Turing", "2024-11-09 17:44", "2026-11-02 09:00"],
+            ]
+        }
+        let orders = table("orders", rows: 12_000_000, growth: 40_000) {
+            $0.doc = "One row per checkout."
+            $0.columns = [
+                column("id", "uuid", pk: true),
+                column("user_id", "uuid", ref: "users.id"),
+                column("status", "text", note: "pending | paid | shipped | cancelled"),
+                column("total_cents", "bigint", note: "sum of the order's items"),
+                column("currency", "char(3)"),
+                column("created_at", "timestamptz"),
+                column("paid_at", "timestamptz", nullable: true, note: "NULL until the payment is captured"),
+            ]
+            $0.indexes = ["orders_pkey (id)", "orders_user_id_idx (user_id)", "orders_status_created_idx (status, created_at)"]
+            $0.rows = [
+                ["o-9f1c", "u-42", "paid", "4200", "EUR", "2026-11-18 09:14", "2026-11-18 09:14"],
+                ["o-77ab", "u-42", "pending", "1999", "EUR", "2026-11-18 11:02", nil],
+                ["o-3c2d", "u-77", "shipped", "12850", "EUR", "2026-11-17 16:40", "2026-11-17 16:41"],
+                ["o-5e10", "u-90", "cancelled", "1000", "EUR", "2026-10-30 21:15", nil],
+            ]
+        }
+        let items = table("order_items", rows: 31_000_000, growth: 100_000) {
+            $0.doc = "The lines of an order, keyed by order and line number."
+            $0.columns = [
+                column("order_id", "uuid", pk: true, ref: "orders.id"),
+                column("line_no", "int", pk: true),
+                column("sku", "text", ref: "prices.sku"),
+                column("qty", "int"),
+                column("unit_cents", "bigint", note: "the price when the order was placed"),
+            ]
+            $0.indexes = ["order_items_pkey (order_id, line_no)"]
+            $0.rows = [
+                ["o-9f1c", "1", "A-1", "2", "1600"],
+                ["o-9f1c", "2", "B-7", "1", "1000"],
+                ["o-77ab", "1", "C-3", "1", "1999"],
+                ["o-3c2d", "1", "A-1", "5", "1600"],
+                ["o-3c2d", "2", "D-9", "1", "4850"],
+                ["o-5e10", "1", "B-7", "1", "1000"],
+            ]
+        }
+        let payments = table("payments", rows: 11_000_000, growth: 38_000) {
+            $0.doc = "One payment per order; a retry updates the row."
+            $0.owner = "payments"
+            $0.columns = [
+                column("id", "uuid", pk: true),
+                column("order_id", "uuid", ref: "orders.id", unique: true),
+                column("provider", "text"),
+                column("status", "text", note: "authorized | captured | declined | refunded"),
+                column("amount_cents", "bigint"),
+                column("provider_ref", "text", nullable: true, note: "the acquirer's charge id"),
+                column("captured_at", "timestamptz", nullable: true),
+            ]
+            $0.indexes = ["payments_pkey (id)", "payments_order_id_key (order_id)"]
+            $0.rows = [
+                ["pay-1a", "o-9f1c", "stripe", "captured", "4200", "ch_3PqX1", "2026-11-18 09:14"],
+                ["pay-2b", "o-3c2d", "stripe", "captured", "12850", "ch_3PrA7", "2026-11-17 16:41"],
+                ["pay-3c", "o-5e10", "stripe", "declined", "1000", nil, nil],
+            ]
+        }
+        let prices = table("prices", rows: 18_000) {
+            $0.doc = "Price history per SKU. The current price is the row with no `valid_to`; Redis caches it."
+            $0.columns = [
+                column("sku", "text", pk: true),
+                column("valid_from", "date", pk: true),
+                column("amount_cents", "bigint"),
+                column("currency", "char(3)"),
+                column("valid_to", "date", nullable: true, note: "NULL for the current price"),
+            ]
+            $0.indexes = ["prices_pkey (sku, valid_from)", "prices_sku_key (sku) WHERE valid_to IS NULL"]
+            $0.rows = [
+                ["A-1", "2026-06-01", "1450", "EUR", "2026-10-01"],
+                ["A-1", "2026-10-01", "1600", "EUR", nil],
+                ["B-7", "2026-09-15", "1000", "EUR", nil],
+                ["C-3", "2026-11-01", "1999", "EUR", nil],
+                ["D-9", "2026-08-20", "4850", "EUR", nil],
+            ]
+        }
+        let outbox = table("outbox", rows: 4_000, growth: 40_000) {
+            $0.doc = "Events written in the order's transaction; the relay publishes them and prunes the published rows hourly."
+            $0.columns = [
+                column("id", "bigserial", pk: true),
+                column("aggregate_id", "uuid", ref: "orders.id"),
+                column("topic", "text"),
+                column("payload", "jsonb"),
+                column("published_at", "timestamptz", nullable: true, note: "NULL until the relay publishes it"),
+            ]
+            $0.indexes = ["outbox_pkey (id)", "outbox_unpublished_idx (id) WHERE published_at IS NULL"]
+            $0.rows = [
+                ["98121", "o-3c2d", "order-events", #"{"type":"OrderPlaced","order_id":"o-3c2d","total":12850}"#, "2026-11-17 16:40"],
+                ["98122", "o-9f1c", "order-events", #"{"type":"OrderPlaced","order_id":"o-9f1c","total":4200}"#, "2026-11-18 09:14"],
+                ["98123", "o-77ab", "order-events", #"{"type":"OrderPlaced","order_id":"o-77ab","total":1999}"#, nil],
+            ]
+        }
+
+        var order = Entity(name: "Order", root: "orders")
+        order.source = "db"
+        order.includes = ["order_items", "users", "payments"]
+        order.doc = "The aggregate orders-svc loads and saves as one unit: the order, its lines, the buyer and the payment."
+        order.code = ["services/orders/domain/order.go:14"]
+        var price = Entity(name: "Price", root: "prices")
+        price.source = "db"
+        price.doc = "A SKU's price for a period. Read through the Redis cache; a miss loads the row with no `valid_to`."
+        price.code = ["services/orders/pricing.go:27"]
+
+        var root = m.root
+        root.edges.append(Edge(from: "payments", to: "db"))
+        root.edges[root.edges.count - 1].protocol = "sql"
+        for index in root.nodes.indices {
+            switch root.nodes[index].id {
+            case "db":
+                root.nodes[index].schema = [users, orders, items, payments, prices, outbox]
+            case "orders":
+                root.nodes[index].entities = [order, price]
+                for o in root.nodes[index].ops.indices where root.nodes[index].ops[o].id == "insert-order" {
+                    root.nodes[index].ops[o].tables = ["orders", "order_items", "outbox"]
+                }
+                var load = Operation(id: "load-order", kind: .sql, label: "SELECT order aggregate")
+                load.target = "db"; load.access = .read
+                load.tables = ["orders", "order_items", "users", "payments"]
+                load.indexes = ["orders_pkey", "order_items_pkey", "payments_order_id_key"]
+                load.query = """
+                SELECT o.*, i.*, u.email, p.status AS payment_status
+                FROM orders o
+                JOIN users u ON u.id = o.user_id
+                JOIN order_items i ON i.order_id = o.id
+                LEFT JOIN payments p ON p.order_id = o.id
+                WHERE o.id = $1;
+                """
+                load.doc = "Loads the **Order** aggregate in one round trip."
+                load.code = ["services/orders/repo/load.go:22"]
+                root.nodes[index].ops.insert(load, at: 4)
+            case "payments":
+                var record = Operation(id: "record-payment", kind: .sql, label: "UPSERT payment")
+                record.target = "db"; record.access = .write; record.tables = ["payments"]
+                record.query = """
+                INSERT INTO payments (id, order_id, provider, status, amount_cents)
+                VALUES ($1, $2, 'stripe', $3, $4)
+                ON CONFLICT (order_id) DO UPDATE SET status = EXCLUDED.status;
+                """
+                record.code = ["services/payments/store.go:61"]
+                root.nodes[index].ops.append(record)
+            default: break
+            }
+        }
+        m.root = root
+        return m
+    }
+}

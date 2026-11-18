@@ -226,7 +226,7 @@ struct SimOpDetail: View {
         if touches {
             SimSection(title: "Touches") {
                 SimOpsChips {
-                    ForEach(op.tables, id: \.self) { SimOpsChip(title: $0, symbol: "tablecells", mono: true) }
+                    ForEach(op.tables, id: \.self) { SimDataTableChip(model: model, sim: sim, node: entry.peer, table: $0, select: select) }
                     ForEach(op.indexes, id: \.self) { SimOpsChip(title: $0, symbol: "list.number", mono: true, tint: Theme.muted) }
                     if let tx = op.tx { SimOpsChip(title: tx ? "transaction" : "no transaction", symbol: "arrow.triangle.2.circlepath", tint: tx ? Theme.info : Theme.muted) }
                     if let locks = op.locks { SimOpsChip(title: "\(locks) locks", symbol: "lock", tint: Theme.warn) }
