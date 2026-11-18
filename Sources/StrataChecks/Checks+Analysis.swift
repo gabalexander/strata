@@ -56,6 +56,31 @@ private func near(_ value: Double?, _ expected: Double, _ tolerance: Double) -> 
     return abs(value - expected) <= tolerance
 }
 
+/// Runs the built `strata` next to this checks binary, with a throwaway STRATA_HOME.
+private func analyzeCLI(_ args: [String]) throws -> (status: Int32, output: String) {
+    let fm = FileManager.default
+    let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try fm.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: home) }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        .deletingLastPathComponent().appendingPathComponent("strata")
+    process.arguments = ["analyze"] + args
+    var environment = ProcessInfo.processInfo.environment
+    environment["STRATA_HOME"] = home.path
+    process.environment = environment
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = output
+    try process.run()
+    let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: watchdog)
+    defer { watchdog.cancel() }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (process.terminationReason == .exit ? process.terminationStatus : -1, String(decoding: data, as: UTF8.self))
+}
+
 private extension CapacityReport {
     func node(_ id: String) -> NodeCapacity? { nodes.first { $0.node == id } }
     func flow(_ id: String) -> FlowCapacity? { flows.first { $0.flow == id } }
@@ -187,10 +212,16 @@ private extension CapacityReport {
                 check(abs(total - 1) < 1e-9, "\(id) shares sum to \(total)")
             }
             let db = report.pressure["db"] ?? []
-            check(db.first?.op == "insert-order" && db.first?.access == .write && db.first?.tables == ["orders", "order_items", "outbox"] &&
+            let insert = checkout.root.node("orders")?.ops.first { $0.id == "insert-order" }
+            check(db.first?.op == "insert-order" && db.first?.access == .write && db.first?.tables == insert?.tables &&
+                  insert?.tables.contains("orders") == true &&
                   near(db.first?.rate, 12, 1e-9) && (db.first?.busyShare ?? 0) > 0.85, "db top source: \(String(describing: db.first))")
-            check(db.contains { $0.op == "read-price" && $0.access == .read && near($0.rate, 1.2, 1e-9) && near($0.daily, 103_680, 1e-6) },
+            // Per day follows the flow's declared traffic.daily when there is one.
+            let daily = checkout.root.flow("place-order")?.traffic?.daily ?? 12 * 86_400
+            check(db.contains { $0.op == "read-price" && $0.access == .read && near($0.rate, 1.2, 1e-9) && near($0.daily, 0.1 * daily, 1e-6) },
                   "price reads on a miss: \(db)")
+            check(near(report.flow("place-order")?.daily, daily, 1e-6) && near(report.flow("email")?.daily, daily, 1e-6),
+                  "daily volumes: \(report.flows.map { "\($0.flow) \($0.daily)" })")
             check(report.pressure["orders"]?.first?.op == "forward-place-order" && report.pressure["api"]?.first?.op == "submit-order",
                   "an endpoint named on the step maps to the caller's client op")
         },
@@ -309,6 +340,24 @@ private extension CapacityReport {
             let each = (Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18) / 200 * 1000
             print(String(format: "Culprits on checkout: %.3f ms per call", each))
             check(each < 2, "culprits took \(each) ms")
+        },
+        CheckCase(name: "analysis cli prints capacity, flows, plan, pressure and blast radius") {
+            guard let path = StrataResources.url("Examples/checkout.yaml")?.path else { throw CocoaError(.fileNoSuchFile) }
+            let text = try analyzeCLI([path])
+            for section in ["Capacity", "Flows", "Scale plan", "Pressure on databases and caches", "Blast radius of mailer"] {
+                check(text.status == 0 && text.output.contains(section), "analyze text lacks \(section): \(text.output)")
+            }
+            check(text.output.split(separator: "\n").contains { $0.hasPrefix("place-order") && $0.contains("187.6") && $0.contains("orders") },
+                  "flow row with its max rate and bottleneck: \(text.output)")
+            let json = try analyzeCLI([path, "--json", "--rates", "place-order=50/s"])
+            let object = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as? [String: Any]
+            let flows = object?["flows"] as? [[String: Any]] ?? []
+            let place = flows.first { $0["flow"] as? String == "place-order" }
+            check(json.status == 0 && place?["rate"] as? Double == 50 && (object?["scalePlan"] as? [Any])?.isEmpty == false &&
+                  (object?["pressure"] as? [String: Any])?["db"] != nil && (object?["blastRadius"] as? [String: Any])?["node"] as? String == "mailer",
+                  "analyze --json: \(json.output.prefix(400))")
+            let unknown = try analyzeCLI([path, "--rates", "nope=5/s"])
+            check(unknown.status == 1 && unknown.output.contains("unknown flow 'nope'"), "unknown flow in --rates: \(unknown.output)")
         },
         CheckCase(name: "analysis static utilization matches the engine") {
             for id in ["checkout", "queueing-latency"] {
