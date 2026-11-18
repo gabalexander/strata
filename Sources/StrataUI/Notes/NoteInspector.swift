@@ -8,14 +8,19 @@ struct NoteInspector: View {
     let document: NoteDocument
     let showLine: (Int) -> Void
 
-    private var node: (sim: String, path: [String])? {
+    /// A node note lives at "Sims/<sim>/<level path…>/<node>.md" (see `Vault.nodeNotePath`).
+    private var node: (sim: String, path: [String], id: String, label: String, place: String)? {
         let parts = path.split(separator: "/").map(String.init)
-        guard parts.count >= 3, parts[0] == "Sims", let last = parts.last else { return nil }
-        let sim = parts[1]
-        var ids = Array(parts.dropFirst(2).dropLast())
+        guard parts.count >= 3, parts[0] == "Sims", let last = parts.last,
+              let manifest = SimSessions.cachedManifest(model, id: parts[1]) else { return nil }
+        let levelPath = Array(parts.dropFirst(2).dropLast())
         let leaf = NoteLinks.title(last)
-        if let inner = model.library.manifest(sim)?.level(at: ids)?.node(leaf)?.inside, !inner.nodes.isEmpty { ids.append(leaf) }
-        return (sim, ids)
+        guard let level = manifest.level(at: levelPath), let node = level.node(leaf) else { return nil }
+        var place = manifest.title
+        if let parent = levelPath.last, let label = manifest.level(at: Array(levelPath.dropLast()))?.node(parent)?.label {
+            place += " › " + label
+        }
+        return (manifest.id, levelPath, node.id, node.label, place)
     }
 
     var body: some View {
@@ -32,8 +37,8 @@ struct NoteInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if let node {
-                        item("Back to node", detail: nil, icon: "arrow.uturn.backward") {
-                            model.open(.sim(node.sim, path: node.path))
+                        item("Back to \(node.label)", detail: node.place, icon: "arrow.uturn.backward") {
+                            SimFocus.of(model).reveal(node.id, in: node.sim, path: node.path, model: model)
                         }
                         .card(Theme.raised, radius: Theme.radiusSmall)
                     }
