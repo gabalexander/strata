@@ -82,6 +82,7 @@ final class SimPressureState {
     @ObservationIgnored var source: any SimPressureSource = SimPressureLive()
     @ObservationIgnored private var cached: (revision: Int, analysis: Analysis)?
     @ObservationIgnored private var blasts: [String: BlastRadius] = [:]
+    @ObservationIgnored private var found: (now: Double, revision: Int, culprits: [Culprit])?
     @ObservationIgnored private var heatHighlight: (revision: Int, highlight: StageHighlight)?
     @ObservationIgnored private var blastHighlights: [String: StageHighlight] = [:]
 
@@ -127,9 +128,15 @@ final class SimPressureState {
         return analysis
     }
 
-    /// Live: call from a `SimLive` leaf.
+    /// Live: call from a `SimLive` leaf. The rail and the section share one evaluation per beat.
     func culprits(_ sim: Simulation) -> [Culprit] {
-        source.culprits(sim).sorted { $0.severity > $1.severity }
+        let revision = sim.revision
+        if let found, found.now == sim.now, found.revision == revision { return found.culprits }
+        let culprits = source.culprits(sim).enumerated()
+            .sorted { $0.element.severity == $1.element.severity ? $0.offset < $1.offset : $0.element.severity > $1.element.severity }
+            .map(\.element)
+        found = (sim.now, revision, culprits)
+        return culprits
     }
 
     /// Pure graph analysis of the level, so one per node for the session.
