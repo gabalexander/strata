@@ -45,9 +45,12 @@ struct SimActions {
             items += nodeActions(node, state: state, full: true)
             let sourceFlows = sim.level.flows.filter { $0.from == node.id }
             if !sourceFlows.isEmpty { items += [.separator] + sourceFlows.map(sendItem) }
-            items += [.separator, command("Open note", icon: "note.text", enabled: model.vault.hasNote(notePath(node))) {
-                model.open(.note(notePath(node)))
-            }]
+            items.append(.separator)
+            if model.vault.hasNote(notePath(node)) {
+                items.append(command("Open note", icon: "note.text") { model.open(.note(notePath(node))) })
+            } else {
+                items.append(command("Add a note", icon: "note.text.badge.plus") { addNote(node) })
+            }
             if let single = node.code.first, node.code.count == 1 {
                 items.append(command("Open code", icon: "chevron.left.forwardslash.chevron.right") { openCode(single) })
             } else if !node.code.isEmpty {
@@ -57,6 +60,7 @@ struct SimActions {
             items += [.separator, command("Copy id", icon: "doc.on.doc") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(node.id, forType: .string)
+                model.overlays.toast("Copied \(node.id)")
             }]
             return items
         case .edge(let id):

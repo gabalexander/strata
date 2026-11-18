@@ -83,6 +83,13 @@ struct SimInspector: View {
                     Text(node.label).font(Theme.heading).foregroundStyle(Theme.text)
                     Text([node.kind.rawValue, node.tech].compactMap { $0 }.joined(separator: " · "))
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    if let name = node.term, let term = terms.term(name) {
+                        SimTermAnchor(term: term, model: model, index: terms) {
+                            Label(term.term, systemImage: "text.book.closed")
+                                .font(Theme.ui(11, .medium)).foregroundStyle(Theme.accent)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 0)
                 if node.kind != .note { SimPill(title: health.title, icon: health.icon, tint: health.tint) }
