@@ -1,5 +1,5 @@
 SWIFT = swift build --disable-sandbox
-.PHONY: build app install checks snapshots clean
+.PHONY: build app install login unlogin checks snapshots clean
 
 build:
 	$(SWIFT)
@@ -9,6 +9,12 @@ app:
 
 install: app
 	./scripts/install.sh
+
+login:
+	./scripts/shell-login.sh enable
+
+unlogin:
+	./scripts/shell-login.sh disable
 
 checks:
 	$(SWIFT) --product StrataChecks

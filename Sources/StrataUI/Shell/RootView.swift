@@ -1,27 +1,64 @@
 import SwiftUI
 import StrataCore
 
-// PLACEHOLDER (shell agent). Keep the initialiser.
-
-/// The whole window: sidebar (notes tree, sims library), the current route's screen, overlays on top.
+/// The whole window, including the routes and transient UI shared by all screens.
+@MainActor
 public struct RootView: View {
-    let model: AppModel
-    public init(model: AppModel) { self.model = model }
+    private let catalog: ShellCatalog
+    private var model: AppModel { catalog.model }
+    @State private var recentPalettePicks: [String] = []
+
+    public init(model: AppModel) {
+        catalog = ShellCatalog(model: model)
+    }
+
+    /// Supplies shelf data for offscreen snapshots while the disk-backed services are under development.
+    public init(model: AppModel, fixtureEntries: [Library.Entry], fixtureNotes: [String: String],
+                fixturePaletteQuery: String = "") {
+        catalog = ShellCatalog(model: model, fixtureEntries: fixtureEntries, fixtureNotes: fixtureNotes,
+                               fixturePaletteQuery: fixturePaletteQuery)
+    }
+
     public var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading) { NotesTree(model: model) }
-                .frame(width: Theme.sidebarWidth).frame(maxHeight: .infinity).background(Theme.surface)
-            Group {
-                switch model.route {
-                case .home: Text("Strata").font(Theme.title).frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .note(let p): NoteScreen(model: model, path: p)
-                case .sim(let id, let path): SimScreen(model: model, id: id, path: path)
-                case .graph: Text("Graph").frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .search(let q): SearchScreen(model: model, query: q)
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                if model.sidebarVisible {
+                    Sidebar(catalog: catalog)
+                    Rectangle().fill(Theme.border).frame(width: 1)
                 }
+                screen
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 34)
+            }
+            if !model.sidebarVisible {
+                StrataIconButton("sidebar.left", title: "Show sidebar ⌘\\") {
+                    ShellCommand.sidebar.perform(on: model)
+                }
+                .padding(.leading, 80)
+                .padding(.top, 3)
+            }
+            OverlayHost(model: model)
+            if model.paletteOpen || model.switcherOpen {
+                CommandPalette(catalog: catalog, switching: model.switcherOpen, recent: $recentPalettePicks)
+                    .id(model.switcherOpen)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .font(Theme.ui())
         .foregroundStyle(Theme.text)
+        .tint(Theme.accent)
         .background(Theme.bg)
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var screen: some View {
+        switch model.route {
+        case .home: HomeScreen(catalog: catalog)
+        case .note(let path): NoteScreen(model: model, path: path)
+        case .sim(let id, let path): SimScreen(model: model, id: id, path: path)
+        case .graph: GraphScreen(catalog: catalog)
+        case .search(let query): SearchScreen(model: model, query: query)
+        }
     }
 }
