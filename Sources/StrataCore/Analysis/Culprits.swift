@@ -22,8 +22,9 @@ extension Simulation {
             let culprit = Culprit(kind: kind, severity: severity, subject: subject, message: message)
             found.append((culprit, weight * 10 + min(9.99, max(0, magnitude.isFinite ? magnitude : 9.99))))
         }
+        /// Rising over the window by more than noise: at least one item and 5% of where it started.
         func growing(_ trend: MetricTrend?) -> MetricTrend? {
-            guard let trend, trend.recent - trend.earlier >= max(1, 0.2 * trend.earlier) else { return nil }
+            guard let trend, trend.recent - trend.earlier >= max(1, 0.05 * trend.earlier) else { return nil }
             return trend
         }
 
@@ -45,20 +46,24 @@ extension Simulation {
             }
             if let buffer = runtime.buffer {
                 let capacity = max(1, runtime.params.capacity ?? 10_000)
+                // A backlog worth less than a second of the consumers' work is normal jitter.
+                var drained = 0.0
+                for flow in buffer.consumers { drained += flows[flow].ok.value(at: now) + flows[flow].failed.value(at: now) }
+                let floor = max(10, Int(drained.rounded(.up)))
                 if node.kind == .topic {
-                    guard let trend = growing(trend(.node(node.id, .lag))) else { continue }
+                    guard let trend = growing(trend(.node(node.id, .lag), seconds: 5)) else { continue }
                     var worst: (flow: Int, lag: Int)?
                     for flow in buffer.consumers {
                         guard let group = flows[flow].group, group.lag > (worst?.lag ?? 0) else { continue }
                         worst = (flow, group.lag)
                     }
-                    guard let worst, let consumer = flows[worst.flow].consumer else { continue }
+                    guard let worst, worst.lag >= floor, let consumer = flows[worst.flow].consumer else { continue }
                     add(.lagging, worst.lag * 2 >= capacity ? .critical : .warn, node.id,
                         "\(label): \(nodes[consumer].node.label) is \(Format.grouped(Double(worst.lag))) messages behind, falling back \(Format.rate(trend.perSecond))/s.",
                         Double(worst.lag) / Double(capacity) * 10)
                 } else {
                     let depth = buffer.messages.count
-                    guard depth > 0, let trend = growing(trend(.node(node.id, .depth))) else { continue }
+                    guard depth >= floor, let trend = growing(trend(.node(node.id, .depth), seconds: 5)) else { continue }
                     add(.lagging, depth * 2 >= capacity ? .critical : .warn, node.id,
                         "\(label): \(Format.grouped(Double(depth))) messages waiting, growing \(Format.rate(trend.perSecond))/s.",
                         Double(depth) / Double(capacity) * 10)
@@ -82,7 +87,7 @@ extension Simulation {
                 }
                 let room = runtime.params.queue ?? 0
                 let full = room > 0 && queued >= room
-                if queued > 0, full || growing(trend(.node(node.id, .queued))) != nil {
+                if full || queued >= 2 && (growing(trend(.node(node.id, .queued))).map { $0.recent >= 2 } ?? false) {
                     let change = trend(.node(node.id, .queued)).map { Int(($0.recent - $0.earlier).rounded()) } ?? 0
                     let message = full ? "\(label): waiting room full (\(queued)/\(room)), so new calls get 503."
                         : "\(label): \(queued) requests waiting for a slot, up \(change) in 3 s."

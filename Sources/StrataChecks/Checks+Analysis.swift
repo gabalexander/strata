@@ -227,6 +227,16 @@ private extension CapacityReport {
             check(down.node("db")?.slots == 0 && down.node("db")?.utilization == 1 && down.flow("requests")?.maxRate == 0 &&
                   down.flow("requests")?.bottleneck == "db" && down.notes.contains { $0.contains("db is down") },
                   "a down node has no slots: \(String(describing: down.node("db"))) \(down.notes)")
+
+            let checkout = Simulation(manifest: try bundled("checkout"))
+            checkout.perform([.kill("mailer"), .scale("orders", 4, relative: false)])
+            let stopped = checkout.capacityReport()
+            let email = stopped.flow("email")
+            check(stopped.node("mailer")?.slots == 0 && stopped.node("mailer")?.utilization == 1 && email?.rate == 0 &&
+                  near(email?.offered, 12, 1e-9) && email?.maxRate == 0 && email?.bottleneck == "mailer" &&
+                  stopped.notes.contains { $0.contains("Mailer is down") && $0.contains("grows 12/s") } &&
+                  !stopped.notes.contains { $0.contains("calls to it fail fast") } &&
+                  stopped.node("orders")?.slots == 16, "a down consumer: \(String(describing: email)) \(stopped.notes)")
         },
         CheckCase(name: "analysis culprits for a dead database, scaling and SLOs") {
             let outage = Simulation(manifest: manifest(level(
@@ -266,6 +276,26 @@ private extension CapacityReport {
             check(breach?.subject == "requests" && breach?.severity == .critical &&
                   breach?.message.contains("requests p99 1") == true && breach?.message.contains("> SLO 50 ms") == true &&
                   breach?.message.contains("> SLO 1%") == true, "SLO breach: \(String(describing: breach?.message))")
+        },
+        CheckCase(name: "analysis culprits on the checkout map agree with the static model") {
+            let checkout = try bundled("checkout")
+            let outage = Simulation(manifest: checkout)
+            outage.start(scenario: "db-outage")
+            outage.run(seconds: 12)
+            let dead = outage.culprits()
+            check(dead.first?.id == "down:db" && dead.contains { $0.id == "errors:place-order" }, "db outage: \(dead.map(\.message))")
+            let healthy = Simulation(manifest: checkout)
+            healthy.run(seconds: 15)
+            check(healthy.culprits().isEmpty, "checkout at 12/s is healthy: \(healthy.culprits().map(\.message))")
+            let busy = Simulation(manifest: checkout)
+            busy.perform([.rate("place-order", .perSecond(35))])
+            busy.run(seconds: 15)
+            let behind = busy.culprits()
+            let lag = behind.first { $0.id == "lagging:events" }
+            check(behind.first?.id == "saturated:mailer" && lag?.message.contains("Mailer is") == true,
+                  "35 orders/s overrun the mailer: \(behind.map(\.message))")
+            check(busy.capacityReport().notes.contains { $0.contains("Mailer can't keep up") && $0.contains("grows 11.5/s") },
+                  "the static model predicts the backlog: \(busy.capacityReport().notes)")
         },
         CheckCase(name: "analysis culprits stay cheap") {
             let checkout = try bundled("checkout")

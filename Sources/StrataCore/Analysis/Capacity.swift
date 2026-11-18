@@ -471,14 +471,20 @@ struct CapacityModel {
         return total
     }
 
-    /// A topic gives every consumer flow each message; a queue splits them by the consumers' replicas.
+    /// A topic gives every consumer flow each message; a queue splits them by the replicas of the
+    /// consumers that are up (all of them when none is, so the messages stay meant for someone).
     func share(_ f: Int) -> Double {
         guard case .consumer(let buffer, let by) = roles[f] else { return 1 }
         if nodes[buffer].node.kind == .topic { return 1 }
-        guard !nodes[by].down else { return 0 }
-        var total = 0
-        for case .consumer(buffer, let other) in roles where !nodes[other].down { total += nodes[other].params.replicas ?? 1 }
-        return total > 0 ? Double(nodes[by].params.replicas ?? 1) / Double(total) : 0
+        var up = 0, all = 0
+        for case .consumer(buffer, let other) in roles {
+            let replicas = nodes[other].params.replicas ?? 1
+            all += replicas
+            if !nodes[other].down { up += replicas }
+        }
+        let mine = Double(nodes[by].params.replicas ?? 1)
+        if up > 0 { return nodes[by].down ? 0 : mine / Double(up) }
+        return all > 0 ? mine / Double(all) : 0
     }
 
     func walk(_ wait: [Double]) -> Tally {
@@ -489,8 +495,12 @@ struct CapacityModel {
                 tally.latency[f] = run(programs[f], at: origin, weight: 1, flow: f, wait: wait, into: &tally).elapsed
             case .consumer(_, let by):
                 let worker = nodes[by]
-                guard !worker.down else { continue }
                 let count = deliveries[f]
+                guard !worker.down else {
+                    // Nothing is delivered, but the messages are meant for it: it shows as blocked.
+                    tally.add(by, f, visits: count, demand: 0, source: deliverySources[f])
+                    continue
+                }
                 let handled = run(programs[f], at: by, weight: count, flow: f, wait: wait, into: &tally)
                 tally.add(by, f, visits: count, demand: count * (worker.service + transit[f] + handled.held), source: deliverySources[f])
                 tally.latency[f] = worker.service + handled.elapsed
@@ -654,7 +664,9 @@ struct CapacityModel {
         let full = evaluate(rates, fixed: flags)
         guard let saturated = candidates.max(by: { utilization($0, full) < utilization($1, full) }) else { return nil }
         let service = evaluate(rates, fixed: flags, queueing: false)
-        let suspects = [saturated] + waitsOn[saturated].sorted().filter { !nodes[$0].unlimited && !nodes[$0].blocked }
+        // An async node frees its slot while it waits, so it fills on its own service time.
+        let callees = nodes[saturated].async ? [] : waitsOn[saturated].sorted()
+        let suspects = [saturated] + callees.filter { !nodes[$0].unlimited && !nodes[$0].blocked }
         return suspects.max { utilization($0, service) < utilization($1, service) }
     }
 

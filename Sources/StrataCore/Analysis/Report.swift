@@ -72,8 +72,14 @@ extension CapacityModel {
             }
             report.flows.append(capacity)
         }
-        for (n, info) in nodes.enumerated() where info.down && current.arrivals[n] > 0 {
-            notes.append("\(info.node.label) is down: \(Format.rate(current.arrivals[n]))/s of calls to it fail fast.")
+        for (n, info) in nodes.enumerated() where info.down {
+            var calls = 0.0
+            for (s, source) in sources.enumerated() where source.key.target == n && nodes[source.key.caller].node.kind.role != .buffer {
+                calls += current.rates[source.key.flow] * current.tally.sourceVisits[s]
+            }
+            guard calls > 0 else { continue }
+            let what = info.node.kind.role == .buffer ? "publishes" : "calls"
+            notes.append("\(info.node.label) is down: \(Format.rate(calls))/s of \(what) to it fail fast.")
         }
 
         for (n, info) in nodes.enumerated() where info.node.kind.role == .server && !info.unlimited && current.demand[n] > 0 {
