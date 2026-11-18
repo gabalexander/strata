@@ -25,6 +25,17 @@ enum Syntax {
         return text
     }
 
+    /// `node/op` (qualified), or also a bare `op` id when `qualified` is false.
+    static func opReference(_ text: String, qualified: Bool) throws -> String {
+        let parts = text.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let valid = (qualified ? 2...2 : 1...2).contains(parts.count) && parts.allSatisfy(isID)
+        guard valid else {
+            throw InvalidValue(qualified ? "invalid op reference '\(text)'; use node/op, such as payments/charge"
+                                         : "invalid op reference '\(text)'; use an op id or node/op")
+        }
+        return text
+    }
+
     static func words(_ text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(String.init)
     }

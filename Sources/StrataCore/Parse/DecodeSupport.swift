@@ -129,8 +129,8 @@ struct Field {
         }
     }
 
-    func choice<T: RawRepresentable & CaseIterable>(_ type: T.Type) -> T? where T.RawValue == String {
-        scalar { text in
+    func choice<T: RawRepresentable & CaseIterable>(_ type: T.Type, required: Bool = false) -> T? where T.RawValue == String {
+        scalar(required: required) { text in
             guard let value = T(rawValue: text) else {
                 let choices = T.allCases.map(\.rawValue)
                 let suggestion = closestKey(to: text, in: choices).map { "; did you mean '\($0)'?" } ?? ""
@@ -150,6 +150,59 @@ struct Field {
     func textList(orOne: Bool = false) -> [String] {
         if orOne, node?.scalar != nil { return text().map { [$0] } ?? [] }
         return items().compactMap { $0.text() }
+    }
+
+    /// Any scalar as written, including numbers and booleans (`201`, `true`).
+    func anyText() -> String? {
+        read { node in
+            guard case .scalar(let text, _) = node.content else { throw InvalidValue("expected a scalar value") }
+            return text
+        }
+    }
+
+    /// A list of scalars as written, or one scalar.
+    func anyTextList() -> [String] {
+        if node?.scalar != nil { return anyText().map { [$0] } ?? [] }
+        return items().compactMap { $0.anyText() }
+    }
+
+    /// Text, or a YAML mapping or list rendered as compact JSON (example payloads, requests, responses).
+    func structuredText() -> String? {
+        read { node in
+            switch node.content {
+            case .scalar(let text, _): return text
+            case .map, .list: return Self.json(node)
+            case .null: throw InvalidValue("expected text, a mapping, or a list")
+            }
+        }
+    }
+
+    private static func json(_ node: YAMLNode) -> String {
+        switch node.content {
+        case .null: return "null"
+        case .scalar(let text, let quoted):
+            if !quoted, Syntax.bool(text) != nil || Syntax.number(text) != nil { return text }
+            return quote(text)
+        case .list(let items):
+            return "[" + items.map(json).joined(separator: ", ") + "]"
+        case .map(let fields):
+            if fields.isEmpty { return "{}" }
+            return "{ " + fields.map { quote($0.key) + ": " + json($0.value) }.joined(separator: ", ") + " }"
+        }
+    }
+
+    private static func quote(_ text: String) -> String {
+        let escaped = text.unicodeScalars.map { scalar -> String in
+            switch scalar {
+            case "\\": return "\\\\"
+            case "\"": return "\\\""
+            case "\n": return "\\n"
+            case "\t": return "\\t"
+            case "\r": return "\\r"
+            default: return scalar.value < 0x20 ? String(format: "\\u%04x", scalar.value) : String(scalar)
+            }
+        }.joined()
+        return "\"" + escaped + "\""
     }
 
     private static func string(_ node: YAMLNode) throws -> String {

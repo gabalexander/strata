@@ -470,6 +470,42 @@ private func specManifest(_ snippet: String) -> String {
         text.components(separatedBy: "\n").map { String(repeating: " ", count: width) + $0 }.joined(separator: "\n")
     }
     if text.hasPrefix("  - id: orders") { return header + "nodes:\n" + text }
+    if text.hasPrefix("- id: orders"), text.contains("\n  ops:") {
+        // The operations example: the nodes its ops target, and the inbound op its rpc call reaches.
+        return header + "nodes:\n" + indent(text, 2) + """
+
+              - {id: db, kind: database}
+              - {id: cache, kind: cache}
+              - {id: events, kind: topic}
+              - id: payments
+                kind: service
+                ops: [{id: charge, kind: rpc, label: Charge card, method: payments.v1.Payments/Charge}]
+            edges:
+              - {from: orders, to: db}
+              - {from: orders, to: cache}
+              - {from: orders, to: events}
+              - {from: orders, to: payments}
+            """
+    }
+    if text.hasPrefix("- call:"), text.contains("op: insert-order") {
+        // A step that names an op of the calling node.
+        return header + """
+            nodes:
+              - {id: web, kind: client}
+              - id: orders
+                kind: service
+                ops: [{id: insert-order, kind: sql, target: db, label: INSERT order}]
+              - {id: db, kind: database}
+            edges: [{from: web, to: orders}, {from: orders, to: db}]
+            flows:
+              - id: place-order
+                from: web
+                steps:
+                  - call: orders
+                    steps:
+
+            """ + indent(text, 10)
+    }
     if text.hasPrefix("- id: orders") {
         return header + "groups: [{id: backend}]\n" + term + "nodes:\n" + indent(text, 2) + "\n  - {id: dead-letters, kind: queue}"
     }

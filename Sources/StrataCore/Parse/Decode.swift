@@ -52,7 +52,7 @@ enum Decode {
     }
 
     static func node(_ field: Field) -> Node? {
-        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions"]
+        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops"]
         let behaviour = Set(ParameterType.node.keys).subtracting(["up", "slow"])
         guard field.mapping(keys.union(behaviour)) else { return nil }
         let id = field["id"].id(required: true)
@@ -79,6 +79,7 @@ enum Decode {
         node.detail = field["detail"].id()
         if field["inside"].present, field["detail"].present { field["detail"].diagnose("use either inside or detail for a deep dive") }
         node.actions = field["actions"].items(named: true).enumerated().compactMap { action($0.element, index: $0.offset) }
+        node.ops = field["ops"].items(named: true).compactMap(operation)
         return node
     }
 
@@ -152,7 +153,7 @@ enum Decode {
     static func step(_ field: Field) -> Step? {
         let verbs = ["call", "publish", "work", "parallel"]
         let callOnly = ["steps", "miss", "timeout", "retries", "backoff", "breaker"]
-        guard field.mapping(Set(verbs + callOnly + ["label", "say", "optional", "p"])) else { return nil }
+        guard field.mapping(Set(verbs + callOnly + ["label", "say", "optional", "p", "op"])) else { return nil }
         let found = verbs.filter { field[$0].present }
         guard found.count == 1, let verb = found.first else {
             field.diagnose("expected exactly one step action: call, publish, work, or parallel")
@@ -178,6 +179,7 @@ enum Decode {
         step.say = field["say"].text()
         step.p = field["p"].probability()
         step.optional = field["optional"].bool() ?? false
+        step.op = field["op"].scalar { try Syntax.opReference($0, qualified: false) }
         if verb == "call" {
             step.timeout = field["timeout"].duration()
             step.retries = field["retries"].integer(in: 0...Int.max)
