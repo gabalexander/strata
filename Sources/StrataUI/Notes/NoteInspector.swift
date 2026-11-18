@@ -56,7 +56,11 @@ struct NoteInspector: View {
                     }
                     section("Outgoing links", empty: links.isEmpty ? "No wiki links" : nil) {
                         ForEach(links, id: \.range.location) { link in
-                            item(link.label, detail: link.alias == nil ? nil : link.target, icon: "link") {
+                            // A link that names a simulator shows its title, like "Linked sims" below.
+                            let sim = model.vault.resolve(link: link.target) == nil ? model.library.entry(link.target) : nil
+                            item(link.alias == nil ? sim?.title ?? link.label : link.label,
+                                 detail: sim.map { _ in link.target } ?? (link.alias == nil ? nil : link.target),
+                                 icon: sim == nil ? "link" : "play.rectangle") {
                                 NoteLinks.open(link.target, heading: link.heading, from: path, model: model)
                             }
                         }
