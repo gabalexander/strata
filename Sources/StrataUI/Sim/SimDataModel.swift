@@ -3,12 +3,10 @@ import StrataCore
 
 // Data as the inspector sees it (docs/manifest.md, Data): each database's tables, the foreign keys
 // between them, who writes them, the rows a key joins to, and entities assembled from sample rows.
-// Pure values, built once per level (SimDataIndex).
-//
-// The `simData…` Level helpers at the bottom are stand-ins for data-core's Level helpers
-// (StrataCore/Model/Data.swift): the same jobs (resolve a `ref`, follow refs in both directions with
-// capped depth and fan-out, assemble an entity), so swapping them in is a rename at the call sites in
-// this file.
+// Pure values, built once per level (SimDataIndex), on top of StrataCore's Level helpers
+// (Model/Data.swift): `foreignKeys`, `table`, `owners`, `writers`, `entitySource`, `entityJoins` and
+// `assembleEntity`. The one walk of its own is the join highlight (`SimDataJoins`): the rows a row's
+// aggregate holds, following refs in both directions with capped depth and fan-out.
 
 /// A table on a node of the level.
 struct SimTableRef: Hashable, Sendable, Identifiable {
@@ -110,6 +108,8 @@ struct SimDataField: Equatable {
         case one(SimDataObject?)
         /// Children through their ref to this row; `omitted` past the fan-out cap.
         case many([SimDataObject], omitted: Int)
+        /// Rows join here, but the depth cap stopped the assembly above them.
+        case cut
     }
 
     let name: String
@@ -128,7 +128,7 @@ struct SimDataIndex {
     let level: Level
     /// Every table of every node that has a schema, in node then schema order.
     let tables: [SimTableRef]
-    /// Every `ref` that resolves.
+    /// Every `ref` that resolves (`Level.foreignKeys`).
     let keys: [SimForeignKey]
     private let schemas: [SimTableRef: TableSchema]
     private let positions: [SimTableRef: Int]
@@ -150,13 +150,14 @@ struct SimDataIndex {
         self.tables = tables
         self.schemas = schemas
         self.positions = positions
-        keys = level.simDataForeignKeys()
+        keys = level.foreignKeys().map { key in
+            SimForeignKey(from: SimTableRef(node: key.from.node, table: key.from.table), fromColumn: key.from.column,
+                          to: SimTableRef(node: key.to.node, table: key.to.table), toColumn: key.to.column)
+        }
     }
 
     func table(_ ref: SimTableRef) -> TableSchema? { schemas[ref] }
     func tables(of node: String) -> [SimTableRef] { tables.filter { $0.node == node } }
-    func keys(from table: SimTableRef) -> [SimForeignKey] { keys.filter { $0.from == table } }
-    func keys(to table: SimTableRef) -> [SimForeignKey] { keys.filter { $0.to == table } }
 
     /// The key a column holds, if it is a `ref`.
     func key(_ table: SimTableRef, column: String) -> SimForeignKey? {
@@ -170,27 +171,24 @@ struct SimDataIndex {
         return palette[(positions[ref] ?? 0) % palette.count]
     }
 
-    /// The tables named by an op's `tables` on the node it talks to.
+    /// A table named by an op's `tables` or an entity, on the node it lives on.
     func table(named name: String, on node: String?) -> SimTableRef? {
         guard let node else { return nil }
         let ref = SimTableRef(node: node, table: name)
         return schemas[ref] == nil ? nil : ref
     }
 
-    /// The node an entity reads from: `source`, else the one database the node has ops on.
-    func source(of entity: Entity, on node: Node) -> String? { level.simDataSource(of: entity, on: node) }
+    /// The node an entity reads from (`Level.entitySource`).
+    func source(of entity: Entity, on node: Node) -> String? { level.entitySource(entity, on: node.id) }
 
-    /// The node ids that write a table: its `owner`, else every node with an op that writes it.
-    func owners(of ref: SimTableRef, ops: SimOpsIndex) -> [String] {
-        if let owner = schemas[ref]?.owner { return [owner] }
-        return writers(of: ref, ops: ops)
-    }
+    /// Who owns a table: its `owner`, else every node with an op that writes it (`Level.owners`).
+    func owners(of ref: SimTableRef) -> [String] { level.owners(of: TableRef(node: ref.node, table: ref.table)) }
 
-    /// Nodes whose ops write the table (an op's `tables` on this node with write access).
-    func writers(of ref: SimTableRef, ops: SimOpsIndex) -> [String] {
+    /// Every node with an op that writes the table (`Level.writers`).
+    func writers(of ref: SimTableRef) -> [String] {
         var ids: [String] = []
-        for entry in usage(of: ref, ops: ops) where [.write, .readWrite].contains(SimOpsText.access(entry.op)) {
-            if !ids.contains(entry.node.id) { ids.append(entry.node.id) }
+        for writer in level.writers(of: TableRef(node: ref.node, table: ref.table)) where !ids.contains(writer.node) {
+            ids.append(writer.node)
         }
         return ids
     }
@@ -200,11 +198,49 @@ struct SimDataIndex {
         ops.targeting(ref.node).filter { $0.op.tables.contains(ref.table) }
     }
 
-    func join(from row: SimRowRef) -> SimDataJoin { level.simDataJoinedRows(from: row, keys: keys) }
+    func join(from row: SimRowRef) -> SimDataJoin { SimDataJoins.walk(from: row, keys: keys, index: self) }
 
-    func assemble(_ entity: Entity, on node: Node, root row: Int) -> SimDataObject? {
-        guard let source = source(of: entity, on: node) else { return nil }
-        return level.simDataAssemble(entity, source: source, rootRow: row, keys: keys)
+    /// An entity as the object its code sees, from one sample row of its root table
+    /// (`Level.assembleEntity`): the root's columns, each parent it refs as a nested object in place of
+    /// the ref column, and the children that ref it as lists (one object when their ref column is
+    /// unique), without the ref back to the row above.
+    func assemble(_ entity: Entity, on node: Node, root row: Int, maxDepth: Int = 3, maxRows: Int = 5) -> SimDataObject? {
+        guard let source = source(of: entity, on: node),
+              let tree = level.assembleEntity(entity, on: node.id, row: row, maxDepth: maxDepth, maxRows: maxRows) else { return nil }
+        let below = Dictionary(grouping: level.entityJoins(entity, on: node.id), by: \.above)
+        func object(_ entityRow: EntityRow) -> SimDataObject {
+            let ref = SimTableRef(node: source, table: entityRow.table)
+            let schema = table(ref) ?? TableSchema(name: entityRow.table)
+            let joins = below[entityRow.table] ?? []
+            var hidden = Set(joins.filter { $0.relation == .parent }.map(\.aboveColumn))
+            if entityRow.relation == .child, let column = entityRow.column { hidden.insert(column) }
+            let rowRef = SimRowRef(table: ref, row: entityRow.row)
+            var fields = schema.columns.enumerated().filter { !hidden.contains($0.element.name) }.map { offset, column in
+                SimDataField(name: column.name, table: ref, cell: SimCellRef(row: rowRef, column: column.name), key: nil,
+                             value: .scalar(entityRow.values.indices.contains(offset) ? entityRow.values[offset] : nil))
+            }
+            for join in joins {
+                let joined = SimTableRef(node: source, table: join.table)
+                let key = join.relation == .child
+                    ? SimForeignKey(from: joined, fromColumn: join.column, to: ref, toColumn: join.aboveColumn)
+                    : SimForeignKey(from: ref, fromColumn: join.aboveColumn, to: joined, toColumn: join.column)
+                let rows = entityRow.children.filter { $0.table == join.table && $0.column == join.column && $0.aboveColumn == join.aboveColumn }
+                let objects = rows.map(object)
+                let cut = objects.isEmpty && entityRow.truncated
+                if join.relation == .parent {
+                    fields.append(SimDataField(name: SimDataText.parentField(key), table: joined, cell: nil, key: key,
+                                               value: cut ? .cut : .one(objects.first)))
+                } else {
+                    let column = table(joined)?.column(join.column)
+                    let one = column?.unique == true || (column?.pk == true && table(joined)?.primaryKey.count == 1)
+                    let value: SimDataField.Value = cut ? .cut : one ? .one(objects.first)
+                        : .many(objects, omitted: entityRow.omitted[join.table] ?? 0)
+                    fields.append(SimDataField(name: SimDataText.childField(key, one: one), table: joined, cell: nil, key: key, value: value))
+                }
+            }
+            return SimDataObject(type: SimDataText.typeName(entityRow.table), row: rowRef, fields: fields)
+        }
+        return object(tree)
     }
 }
 
@@ -218,17 +254,8 @@ enum SimDataText {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// `12M`, `2.4M`, `18k`, `950`.
-    static func count(_ n: Double) -> String {
-        let (value, suffix): (Double, String) = switch n {
-        case 1e9...: (n / 1e9, "B")
-        case 1e6...: (n / 1e6, "M")
-        case 1e3...: (n / 1e3, "k")
-        default: (n, "")
-        }
-        let rounded = value >= 100 ? value.rounded() : (value * 10).rounded() / 10
-        return rounded == rounded.rounded() ? "\(Int(rounded))\(suffix)" : "\(rounded.formatted(.number.precision(.fractionLength(1))))\(suffix)"
-    }
+    /// `12M`, `2.4M`, `18k`, `950` (`DataFormat.count`, as the CLI prints them).
+    static func count(_ n: Double) -> String { DataFormat.count(n) }
 
     /// A row's name: its primary key values (`o-9f1c`, `A-1 · 2026-06-01`), else its first value.
     static func label(_ table: TableSchema, row: Int) -> String {
@@ -311,59 +338,28 @@ enum SimDataText {
 }
 
 extension TableSchema {
-    func simDataColumn(_ name: String) -> Column? { columns.first { $0.name == name } }
-
     /// The value in a row's column; nil for NULL, a missing column or a short row.
     func simDataValue(_ row: Int, _ column: String) -> String? {
-        guard rows.indices.contains(row), let index = columns.firstIndex(where: { $0.name == column }),
-              rows[row].indices.contains(index) else { return nil }
-        return rows[row][index]
+        columnIndex(column).flatMap { value(row: row, column: $0) }
     }
 
     /// Rows whose `column` equals `value` (NULL never matches).
     func simDataRows(where column: String, equals value: String) -> [Int] {
-        guard let index = columns.firstIndex(where: { $0.name == column }) else { return [] }
-        return rows.indices.filter { rows[$0].indices.contains(index) && rows[$0][index] == value }
+        guard let index = columnIndex(column) else { return [] }
+        return rows.indices.filter { self.value(row: $0, column: index) == value }
     }
 }
 
-// MARK: - Level helpers (stand-ins for data-core's)
+// MARK: - Join highlight
 
-extension Level {
-    /// Resolves a column's `ref`: `table.column` on `node`, or `node.table.column` on another node.
-    func simDataResolve(_ ref: String, from node: String) -> (table: SimTableRef, column: String)? {
-        let parts = ref.split(separator: ".").map(String.init)
-        let (owner, table, column): (String, String, String)
-        switch parts.count {
-        case 2: (owner, table, column) = (node, parts[0], parts[1])
-        case 3: (owner, table, column) = (parts[0], parts[1], parts[2])
-        default: return nil
-        }
-        guard let schema = self.node(owner)?.schema.first(where: { $0.name == table }),
-              schema.columns.contains(where: { $0.name == column }) else { return nil }
-        return (SimTableRef(node: owner, table: table), column)
-    }
-
-    /// Every `ref` column on the level that resolves.
-    func simDataForeignKeys() -> [SimForeignKey] {
-        nodes.flatMap { node in
-            node.schema.flatMap { table in
-                table.columns.compactMap { column -> SimForeignKey? in
-                    guard let ref = column.ref, let target = simDataResolve(ref, from: node.id) else { return nil }
-                    return SimForeignKey(from: SimTableRef(node: node.id, table: table.name), fromColumn: column.name,
-                                         to: target.table, toColumn: target.column)
-                }
-            }
-        }
-    }
-
-    func simDataTable(_ ref: SimTableRef) -> TableSchema? { node(ref.node)?.schema.first { $0.name == ref.table } }
-
-    /// The rows that join to `origin` through refs, in both directions, the way an aggregate hangs
-    /// together: parents (`orders.user_id → users.id`) and their parents, children (`order_items.order_id
-    /// → orders.id`) and their children and parents, but never a parent's other children (siblings).
+/// The rows that join to one row, the way an aggregate hangs together: parents (`orders.user_id →
+/// users.id`) and their parents, children (`order_items.order_id → orders.id`) and their children and
+/// parents, but never a parent's other children (siblings). `Level.joinedRows` answers a different
+/// question (every row sharing one key value) and would light the other orders of the same user.
+enum SimDataJoins {
     /// At most `maxDepth` hops from the origin and `fanOut` rows per key per row.
-    func simDataJoinedRows(from origin: SimRowRef, keys: [SimForeignKey], maxDepth: Int = 3, fanOut: Int = 8) -> SimDataJoin {
+    static func walk(from origin: SimRowRef, keys: [SimForeignKey], index: SimDataIndex,
+                     maxDepth: Int = 3, fanOut: Int = 8) -> SimDataJoin {
         var join = SimDataJoin(origin: origin)
         var seen: Set<SimRowRef> = [origin]
         var frontier: [(row: SimRowRef, upOnly: Bool)] = [(origin, false)]
@@ -372,13 +368,13 @@ extension Level {
             depth += 1
             var next: [(row: SimRowRef, upOnly: Bool)] = []
             for (row, upOnly) in frontier {
-                guard let schema = simDataTable(row.table) else { continue }
+                guard let schema = index.table(row.table) else { continue }
                 for key in keys {
                     for up in [true, false] where !(upOnly && !up) {
                         let (near, far, nearColumn, farColumn) = up ? (key.from, key.to, key.fromColumn, key.toColumn)
                                                                     : (key.to, key.from, key.toColumn, key.fromColumn)
                         guard near == row.table, let value = schema.simDataValue(row.row, nearColumn),
-                              let target = simDataTable(far) else { continue }
+                              let target = index.table(far) else { continue }
                         var taken = 0
                         for match in target.simDataRows(where: farColumn, equals: value) {
                             let reached = SimRowRef(table: far, row: match)
@@ -399,62 +395,5 @@ extension Level {
             frontier = next
         }
         return join
-    }
-
-    /// The node an entity reads: its `source`, else the one database (or node with a schema) its node
-    /// has ops on.
-    func simDataSource(of entity: Entity, on node: Node) -> String? {
-        if let source = entity.source { return self.node(source) == nil ? nil : source }
-        var targets: [String] = []
-        for op in node.ops {
-            guard let target = op.target, let peer = self.node(target),
-                  peer.kind == .database || !peer.schema.isEmpty, !targets.contains(target) else { continue }
-            targets.append(target)
-        }
-        return targets.count == 1 ? targets[0] : nil
-    }
-
-    /// An entity as the object its code sees, from one sample row of its root table: the root's
-    /// columns, each parent it refs as a nested object (in place of the ref column), and children that
-    /// ref it as lists (or one object when their ref column is unique). Only the entity's tables are
-    /// followed, each at most once on a path, `maxDepth` levels deep and `fanOut` children per list.
-    func simDataAssemble(_ entity: Entity, source: String, rootRow: Int, keys: [SimForeignKey],
-                         maxDepth: Int = 3, fanOut: Int = 5) -> SimDataObject? {
-        let root = SimTableRef(node: source, table: entity.root)
-        guard let schema = simDataTable(root), schema.rows.indices.contains(rootRow) else { return nil }
-        let allowed = Set(([entity.root] + entity.includes).map { SimTableRef(node: source, table: $0) })
-
-        func object(_ row: SimRowRef, via: SimForeignKey?, used: Set<SimTableRef>, depth: Int) -> SimDataObject {
-            let schema = simDataTable(row.table) ?? TableSchema(name: row.table.table)
-            let parents = depth < maxDepth ? keys.filter { $0.from == row.table && allowed.contains($0.to) && !used.contains($0.to) } : []
-            let children = depth < maxDepth ? keys.filter { $0.to == row.table && allowed.contains($0.from) && !used.contains($0.from) } : []
-            var hidden = Set(parents.map(\.fromColumn))
-            if let via, via.from == row.table { hidden.insert(via.fromColumn) }
-            let reached = used.union(parents.map(\.to)).union(children.map(\.from))
-            var fields = schema.columns.filter { !hidden.contains($0.name) }.map { column in
-                SimDataField(name: column.name, table: row.table, cell: SimCellRef(row: row, column: column.name), key: nil,
-                             value: .scalar(schema.simDataValue(row.row, column.name)))
-            }
-            for key in parents {
-                let match = schema.simDataValue(row.row, key.fromColumn).flatMap { value in
-                    simDataTable(key.to)?.simDataRows(where: key.toColumn, equals: value).first
-                }
-                let nested = match.map { object(SimRowRef(table: key.to, row: $0), via: key, used: reached, depth: depth + 1) }
-                fields.append(SimDataField(name: SimDataText.parentField(key), table: key.to, cell: nil, key: key, value: .one(nested)))
-            }
-            for key in children {
-                guard let child = simDataTable(key.from) else { continue }
-                let matches = schema.simDataValue(row.row, key.toColumn).map { child.simDataRows(where: key.fromColumn, equals: $0) } ?? []
-                let column = child.simDataColumn(key.fromColumn)
-                let one = column?.unique == true || (column?.pk == true && child.columns.filter(\.pk).count == 1)
-                let objects = matches.prefix(one ? 1 : fanOut).map {
-                    object(SimRowRef(table: key.from, row: $0), via: key, used: reached, depth: depth + 1)
-                }
-                fields.append(SimDataField(name: SimDataText.childField(key, one: one), table: key.from, cell: nil, key: key,
-                                           value: one ? .one(objects.first) : .many(objects, omitted: max(0, matches.count - objects.count))))
-            }
-            return SimDataObject(type: SimDataText.typeName(row.table.table), row: row, fields: fields)
-        }
-        return object(SimRowRef(table: root, row: rootRow), via: nil, used: [root], depth: 0)
     }
 }

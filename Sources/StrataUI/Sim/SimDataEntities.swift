@@ -43,6 +43,13 @@ private struct SimEntityCard: View {
     @State private var hovered: String?
     @State private var headerHovered = false
 
+    init(model: AppModel, sim: Simulation, terms: TermIndex, node: Node, entity: Entity,
+         select: @escaping (StageSelection?) -> Void, still: Bool) {
+        self.model = model; self.sim = sim; self.terms = terms; self.node = node; self.entity = entity
+        self.select = select; self.still = still
+        _hovered = State(initialValue: SimDataState.of(sim).previewHover[SimDataState.entityKey(node: node.id, entity: entity.name)])
+    }
+
     private var state: SimDataState { SimDataState.of(sim) }
     private var index: SimDataIndex { state.index }
     private var key: String { SimDataState.entityKey(node: node.id, entity: entity.name) }
@@ -177,6 +184,9 @@ private struct SimEntityCard: View {
                     if let detail = info.detail {
                         Text(detail).font(Theme.ui(11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                     }
+                    if let cell = line.cell {
+                        Text("Click to open this row of \(cell.table.table)").font(Theme.ui(11)).foregroundStyle(Theme.faint)
+                    }
                 } else {
                     Text("Hover a field to see its table and column; click it to open the row.")
                         .font(Theme.ui(11)).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
@@ -258,7 +268,7 @@ enum SimDataTree {
                 let fieldTint = index.tint(field.table)
                 switch field.value {
                 case .scalar(let value):
-                    let column = schema?.simDataColumn(field.name)
+                    let column = schema?.column(field.name)
                     let source = ["\(field.table.table).\(field.name)", column?.type].compactMap { $0 }.joined(separator: " · ")
                     lines.append(.init(id: fieldPath, depth: depth + 1, key: field.name, value: SimDataText.literal(value, column: column),
                                        isNull: value == nil, tint: fieldTint, cell: field.cell,
@@ -270,6 +280,9 @@ enum SimDataTree {
                         lines.append(.init(id: fieldPath, depth: depth + 1, key: field.name, value: "null", isNull: true, tint: fieldTint,
                                            info: .init(source: "\(field.table.table): no row", detail: field.key.map { "Nothing joins by \($0.title)" })))
                     }
+                case .cut:
+                    lines.append(.init(id: fieldPath, depth: depth + 1, key: field.name, value: "…", isNull: true, tint: fieldTint,
+                                       info: .init(source: field.table.table, detail: "More rows join here, below the depth the object is assembled to")))
                 case .many(let items, let omitted):
                     let detail = field.key.map { "\(items.count + omitted) \(items.count + omitted == 1 ? "row" : "rows") by \($0.title)" }
                     lines.append(.init(id: fieldPath, depth: depth + 1, key: field.name, punctuation: items.isEmpty && omitted == 0 ? "[]" : "[",
@@ -298,7 +311,7 @@ enum SimDataTree {
             if !order.contains(object.row.table) { order.append(object.row.table) }
             for field in object.fields {
                 switch field.value {
-                case .scalar: break
+                case .scalar, .cut: break
                 case .one(let nested): if let nested { visit(nested) }
                 case .many(let items, _): items.forEach(visit)
                 }
@@ -321,19 +334,20 @@ private struct SimDataTreeRow: View {
     var body: some View {
         Button(action: open) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                // Indent guides, as an editor draws them.
-                HStack(spacing: 0) {
-                    ForEach(0..<line.depth, id: \.self) { _ in
-                        Rectangle().fill(Theme.border).frame(width: 1, height: 17).padding(.trailing, Self.indent - 1)
-                    }
-                }
-                .frame(height: 17, alignment: .top)
-                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4.5 }
                 Text(text).font(Theme.mono(11)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 10).padding(.trailing, 8)
+            .padding(.leading, 10 + CGFloat(line.depth) * Self.indent).padding(.trailing, 8)
             .frame(minHeight: 17)
+            // Indent guides, as an editor draws them, through every line of a wrapped value.
+            .background(alignment: .leading) {
+                HStack(spacing: 0) {
+                    ForEach(0..<line.depth, id: \.self) { _ in
+                        Rectangle().fill(Theme.border).frame(width: 1).frame(maxHeight: .infinity).padding(.trailing, Self.indent - 1)
+                    }
+                }
+                .padding(.leading, 10)
+            }
             .background(hovered && line.info != nil ? line.tint.opacity(0.10) : .clear)
             .overlay(alignment: .leading) {
                 if hovered && line.info != nil { Rectangle().fill(line.tint).frame(width: 2) }

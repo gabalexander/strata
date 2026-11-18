@@ -239,7 +239,7 @@ struct SimPanelScroll<Content: View>: View {
                         else { position.scrollTo(edge: .top) }
                     }
                     .onChange(of: scrollTo) { _, target in
-                        guard let target, target.context == nil || target.context == resetOn else { return }
+                        guard let target, target.request != scrolled, target.context == nil || target.context == resetOn else { return }
                         scroll(to: target, proxy)
                     }
             }

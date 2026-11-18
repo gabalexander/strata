@@ -22,6 +22,8 @@ final class SimDataState {
     private(set) var scroll: SimScrollTarget?
 
     @ObservationIgnored let index: SimDataIndex
+    /// Snapshots only: the tree line an entity card starts hovered on, by entity key.
+    @ObservationIgnored var previewHover: [String: String] = [:]
     @ObservationIgnored private var joins: [SimRowRef: SimDataJoin] = [:]
 
     private init(level: Level) { index = SimDataIndex(level: level) }
@@ -198,7 +200,7 @@ enum SimDataMenus {
         let state = SimDataState.of(sim)
         guard let schema = state.index.table(cell.table) else { return [] }
         let value = schema.simDataValue(cell.row.row, cell.column)
-        let column = schema.simDataColumn(cell.column)
+        let column = schema.column(cell.column)
         let isKey = column?.pk == true || column?.ref != nil
         var items: [MenuItem] = [.header("\(cell.table.table).\(cell.column)")]
         if isKey {
@@ -298,6 +300,12 @@ public enum SimDataSnapshot {
         let state = SimDataState.of(sim)
         state.expandEntity(key, scroll: false)
         state.setRoot(key, row: rootRow)
+    }
+
+    /// Shows an entity's tree with a line hovered: `path` is the field's path from the root object,
+    /// such as `root.user.email`.
+    public static func hoverField(_ sim: Simulation, node: String, entity: String, path: String) {
+        SimDataState.of(sim).previewHover[SimDataState.entityKey(node: node, entity: entity)] = path
     }
 
     /// What clicking a table chip in an op detail does, through the menus' path (there is no stage

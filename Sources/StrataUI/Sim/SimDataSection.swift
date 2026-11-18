@@ -122,9 +122,8 @@ struct SimDataTableView: View {
     /// Who writes the table: its `owner`, or the services whose ops write it, flagging a second writer.
     @ViewBuilder
     private var writers: some View {
-        let ops = SimOpsState.of(sim).index
-        let owners = index.owners(of: ref, ops: ops)
-        let others = index.writers(of: ref, ops: ops).filter { !owners.contains($0) }
+        let owners = index.owners(of: ref)
+        let others = index.writers(of: ref).filter { !owners.contains($0) }
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("Written by").font(Theme.ui(11)).foregroundStyle(Theme.muted)
             if owners.isEmpty {

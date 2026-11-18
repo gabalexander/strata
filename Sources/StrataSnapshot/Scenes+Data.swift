@@ -20,9 +20,21 @@ import StrataCore
         },
         dataScene("data-entity-tree", height: 1500, selected: "orders") { sim in
             SimDataSnapshot.expandEntity(sim, node: "orders", entity: "Order")
+            SimDataSnapshot.hoverField(sim, node: "orders", entity: "Order", path: "root.user.email")
         },
         dataScene("data-entity-price", height: 1100, selected: "orders") { sim in
             SimDataSnapshot.expandEntity(sim, node: "orders", entity: "Price", rootRow: 1)
+        },
+        // The bundled example, as data-core parses it.
+        dataScene("data-checkout-join", height: 1960, selected: "db", example: true) { sim in
+            SimDataSnapshot.focus(sim, node: "db", table: "orders", column: "id", value: "o_9k2")
+        },
+        dataScene("data-checkout-entity", height: 1500, selected: "orders", example: true) { sim in
+            SimDataSnapshot.expandEntity(sim, node: "orders", entity: "Order")
+            SimDataSnapshot.hoverField(sim, node: "orders", entity: "Order", path: "root.total_cents")
+        },
+        dataScene("data-checkout-event", height: 1100, selected: "mailer", example: true) { sim in
+            SimDataSnapshot.expandEntity(sim, node: "mailer", entity: "OrderPlaced")
         },
         dataLandingScene(),
         dataMenuScene(),
@@ -31,9 +43,10 @@ import StrataCore
 }
 
 @MainActor private func dataScene(_ name: String, height: CGFloat, selected: String? = nil,
+                                  example: Bool = false,
                                   prepare: @escaping (Simulation) -> Void = { _ in }) -> Scene {
     Scene(name: name, size: CGSize(width: 1400, height: height)) {
-        let manifest = dataManifest()
+        let manifest = example ? checkoutExample() : dataManifest()
         let model = dataModel(manifest)
         let sim = Simulation(manifest: manifest)
         settle(sim)
@@ -126,6 +139,15 @@ import StrataCore
 private func dataManifest() -> Manifest {
     var manifest = Fixtures.checkoutWithData
     for index in manifest.root.edges.indices { manifest.root.edges[index].latency = .fixed(0.12) }
+    return manifest
+}
+
+/// `Resources/Examples/checkout.yaml`, parsed; the fixture if it can't be read.
+private func checkoutExample() -> Manifest {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Resources/Examples/checkout.yaml")
+    guard let text = try? String(contentsOf: url, encoding: .utf8),
+          let manifest = ManifestParser.parse(text, source: .file(url)).0 else { return dataManifest() }
     return manifest
 }
 
