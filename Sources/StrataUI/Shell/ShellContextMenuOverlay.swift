@@ -235,7 +235,8 @@ struct ContextMenuOverlay: View {
                 selection[depth] = items[next].id
             }
         case 36, 76:
-            if !event.isARepeat, let item = index.map({ items[$0] }) ?? items.first { activate(item, depth: depth) }
+            // Like a system menu, Return does nothing until a row is highlighted.
+            if !event.isARepeat, let index { activate(items[index], depth: depth) }
         default: return event
         }
         return nil
