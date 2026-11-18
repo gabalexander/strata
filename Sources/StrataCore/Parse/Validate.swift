@@ -44,6 +44,7 @@ enum Validate {
         for (index, location) in field["nodes"].items(named: true).enumerated() {
             let node = level.nodes[index]
             validator.node(node, at: location)
+            level.nodes[index].entities = validator.data(of: node, at: location)
             duplicates(node.actions, at: location["actions"])
             duplicates(node.ops, at: location["ops"])
             if var inside = node.inside {
@@ -186,6 +187,7 @@ struct LevelValidation {
         }
         steps(flow.steps, at: field["steps"], chain: origin.map { [$0] } ?? [])
         flowOp(flow, runsAt: origin, at: field["op"])
+        trafficSanity(flow, at: field)
     }
 
     func consumerModes(_ kind: NodeKind) -> [OnError] {

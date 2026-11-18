@@ -44,15 +44,17 @@ struct Field {
         return true
     }
 
-    func items(required: Bool = false, named: Bool = false) -> [Field] {
+    /// The elements of a list. `named` paths each element by its `nameKey` value (`nodes.api`) instead of its index.
+    func items(required: Bool = false, named: Bool = false, nameKey: String = "id") -> [Field] {
         guard present || required else { return [] }
         guard let elements = node?.elements else {
             diagnose(present ? "expected a list" : "required list is missing")
             return []
         }
         return elements.enumerated().map { index, element in
-            let id = named ? element["id"]?.scalar : nil
-            let suffix = id.flatMap { Syntax.isID($0) ? ".\($0)" : nil } ?? "[\(index)]"
+            let id = named ? element[nameKey]?.scalar : nil
+            let valid: (String) -> Bool = nameKey == "id" ? Syntax.isID : Syntax.isName
+            let suffix = id.flatMap { valid($0) ? ".\($0)" : nil } ?? "[\(index)]"
             return Field(element, path: path + suffix, fallbackLine: line, findings: findings)
         }
     }
@@ -177,7 +179,7 @@ struct Field {
         }
     }
 
-    private static func json(_ node: YAMLNode) -> String {
+    static func json(_ node: YAMLNode) -> String {
         switch node.content {
         case .null: return "null"
         case .scalar(let text, let quoted):

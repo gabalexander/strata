@@ -130,13 +130,13 @@ private func opDetail(_ op: OpListing) -> String {
     return parts.isEmpty ? "–" : parts.joined(separator: " ")
 }
 
-private func durationText(_ seconds: Double) -> String {
+func durationText(_ seconds: Double) -> String {
     func trimmed(_ value: Double) -> String { Value.number((value * 1000).rounded() / 1000).description }
     if seconds >= 60, seconds.truncatingRemainder(dividingBy: 60) == 0 { return "\(Int(seconds / 60))m" }
     return seconds >= 1 ? trimmed(seconds) + "s" : trimmed(seconds * 1000) + "ms"
 }
 
-private func alignedTable(_ rows: [[String]]) -> String {
+func alignedTable(_ rows: [[String]]) -> String {
     let cleaned = rows.map { row in
         row.map { $0.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ") }
     }
