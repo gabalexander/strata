@@ -2,7 +2,8 @@ import Foundation
 
 // Where an architecture hurts: capacity and bottlenecks, what to scale, backpressure and blast
 // radius, database pressure, volumes, and live trouble spots (docs/manifest.md, Pressure).
-// CONTRACT FILE: owned by the lead. PLACEHOLDER bodies until the analysis work lands; keep the API.
+// CONTRACT FILE: owned by the lead; additive changes only. The models live next to it:
+// Capacity.swift (expected-value capacity), ScalePlan.swift, BlastRadius.swift, Culprits.swift.
 
 /// How much one node can take and how much it's taking.
 public struct NodeCapacity: Sendable, Identifiable {
@@ -16,6 +17,10 @@ public struct NodeCapacity: Sendable, Identifiable {
     public var utilization: Double       // demand / slots (0 for unlimited)
     /// Requests per second arriving here per 1 request/s of each flow (visits, including p, cache misses).
     public var visits: [String: Double]
+    /// Requests (or publishes, or deliveries) per second arriving here at the analysed rates.
+    public var arrivals: Double = 0
+    /// Mean seconds a call waits in this node's waiting room before it gets a slot (0 below 70% utilization).
+    public var queueWait: Double = 0
     public init(node: String, slots: Int?, holdTime: Double, demand: Double, utilization: Double, visits: [String: Double]) {
         self.node = node; self.slots = slots; self.holdTime = holdTime; self.demand = demand
         self.utilization = utilization; self.visits = visits
@@ -31,6 +36,11 @@ public struct FlowCapacity: Sendable, Identifiable {
     public var bottleneck: String?       // that node
     public var declared: FlowTraffic?
     public var slo: SLO?
+    /// Consumer flows: messages arriving per second at the buffer. Above `rate` when the consumer can't
+    /// keep up, and the backlog grows by the difference. nil for source flows.
+    public var offered: Double?
+    /// Expected seconds per request (source flows, end to end) or per message (consumer flows), from the static model.
+    public var latency: Double?
     public init(flow: String, rate: Double, daily: Double) { self.flow = flow; self.rate = rate; self.daily = daily }
 }
 
@@ -42,6 +52,11 @@ public struct ScaleStep: Sendable, Identifiable {
     public var reason: String
     public var newMaxRate: Double?
     public var nextBottleneck: String?
+    /// The flow `newMaxRate` is a rate of (the one with the biggest share of this node's load).
+    public var flow: String?
+    /// The node's utilization at the planned rates before and after this step.
+    public var utilization: Double = 0
+    public var newUtilization: Double = 0
     public init(node: String, replicas: Int, reason: String) { self.node = node; self.replicas = replicas; self.reason = reason }
 }
 
@@ -55,6 +70,8 @@ public struct LoadSource: Sendable, Identifiable {
     public var access: OpAccess?
     public var rate: Double              // calls per second at the target
     public var busyShare: Double         // fraction of the target's demand, 0...1
+    /// Calls per day at the target: from the flow's `traffic.daily` when declared, else rate × 86 400.
+    public var daily: Double = 0
     public init(node: String, op: String?, flow: String, tables: [String], access: OpAccess?, rate: Double, busyShare: Double) {
         self.node = node; self.op = op; self.flow = flow; self.tables = tables; self.access = access; self.rate = rate; self.busyShare = busyShare
     }
@@ -66,6 +83,8 @@ public struct CapacityReport: Sendable {
     public var scalePlan: [ScaleStep] = []       // in order; empty when nothing saturates within 100× the current rates
     /// Per target node (databases, caches, search, any server): load sources, biggest share first.
     public var pressure: [String: [LoadSource]] = [:]
+    /// Plain sentences about things the numbers imply: a consumer that can't keep up, a down node, an assumed rate.
+    public var notes: [String] = []
     public init() {}
 }
 
@@ -106,18 +125,18 @@ public enum Analysis {
     /// Static (expected-value) capacity analysis of a level at the given flow rates (per second).
     /// Missing rates use each flow's configured rate; `params` overrides node parameters (runtime state).
     public static func capacity(of level: Level, rates: [String: Double] = [:], params: [String: NodeParams] = [:]) -> CapacityReport {
-        CapacityReport()
+        CapacityModel(level, AnalysisInputs(rates: rates, params: params)).report()
     }
 
     /// Pure graph analysis of how a slowdown at `node` propagates.
-    public static func blastRadius(of node: String, in level: Level) -> BlastRadius { BlastRadius(node: node) }
+    public static func blastRadius(of node: String, in level: Level) -> BlastRadius { BlastRadiusGraph(level).radius(of: node) }
 }
 
 @MainActor
 public extension Simulation {
     /// Capacity analysis with the sim's current rates and runtime parameters (scaled replicas, slow factors, …).
-    func capacityReport() -> CapacityReport { Analysis.capacity(of: level) }
+    func capacityReport() -> CapacityReport { CapacityModel(level, analysisInputs()).report() }
     /// What is hurting right now, worst first.
-    func culprits() -> [Culprit] { [] }
+    func culprits() -> [Culprit] { liveCulprits() }
     func blastRadius(_ node: String) -> BlastRadius { Analysis.blastRadius(of: node, in: level) }
 }
