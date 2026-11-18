@@ -32,6 +32,24 @@ enum SimSessions {
         model.sessions[AppModel.sessionKey(id, sim.path)] = sim
     }
 
+    private final class Handoffs { var keys: Set<String> = [] }
+    private static let handoffs = NSMapTable<AppModel, Handoffs>.weakToStrongObjects()
+
+    /// Marks an embed whose simulation now also runs full screen (⤢), so both keep sharing it.
+    static func handOff(_ embed: String, model: AppModel) {
+        let store = handoffs.object(forKey: model) ?? Handoffs()
+        store.keys.insert(embed)
+        handoffs.setObject(store, forKey: model)
+    }
+
+    /// The shared simulation for an embed that was expanded earlier, if it still matches the manifest.
+    static func handedOff(_ embed: String, model: AppModel, id: String, path: [String], manifest: Manifest) -> Simulation? {
+        guard handoffs.object(forKey: model)?.keys.contains(embed) == true,
+              let sim = model.sessions[AppModel.sessionKey(id, path)], sim.parentRate == nil,
+              same(sim.manifest, manifest) else { return nil }
+        return sim
+    }
+
     static func forget(_ id: String, from model: AppModel) {
         let prefix = AppModel.sessionKey(id, []) + "|"
         model.sessions = model.sessions.filter { $0.key != id && !$0.key.hasPrefix(prefix) }
