@@ -177,7 +177,7 @@ struct SimDock: View {
                         Spacer(minLength: 4)
                         SimButton(title: active ? "Stop" : "Run", icon: active ? "stop.fill" : "play.fill", active: active) {
                             if active { sim.stopScenario() }
-                            else { sim.start(scenario: scenario.id); sim.playing = true }
+                            else { sim.start(scenario: scenario.id) }
                         }
                     }
                     if let goal = scenario.goal { SimMarkdown(source: goal, model: model, terms: terms, size: 12) }

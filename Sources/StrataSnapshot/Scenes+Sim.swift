@@ -39,7 +39,8 @@ import StrataCore
             let parent = Simulation(manifest: manifest, path: parentPath)
             advance(parent)
             model.sessions[AppModel.sessionKey(manifest.id, parentPath)] = parent
-            let measuredRate = parent.frame().nodes[parentNode]?.throughput
+            let measuredRate = parent.nodeState(parentNode)?.arrivals
+            model.open(.sim(manifest.id, path: path), parentRate: measuredRate)
             sim = Simulation(manifest: manifest, path: path, parentRate: measuredRate)
         } else {
             sim = Simulation(manifest: manifest)

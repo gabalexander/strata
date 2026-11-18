@@ -9,8 +9,8 @@ struct SimActions {
     let fit: () -> Void
     let dive: (Node) -> Void
 
-    func palette() -> [MenuItem] {
-        [
+    func palette(selection: StageSelection? = nil) -> [MenuItem] {
+        var items = [
             play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() },
             command("Step simulation", icon: "forward.frame", shortcut: ".") { sim.pauseAndStep() },
             fitItem,
@@ -19,13 +19,28 @@ struct SimActions {
             + sim.level.nodes.filter(\.canDeepDive).map { node in
                 command("Deep dive into \(node.label)", icon: "square.3.layers.3d") { dive(node) }
             }
+        if let selection {
+            let menu = menu(for: selection)
+            if let heading = menu.first, heading.isHeader {
+                let commands = menu.dropFirst().compactMap(Self.paletteCommand)
+                if !commands.isEmpty { items += [.submenu(heading.title, icon: nil, commands)] }
+            }
+        }
+        return items
+    }
+
+    private static func paletteCommand(_ item: MenuItem) -> MenuItem? {
+        guard item.enabled, !item.isSeparator, !item.isHeader else { return nil }
+        var command = item
+        command.submenu = item.submenu.compactMap(paletteCommand)
+        return command.action != nil || !command.submenu.isEmpty ? command : nil
     }
 
     func menu(for hit: StageSelection?) -> [MenuItem] {
         switch hit {
         case .node(let id):
             guard let node = sim.level.node(id) else { return [] }
-            let state = sim.frame().nodes[id] ?? NodeState()
+            let state = sim.nodeState(id) ?? NodeState()
             var items = [MenuItem.header(node.label)]
             items += nodeActions(node, state: state, full: true)
             let sourceFlows = sim.level.flows.filter { $0.from == node.id }
@@ -46,7 +61,7 @@ struct SimActions {
             return items
         case .edge(let id):
             guard let edge = sim.diagramEdge(id) else { return [] }
-            let state = sim.frame().edges[id] ?? EdgeState()
+            let state = sim.edgeState(id) ?? EdgeState()
             return [.header(edgeTitle(edge))] + edgeActions(edge, state: state)
         case .flow(let id):
             guard let flow = sim.level.flow(id) else { return [] }
@@ -159,7 +174,7 @@ struct SimActions {
         let running = sim.scenario == scenario.id
         return command("\(running ? "Stop" : "Run") \(scenario.label)", icon: "flag", checked: running) {
             if running { sim.stopScenario() }
-            else { sim.start(scenario: scenario.id); sim.playing = true }
+            else { sim.start(scenario: scenario.id) }
         }
     }
 
@@ -167,6 +182,44 @@ struct SimActions {
                          role: MenuItem.Role = .normal, enabled: Bool = true, checked: Bool = false,
                          action: @escaping @MainActor () -> Void) -> MenuItem {
         MenuItem(title, icon: icon, shortcut: shortcut, role: role, enabled: enabled, checked: checked, action: action)
+    }
+}
+
+@MainActor
+struct SimPaletteCommands: View {
+    let actions: SimActions
+    let selection: StageSelection?
+    @State private var commandID: UUID?
+
+    private struct Presentation: Equatable {
+        let title: String
+        let checked: Bool
+        let children: [Presentation]
+
+        init(_ item: MenuItem) {
+            title = item.title
+            checked = item.checked
+            children = item.submenu.map(Self.init)
+        }
+    }
+
+    private struct Commands: Equatable {
+        let selection: StageSelection?
+        let items: [Presentation]
+    }
+
+    var body: some View {
+        let _ = selection == nil ? 0 : actions.sim.revision
+        let items = actions.palette(selection: selection)
+        let commands = Commands(selection: selection, items: items.map(Presentation.init))
+        Color.clear
+            .onChange(of: commands, initial: true) {
+                commandID = items.first?.id
+                actions.model.screenCommands = items
+            }
+            .onDisappear {
+                if actions.model.screenCommands.first?.id == commandID { actions.model.screenCommands = [] }
+            }
     }
 }
 

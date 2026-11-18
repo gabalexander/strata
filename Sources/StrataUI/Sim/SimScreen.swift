@@ -36,11 +36,13 @@ public struct SimScreen: View {
 
     public var body: some View {
         let revision = model.library.revision
+        let parentRate = model.route == .sim(id, path: path) ? model.routeParentRate : nil
         Group {
             if let manifest = SimSessions.cachedManifest(model, id: id) {
                 if manifest.level(at: path) != nil {
                     SimScreenSession(model: model, id: id, path: path, manifest: manifest, revision: revision,
-                                     snapshot: snapshot, arrival: $arrival)
+                                     parentRate: parentRate, snapshot: snapshot, arrival: $arrival)
+                        .id(parentRate)
                 } else {
                     SimLoadIssue(model: model, id: id, invalidPath: path)
                 }
@@ -68,20 +70,22 @@ private struct SimScreenSession: View {
     let path: [String]
     let manifest: Manifest
     let revision: Int
+    let parentRate: Double?
     let snapshot: SimSnapshotOptions?
     @SwiftUI.Binding var arrival: SimArrival?
     @State private var sim: Simulation
 
-    init(model: AppModel, id: String, path: [String], manifest: Manifest, revision: Int,
+    init(model: AppModel, id: String, path: [String], manifest: Manifest, revision: Int, parentRate: Double?,
          snapshot: SimSnapshotOptions?, arrival: SwiftUI.Binding<SimArrival?>) {
         self.model = model
         self.id = id
         self.path = path
         self.manifest = manifest
         self.revision = revision
+        self.parentRate = parentRate
         self.snapshot = snapshot
         _arrival = arrival
-        _sim = State(initialValue: SimSessions.cached(model, id: id, path: path, manifest: manifest))
+        _sim = State(initialValue: SimSessions.cached(model, id: id, path: path, manifest: manifest, parentRate: parentRate))
     }
 
     var body: some View {
@@ -90,7 +94,7 @@ private struct SimScreenSession: View {
             .onAppear { SimSessions.remember(sim, model: model, id: id) }
             .onChange(of: revision) { _, _ in
                 guard !SimSessions.same(sim.manifest, manifest) else { return }
-                sim = SimSessions.make(model, id: id, path: path, manifest: manifest)
+                sim = Simulation(manifest: manifest, path: path, parentRate: parentRate)
                 SimSessions.remember(sim, model: model, id: id)
             }
     }
@@ -111,7 +115,6 @@ private struct SimWorkspace: View {
     @State private var presentationScale: CGFloat = 1
     @State private var presentationOpacity: Double = 1
     @State private var presentationNode: String?
-    @State private var commandID: UUID?
     @State private var noteIDs: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -157,18 +160,13 @@ private struct SimWorkspace: View {
         }
         .foregroundStyle(Theme.text)
         .background(Theme.bg)
+        .background { SimPaletteCommands(actions: actions, selection: selection) }
         .onAppear {
-            updateCommands()
             updateNotes()
             appear()
         }
         .onChange(of: model.vault.revision) { _, _ in updateNotes() }
-        .onChange(of: sim.playing) { _, _ in updateCommands() }
-        .onChange(of: sim.scenario) { _, _ in updateCommands() }
-        .onDisappear {
-            navigation?.cancel()
-            if model.screenCommands.first?.id == commandID { model.screenCommands = [] }
-        }
+        .onDisappear { navigation?.cancel() }
     }
 
     private func stage(_ actions: SimActions) -> some View {
@@ -189,34 +187,27 @@ private struct SimWorkspace: View {
         model.overlays.dismissMenu()
     }
 
-    private func updateCommands() {
-        let items = actions.palette()
-        commandID = items.first?.id
-        model.screenCommands = items
-    }
-
     private func updateNotes() {
         noteIDs = Set(sim.level.nodes.filter { model.vault.hasNote(actions.notePath($0)) }.map(\.id))
     }
 
     private func dive(_ node: Node) {
-        if let detail = node.detail {
-            navigate(.sim(detail, path: []), forward: true, node: node.id)
-        } else if node.inside != nil {
-            navigate(.sim(id, path: sim.path + [node.id]), forward: true, node: node.id)
-        }
+        guard let route = SimSessions.drillDestination(node, id: id, path: sim.path) else { return }
+        navigate(route, forward: true, node: node.id, parentRate: sim.nodeState(node.id)?.arrivals)
     }
 
     private func up(_ depth: Int) {
         guard depth < sim.path.count else { return }
-        navigate(.sim(id, path: Array(sim.path.prefix(depth))), forward: false, node: sim.path[depth])
+        let path = Array(sim.path.prefix(depth))
+        let ancestor = model.sessions[AppModel.sessionKey(id, path)]
+        navigate(.sim(id, path: path), forward: false, node: sim.path[depth], parentRate: ancestor?.parentRate)
     }
 
-    private func navigate(_ route: Route, forward: Bool, node: String) {
+    private func navigate(_ route: Route, forward: Bool, node: String, parentRate: Double? = nil) {
         guard navigation == nil else { return }
         model.overlays.dismissMenu()
         model.overlays.closeTerm()
-        guard !reduceMotion else { model.open(route); return }
+        guard !reduceMotion else { model.open(route, parentRate: parentRate); return }
         presentationNode = forward ? node : nil
         withAnimation(Theme.gentle) {
             presentationScale = forward ? 2.15 : 0.8
@@ -226,7 +217,7 @@ private struct SimWorkspace: View {
             try? await Task.sleep(for: .milliseconds(370))
             guard !Task.isCancelled else { return }
             arrival = SimArrival(destination: route, forward: forward, node: node)
-            model.open(route)
+            model.open(route, parentRate: parentRate)
             navigation = nil
         }
     }

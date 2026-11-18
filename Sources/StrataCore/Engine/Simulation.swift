@@ -25,7 +25,8 @@ public final class Simulation {
     @ObservationIgnored public private(set) var log: [LogEntry] = []
 
     let topology: ProgramTopology
-    private let parentRate: Double
+    /// Arrival rate supplied by the parent level when this session was opened.
+    public let parentRate: Double?
     private let seed: UInt64
     private let topicConsumers: Set<Int>
 
@@ -60,7 +61,7 @@ public final class Simulation {
         let topology = ProgramTopology(manifest.level(at: path) ?? manifest.root)
         self.topology = topology
         self.level = topology.level
-        self.parentRate = parentRate ?? 5
+        self.parentRate = parentRate
         self.seed = seed
         random = SimulationRandom(state: seed)
         var queueConsumers: Set<Int> = []
@@ -174,17 +175,33 @@ public final class Simulation {
         revision += 1
     }
 
+    /// Current state of a single node, without constructing a render frame.
+    public func nodeState(_ id: String) -> NodeState? {
+        topology.nodeIndex[id].map(nodeState)
+    }
+
+    /// Current state of a single diagram edge, without constructing a render frame.
+    public func edgeState(_ id: String) -> EdgeState? {
+        let endpoints = id.components(separatedBy: "->")
+        guard endpoints.count == 2,
+              let from = topology.nodeIndex[endpoints[0]], let to = topology.nodeIndex[endpoints[1]],
+              let index = existingLink(from: from, to: to) else { return nil }
+        return edgeState(edges[index])
+    }
+
+    private func edgeState(_ edge: LinkRuntime) -> EdgeState {
+        var state = EdgeState()
+        state.cut = edge.cut
+        state.extraLatency = edge.extra
+        state.rate = edge.traversals.value(at: now)
+        state.breakerOpen = edge.openCircuits > 0
+        return state
+    }
+
     public func frame() -> SimFrame {
         var frame = SimFrame(t: now)
         for index in nodes.indices { frame.nodes[nodes[index].node.id] = nodeState(index) }
-        for edge in edges {
-            var state = EdgeState()
-            state.cut = edge.cut
-            state.extraLatency = edge.extra
-            state.rate = edge.traversals.value(at: now)
-            state.breakerOpen = edge.openCircuits > 0
-            frame.edges[edge.id] = state
-        }
+        for edge in edges { frame.edges[edge.id] = edgeState(edge) }
         frame.tokens.reserveCapacity(tokens.count)
         for token in tokens where now < token.end {
             let fraction = min(1, max(0, (now - token.start) / (token.end - token.start)))
@@ -317,7 +334,7 @@ public final class Simulation {
         revision += 1
     }
 
-    func rate(for flow: FlowRuntime) -> Double { flow.rate.perSecondValue ?? parentRate }
+    func rate(for flow: FlowRuntime) -> Double { flow.rate.perSecondValue ?? parentRate ?? 5 }
 
     func changeRate(_ flow: Int, to rate: Rate) {
         flows[flow].rate = rate

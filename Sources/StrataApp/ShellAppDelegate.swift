@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (config, diagnostics) = ConfigLoader.load()
+        HiddenWindowSharing.enabled = config.hideFromScreenShare
         for diagnostic in diagnostics { NSLog("Strata config: %@", diagnostic.description) }
 
         let library = Library(dirs: config.simURLs)

@@ -8,7 +8,7 @@ public struct SearchScreen: View {
     let query: String
     @State private var input: String
     @State private var results: SearchResults
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     public init(model: AppModel, query: String) {
         self.model = model
@@ -66,11 +66,8 @@ public struct SearchScreen: View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass").font(Theme.ui(14)).foregroundStyle(focused ? Theme.accent : Theme.muted)
                 .accessibilityHidden(true)
-            TextField("Find a title or text", text: $input)
-                .font(Theme.ui(14))
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .onSubmit { model.replace(.search(input.trimmingCharacters(in: .whitespacesAndNewlines))) }
+            StrataTextField(placeholder: "Find a title or text", text: $input, focused: $focused, overlays: model.overlays,
+                            size: 14, onSubmit: { model.replace(.search(input.trimmingCharacters(in: .whitespacesAndNewlines))) })
             if !input.isEmpty {
                 NoteIconButton(title: "Clear search", symbol: "xmark.circle.fill") { input = ""; focused = true }
             }

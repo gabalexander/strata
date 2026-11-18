@@ -12,6 +12,7 @@ struct SimInspector: View {
     var still = false
 
     var body: some View {
+        let notePreview = selectedNotePreview
         VStack(spacing: 0) {
             HStack {
                 Image(systemName: "sidebar.right").font(Theme.ui(12)).foregroundStyle(Theme.muted)
@@ -29,7 +30,7 @@ struct SimInspector: View {
                     VStack(alignment: .leading, spacing: 16) {
                         switch selection {
                         case .node(let id):
-                            if let node = sim.level.node(id) { nodePane(node) }
+                            if let node = sim.level.node(id) { nodePane(node, notePreview: notePreview) }
                         case .edge(let id):
                             if let edge = sim.diagramEdge(id) { edgePane(edge) }
                         case .flow(let id):
@@ -71,9 +72,8 @@ struct SimInspector: View {
         }
     }
 
-    private func nodePane(_ node: Node) -> some View {
-        let frame = sim.frame()
-        let state = frame.nodes[node.id] ?? NodeState()
+    private func nodePane(_ node: Node, notePreview: String?) -> some View {
+        let state = sim.nodeState(node.id) ?? NodeState()
         let health = state.health.presentation
         let availableActions = actions.nodeActions(node, state: state)
         return Group {
@@ -109,7 +109,7 @@ struct SimInspector: View {
                     }
                 }
             }
-            nodeNote(node)
+            nodeNote(node, preview: notePreview)
             if node.kind != .note { SimParameters(node: node, sim: sim, model: model) }
         }
     }
@@ -156,18 +156,20 @@ struct SimInspector: View {
         }
     }
 
-    private func nodeNote(_ node: Node) -> some View {
-        let _ = model.vault.revision
+    private var selectedNotePreview: String? {
+        guard case .node(let id) = selection, let node = sim.level.node(id),
+              let lines = model.vault.indexedLines(at: actions.notePath(node)) else { return nil }
+        return lines.lazy.filter {
+            let line = $0.trimmingCharacters(in: .whitespaces)
+            return !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("[[")
+        }.prefix(3).joined(separator: " ")
+    }
+
+    private func nodeNote(_ node: Node, preview: String?) -> some View {
         let path = actions.notePath(node)
         return SimSection(title: "Your note") {
-            if model.vault.hasNote(path) {
-                if let note = model.vault.read(path) {
-                    let preview = note.components(separatedBy: "\n").filter {
-                        let line = $0.trimmingCharacters(in: .whitespaces)
-                        return !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("[[")
-                    }.prefix(3).joined(separator: " ")
-                    if !preview.isEmpty { SimMarkdown(source: preview, model: model, terms: terms, lineLimit: 3) }
-                }
+            if let preview {
+                if !preview.isEmpty { SimMarkdown(source: preview, model: model, terms: terms, lineLimit: 3) }
                 SimButton(title: "Open note", icon: "note.text") { model.open(.note(path)) }
             } else {
                 SimButton(title: "Add a note", icon: "note.text.badge.plus") { actions.addNote(node) }
@@ -176,7 +178,7 @@ struct SimInspector: View {
     }
 
     private func edgePane(_ edge: StrataCore.Edge) -> some View {
-        let state = sim.frame().edges[edge.id] ?? EdgeState()
+        let state = sim.edgeState(edge.id) ?? EdgeState()
         let bind = BindTarget.edge(from: edge.from, to: edge.to)
         let latency = sim.value(StrataCore.Binding(bind, "latency"))?.number ?? edge.latency?.mean ?? 0.001
         let loss = sim.value(StrataCore.Binding(bind, "loss"))?.number ?? edge.loss ?? 0

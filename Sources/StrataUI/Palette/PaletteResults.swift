@@ -76,8 +76,9 @@ struct PaletteResults {
             PaletteEntry(id: "node/\(([id] + path + [node.id]).joined(separator: "/"))",
                          group: .nodes, title: node.label, symbol: node.icon ?? node.kind.symbol,
                          subtitle: "Deep dive", keywords: node.id) {
-                if node.inside != nil { model.open(.sim(id, path: path + [node.id])) }
-                else if let detail = node.detail { model.open(.sim(detail, path: [])) }
+                guard let destination = SimSessions.drillDestination(node, id: id, path: path) else { return }
+                let parent = model.sessions[AppModel.sessionKey(id, path)]
+                model.open(destination, parentRate: parent?.nodeState(node.id)?.arrivals)
             }
         }
     }

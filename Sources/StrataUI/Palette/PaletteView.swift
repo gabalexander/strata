@@ -8,7 +8,7 @@ struct CommandPalette: View {
     @Binding var recent: [String]
     @State private var query: String
     @State private var selection = 0
-    @FocusState private var focused: Bool
+    @State private var focused = true
 
     init(catalog: ShellCatalog, switching: Bool, recent: Binding<[String]>) {
         self.catalog = catalog
@@ -39,7 +39,7 @@ struct CommandPalette: View {
         }
         .background {
             WindowEvents(matching: .keyDown) { event, view in
-                guard !event.hasCommandModifiers,
+                guard catalog.model.overlays.menu == nil, !event.hasCommandModifiers,
                       (view.window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return event }
                 switch event.keyCode {
                 case 53: if !event.isARepeat { dismiss() }
@@ -53,8 +53,6 @@ struct CommandPalette: View {
             }
             .accessibilityHidden(true)
         }
-        .defaultFocus($focused, true)
-        .onAppear { focused = true }
         .onChange(of: query) { selection = 0 }
         .onChange(of: rows.count) { selection = min(selection, max(0, rows.count - 1)) }
     }
@@ -94,10 +92,8 @@ struct CommandPalette: View {
                 .font(Theme.ui(17, .medium))
                 .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
-            TextField(prompt, text: $query, prompt: Text(prompt).foregroundStyle(Theme.muted))
-                .font(Theme.ui(16))
-                .textFieldStyle(.plain)
-                .focused($focused)
+            StrataTextField(placeholder: prompt, text: $query, focused: $focused, overlays: catalog.model.overlays,
+                            size: 16, placeholderColor: Theme.muted)
             Button(action: dismiss) { StrataKeycap("esc") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close palette")
@@ -189,6 +185,7 @@ struct CommandPalette: View {
     }
 
     private func dismiss() {
+        catalog.model.overlays.dismissMenu()
         catalog.model.paletteOpen = false
         catalog.model.switcherOpen = false
     }

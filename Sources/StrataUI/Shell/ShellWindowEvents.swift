@@ -48,7 +48,9 @@ extension NSEvent {
         !modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
     }
 
-    var contentLocation: CGPoint? {
+    var contentLocation: CGPoint? { contentLocation(in: window) }
+
+    func contentLocation(in window: NSWindow?) -> CGPoint? {
         guard let content = window?.contentView else { return nil }
         let point = content.convert(locationInWindow, from: nil)
         return CGPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y)
