@@ -94,9 +94,10 @@ private struct SimPressureRail: View {
         switch section {
         case .now: EmptyView()
         case .bottlenecks:
-            if let tightest = report.flows.compactMap({ flow in flow.maxRate.map { (flow, flow.rate / max($0, 0.000_001)) } })
+            if let tightest = report.flows.filter({ $0.maxRate != nil }).map({ ($0, SimPressureState.load($0)) })
                 .max(by: { $0.1 < $1.1 }) {
-                summaryText("\(SimPressureFormat.percent(max(0, 1 - tightest.1))) left", tint: SimPressureStyle.calm(tightest.1))
+                summaryText(tightest.1 > 1 ? "over" : "\(SimPressureFormat.percent(max(0, 1 - tightest.1))) left",
+                            tint: SimPressureStyle.calm(tightest.1))
             } else { summaryText("—") }
         case .scale:
             let count = report.scalePlan.count
@@ -325,10 +326,22 @@ private struct SimPressureBottlenecks: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .card(radius: 8)
             }
+            if !analysis.report.notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(analysis.report.notes.enumerated()), id: \.offset) { _, note in
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Image(systemName: "info.circle").font(Theme.ui(10, .medium)).foregroundStyle(Theme.faint)
+                            Text(note).font(Theme.small).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.leading, 2)
+            }
         }
     }
 
-    private func load(_ flow: FlowCapacity) -> Double { flow.maxRate.map { flow.rate / max($0, 0.000_001) } ?? 0 }
+    private func load(_ flow: FlowCapacity) -> Double { SimPressureState.load(flow) }
 
     private var legend: some View {
         HStack(spacing: 10) {
@@ -352,6 +365,7 @@ private struct SimPressureBottlenecks: View {
         let declared = flow.declared ?? sim.level.flow(flow.flow)?.traffic
         let peak = declared?.peak
         let ratio = load(flow)
+        let now = flow.offered ?? flow.rate
         let overPeak = peak.map { peak in flow.maxRate.map { peak > $0 } ?? false } ?? false
         return SimPressureRowButton {
             select(flow.bottleneck.map(StageSelection.node) ?? .flow(flow.flow))
@@ -364,14 +378,18 @@ private struct SimPressureBottlenecks: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
                     if flow.maxRate != nil {
-                        Text(SimPressureFormat.percent(max(0, 1 - ratio))).font(Theme.mono(12, .medium))
-                            .foregroundStyle(SimPressureStyle.calm(ratio))
-                        Text("headroom").font(Theme.small).foregroundStyle(Theme.muted)
+                        if ratio > 1 {
+                            Text("over capacity").font(Theme.mono(12, .medium)).foregroundStyle(Theme.bad)
+                        } else {
+                            Text(SimPressureFormat.percent(max(0, 1 - ratio))).font(Theme.mono(12, .medium))
+                                .foregroundStyle(SimPressureStyle.calm(ratio))
+                            Text("headroom").font(Theme.small).foregroundStyle(Theme.muted)
+                        }
                     }
                 }
                 HStack(spacing: 14) {
-                    SimPressureBar(rate: flow.rate, maxRate: flow.maxRate, peak: peak).frame(height: 15)
-                    figure(SimPressureFormat.rate(flow.rate), "now", tint: Theme.text)
+                    SimPressureBar(rate: now, maxRate: flow.maxRate, peak: peak).frame(height: 15)
+                    figure(SimPressureFormat.rate(now), flow.offered == nil ? "now" : "arrive", tint: ratio > 1 ? Theme.bad : Theme.text)
                     figure(flow.maxRate.map(SimPressureFormat.rate) ?? "—", "max", tint: Theme.text)
                     figure(peak.map(SimPressureFormat.rate) ?? "—", "peak", tint: overPeak ? Theme.bad : peak == nil ? Theme.faint : Theme.text)
                 }
@@ -389,15 +407,20 @@ private struct SimPressureBottlenecks: View {
         .frame(width: 92, alignment: .trailing)
     }
 
-    /// `saturates at 60/s: orders db, 8 connections`.
+    /// `saturates at 60/s: orders db, 8 connections`, and for a consumer that can't keep up, how fast
+    /// its backlog grows.
     private func sentence(_ flow: FlowCapacity, analysis: SimPressureState.Analysis) -> String {
+        if let offered = flow.offered, offered > 0, flow.rate == 0 { return "stopped: its consumer is down or out of slots" }
         guard let maxRate = flow.maxRate else { return "no bottleneck within 100× this rate" }
         var text = "saturates at \(SimPressureFormat.rate(maxRate))"
         if let id = flow.bottleneck {
             text += ": \(sim.pressureLabel(id))"
             if let slots = analysis.nodes[id]?.slots, let node = sim.level.node(id) {
-                text += ", \(SimPressureFormat.slots(slots, kind: node.kind))"
+                text += slots == 0 ? ", down" : ", \(SimPressureFormat.slots(slots, kind: node.kind))"
             }
+        }
+        if let offered = flow.offered, offered > maxRate * 1.000_001 {
+            text += "; backlog grows \(SimPressureFormat.rate(offered - maxRate))"
         }
         return text
     }
@@ -491,6 +514,7 @@ private struct SimPressureScale: View {
 
     private func before(_ offset: Int, plan: [ScaleStep], analysis: SimPressureState.Analysis) -> Double? {
         if offset > 0 { return plan[offset - 1].newMaxRate }
+        if let flow = plan[0].flow { return analysis.report.flows.first { $0.flow == flow }?.maxRate }
         return SimPressureState.of(sim).primaryFlow(for: plan[0].node, sim: sim)?.maxRate
     }
 
@@ -499,7 +523,8 @@ private struct SimPressureScale: View {
         let state = SimPressureState.of(sim)
         let tried = tries.first { $0.node == step.node && $0.to == step.replicas }
         let from = tried?.from ?? state.replicas(step.node, sim: sim)
-        let maxBefore = before(offset, plan: plan, analysis: analysis)
+        // The why: the reason's first sentence ("mailer is over capacity at peak.").
+        let why = step.reason.components(separatedBy: ". ").first.map { $0.hasSuffix(".") ? $0 : $0 + "." } ?? ""
         return HStack(alignment: .center, spacing: 12) {
             Text(String(offset + 1)).font(Theme.mono(12, .medium)).foregroundStyle(Theme.faint)
                 .frame(width: 14, alignment: .trailing)
@@ -510,17 +535,23 @@ private struct SimPressureScale: View {
                     }
                     .buttonStyle(.plain)
                     Text("\(from) → \(step.replicas) replicas").font(Theme.mono(12)).foregroundStyle(Theme.text)
-                    if let after = step.newMaxRate {
-                        Text("·").foregroundStyle(Theme.faint)
-                        Text("max \(maxBefore.map(SimPressureFormat.number) ?? "?") → \(SimPressureFormat.rate(after))")
+                    Text("·").foregroundStyle(Theme.faint)
+                    if step.utilization > 0 || step.newUtilization > 0 {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(SimPressureFormat.percent(step.utilization)).foregroundStyle(SimPressureStyle.calm(step.utilization))
+                            Text("→").foregroundStyle(Theme.faint)
+                            Text(SimPressureFormat.percent(step.newUtilization)).foregroundStyle(Theme.text)
+                            Text("busy").font(Theme.ui(12)).foregroundStyle(Theme.muted)
+                        }
+                        .font(Theme.mono(12))
+                    } else if let after = step.newMaxRate {
+                        Text("max \(before(offset, plan: plan, analysis: analysis).map(SimPressureFormat.number) ?? "?") → \(SimPressureFormat.rate(after))")
                             .font(Theme.mono(12)).foregroundStyle(Theme.muted)
                     }
-                    if let next = step.nextBottleneck {
-                        Text("then \(sim.pressureLabel(next))").font(Theme.ui(12)).foregroundStyle(Theme.muted)
-                    }
+                    Text(next(step)).font(Theme.ui(12)).foregroundStyle(Theme.muted)
                 }
-                if !step.reason.isEmpty {
-                    Text(step.reason).font(Theme.small).foregroundStyle(Theme.faint)
+                if !why.isEmpty, why != "." {
+                    Text(why).font(Theme.small).foregroundStyle(Theme.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -537,19 +568,27 @@ private struct SimPressureScale: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
+    /// `then orders-svc saturates at 188/s`, or that nothing else does.
+    private func next(_ step: ScaleStep) -> String {
+        guard let next = step.nextBottleneck else { return "then nothing else saturates" }
+        let at = step.newMaxRate.map { " at \(SimPressureFormat.rate($0))" } ?? ""
+        return next == step.node ? "then it saturates again\(at)" : "then \(sim.pressureLabel(next)) saturates\(at)"
+    }
+
     @ViewBuilder
     private func footer(_ plan: [ScaleStep], analysis: SimPressureState.Analysis) -> some View {
-        if let last = plan.last?.newMaxRate, let flow = SimPressureState.of(sim).primaryFlow(for: plan[0].node, sim: sim) {
-            let label = sim.level.flow(flow.flow)?.label ?? flow.flow
-            let peak = (flow.declared ?? sim.level.flow(flow.flow)?.traffic)?.peak
+        let id = plan.last?.flow ?? plan.first?.flow ?? SimPressureState.of(sim).primaryFlow(for: plan[0].node, sim: sim)?.flow
+        if let last = plan.last?.newMaxRate, let id, let flow = sim.level.flow(id) {
+            let capacity = analysis.report.flows.first { $0.flow == id }
+            let peak = (capacity?.declared ?? flow.traffic)?.peak
             let steps = plan.count == 1 ? "this step" : "these \(plan.count) steps"
             HStack(spacing: 6) {
                 if let peak {
                     Image(systemName: last >= peak ? "checkmark" : "exclamationmark.triangle")
                         .font(Theme.ui(10, .semibold)).foregroundStyle(last >= peak ? Theme.good : Theme.warn)
-                    Text("After \(steps) \(label) takes \(SimPressureFormat.rate(last)), \(last >= peak ? "above" : "still under") its declared peak of \(SimPressureFormat.rate(peak)).")
+                    Text("After \(steps) \(flow.label) takes \(SimPressureFormat.rate(last)), \(last >= peak ? "above" : "still under") its declared peak of \(SimPressureFormat.rate(peak)).")
                 } else {
-                    Text("After \(steps) \(label) takes \(SimPressureFormat.rate(last)).")
+                    Text("After \(steps) \(flow.label) takes \(SimPressureFormat.rate(last)) before the next node saturates.")
                 }
             }
             .font(Theme.small).foregroundStyle(Theme.muted)

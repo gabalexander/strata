@@ -142,10 +142,14 @@ private struct SimPressureStoreCard: View {
             if let tech = node?.tech { Text(tech).font(Theme.mono(10)).foregroundStyle(Theme.muted) }
             Spacer(minLength: 8)
             if let capacity, let slots = capacity.slots, let node {
-                Text(SimPressureFormat.percent(capacity.utilization)).font(Theme.mono(11, .medium))
-                    .foregroundStyle(SimPressureStyle.calm(capacity.utilization))
-                Text("busy · \(SimPressureFormat.slots(slots, kind: node.kind)) · \(SimPressureFormat.latency(capacity.holdTime)) hold")
-                    .font(Theme.small).foregroundStyle(Theme.muted).lineLimit(1)
+                if slots == 0 {
+                    Text("down").font(Theme.mono(11, .medium)).foregroundStyle(Theme.bad)
+                } else {
+                    Text(SimPressureFormat.percent(capacity.utilization)).font(Theme.mono(11, .medium))
+                        .foregroundStyle(SimPressureStyle.calm(capacity.utilization))
+                    Text("busy · \(SimPressureFormat.slots(slots, kind: node.kind)) · \(SimPressureFormat.latency(capacity.holdTime)) hold")
+                        .font(Theme.small).foregroundStyle(Theme.muted).lineLimit(1)
+                }
             }
         }
     }
@@ -175,7 +179,9 @@ private struct SimPressureStoreCard: View {
     private func row(_ source: LoadSource, color: Color) -> some View {
         let ref = ref(source)
         let entry = ref.flatMap(index.entry)
-        let title = entry?.op.label ?? "\(sim.level.flow(source.flow)?.label ?? source.flow) calls"
+        // No op: a consumer flow's deliveries (the caller is the buffer), or a step that names none.
+        let delivery = sim.level.node(source.node)?.kind.role == .buffer
+        let title = entry?.op.label ?? "\(sim.level.flow(source.flow)?.label ?? source.flow) \(delivery ? "deliveries" : "calls")"
         return SimPressureRowButton {
             select(.node(store))
             if let ref { SimOpsMenus.open(ref, sim: sim, model: model, anchor: .node(store)) }
@@ -188,6 +194,9 @@ private struct SimPressureStoreCard: View {
                 Spacer(minLength: 8)
                 Text(SimPressureFormat.rate(source.rate)).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     .monospacedDigit().frame(width: 58, alignment: .trailing)
+                Text(SimPressureFormat.perDay(source.daily > 0 ? source.daily : source.rate * 86_400))
+                    .font(Theme.mono(11)).foregroundStyle(Theme.faint)
+                    .monospacedDigit().lineLimit(1).frame(width: 84, alignment: .trailing)
                 Text(SimPressureFormat.percent(source.busyShare)).font(Theme.mono(11, .medium)).foregroundStyle(Theme.text)
                     .monospacedDigit().frame(width: 40, alignment: .trailing)
             }
@@ -367,6 +376,7 @@ struct SimPressureCapacity: View {
     private func row(_ capacity: NodeCapacity, bottleneck: [FlowCapacity]) -> some View {
         let node = sim.level.node(capacity.node)
         let limited = capacity.slots != nil
+        let down = capacity.slots == 0
         let util = capacity.utilization
         return SimPressureRowButton { select(.node(capacity.node)) } content: {
             HStack(spacing: 10) {
@@ -382,14 +392,14 @@ struct SimPressureCapacity: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                cell(capacity.slots.map(String.init) ?? "∞", width: 56, tint: limited ? Theme.text : Theme.faint)
+                cell(capacity.slots.map(String.init) ?? "∞", width: 56, tint: down ? Theme.bad : limited ? Theme.text : Theme.faint)
                 cell(capacity.holdTime > 0 ? SimPressureFormat.latency(capacity.holdTime) : "—", width: 64,
                      tint: capacity.holdTime > 0 ? Theme.muted : Theme.faint)
                 cell(capacity.demand > 0 || limited ? SimFormat.number(capacity.demand) : "—", width: 64,
                      tint: capacity.demand > 0 || limited ? Theme.muted : Theme.faint)
-                cell(limited ? SimPressureFormat.percent(util) : "—", width: 48,
-                     tint: limited ? SimPressureStyle.calm(util) : Theme.faint, weight: .medium)
-                headroom(limited ? util : nil).frame(width: 110, alignment: .leading)
+                cell(down ? "down" : limited ? SimPressureFormat.percent(util) : "—", width: 48,
+                     tint: down ? Theme.bad : limited ? SimPressureStyle.calm(util) : Theme.faint, weight: .medium)
+                headroom(limited && !down ? util : nil, down: down).frame(width: 110, alignment: .leading)
             }
             .padding(.horizontal, 12).frame(height: 24)
         }
@@ -401,7 +411,7 @@ struct SimPressureCapacity: View {
     }
 
     @ViewBuilder
-    private func headroom(_ util: Double?) -> some View {
+    private func headroom(_ util: Double?, down: Bool) -> some View {
         if let util {
             HStack(spacing: 6) {
                 Canvas { context, size in
@@ -415,7 +425,7 @@ struct SimPressureCapacity: View {
                     .foregroundStyle(util > 1 ? Theme.bad : Theme.muted).monospacedDigit().lineLimit(1)
             }
         } else {
-            Text("unlimited").font(Theme.small).foregroundStyle(Theme.faint)
+            Text(down ? "refuses work" : "unlimited").font(Theme.small).foregroundStyle(down ? Theme.bad : Theme.faint)
         }
     }
 }

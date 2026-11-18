@@ -7,22 +7,6 @@ import StrataCore
 // the section on screen, heat mode, a pinned blast radius, scale steps tried from the tab, and the
 // static capacity report, computed once per `sim.revision`.
 
-/// Where the pressure numbers come from: the simulation's analysis API in the app, a hand-built
-/// preview in snapshot scenes.
-@_spi(Snapshots) @MainActor
-public protocol SimPressureSource {
-    func capacityReport(_ sim: Simulation) -> CapacityReport
-    func culprits(_ sim: Simulation) -> [Culprit]
-    func blastRadius(_ node: String, in sim: Simulation) -> BlastRadius
-}
-
-@MainActor
-private struct SimPressureLive: SimPressureSource {
-    func capacityReport(_ sim: Simulation) -> CapacityReport { sim.capacityReport() }
-    func culprits(_ sim: Simulation) -> [Culprit] { sim.culprits() }
-    func blastRadius(_ node: String, in sim: Simulation) -> BlastRadius { sim.blastRadius(node) }
-}
-
 @_spi(Snapshots) public enum SimPressureSection: String, CaseIterable {
     case now = "Right now"
     case bottlenecks = "Bottlenecks"
@@ -79,7 +63,6 @@ final class SimPressureState {
     private(set) var tabRequest = 0
     private(set) var tried: [Tried] = []
 
-    @ObservationIgnored var source: any SimPressureSource = SimPressureLive()
     @ObservationIgnored private var cached: (revision: Int, analysis: Analysis)?
     @ObservationIgnored private var blasts: [String: BlastRadius] = [:]
     @ObservationIgnored private var found: (now: Double, revision: Int, culprits: [Culprit])?
@@ -113,11 +96,12 @@ final class SimPressureState {
 
     // MARK: Data
 
-    /// The static capacity report, computed at most once per revision. Reading it observes `revision`.
+    /// The static capacity report (a few milliseconds), computed at most once per revision, never per
+    /// pulse or frame. Reading it observes `revision`.
     func analysis(_ sim: Simulation) -> Analysis {
         let revision = sim.revision
         if let cached, cached.revision == revision { return cached.analysis }
-        let report = source.capacityReport(sim)
+        let report = sim.capacityReport()
         var bottleneckFor: [String: [FlowCapacity]] = [:]
         for flow in report.flows { if let node = flow.bottleneck { bottleneckFor[node, default: []].append(flow) } }
         let analysis = Analysis(report: report,
@@ -132,7 +116,7 @@ final class SimPressureState {
     func culprits(_ sim: Simulation) -> [Culprit] {
         let revision = sim.revision
         if let found, found.now == sim.now, found.revision == revision { return found.culprits }
-        let culprits = source.culprits(sim).enumerated()
+        let culprits = sim.culprits().enumerated()
             .sorted { $0.element.severity == $1.element.severity ? $0.offset < $1.offset : $0.element.severity > $1.element.severity }
             .map(\.element)
         found = (sim.now, revision, culprits)
@@ -142,7 +126,7 @@ final class SimPressureState {
     /// Pure graph analysis of the level, so one per node for the session.
     func blastRadius(_ node: String, sim: Simulation) -> BlastRadius {
         if let known = blasts[node] { return known }
-        let radius = source.blastRadius(node, in: sim)
+        let radius = sim.blastRadius(node)
         blasts[node] = radius
         return radius
     }
@@ -152,7 +136,13 @@ final class SimPressureState {
         analysis(sim).bottleneckFor[node]?.max { load($0) < load($1) }
     }
 
-    func load(_ flow: FlowCapacity) -> Double { flow.maxRate.map { flow.rate / max($0, 0.000_001) } ?? 0 }
+    /// How close a flow is to its max rate: what arrives (a consumer's `offered`) over the max. Above 1
+    /// the flow can't keep up.
+    static func load(_ flow: FlowCapacity) -> Double {
+        flow.maxRate.map { (flow.offered ?? flow.rate) / max($0, 0.000_001) } ?? 0
+    }
+
+    func load(_ flow: FlowCapacity) -> Double { Self.load(flow) }
 
     func replicas(_ node: String, sim: Simulation) -> Int {
         sim.effective(node).replicas ?? sim.nodeState(node)?.replicas ?? 1
@@ -288,7 +278,7 @@ final class SimPressureState {
             highlight.nodes.insert(capacity.node)
             highlight.tints[capacity.node] = StageTint(color: SimPressureStyle.heat(util),
                                                        strength: util < 0.5 ? 0.3 : util < 0.8 ? 0.65 : 1,
-                                                       tag: "util \(SimPressureFormat.percent(util))")
+                                                       tag: capacity.slots == 0 ? "down" : "util \(SimPressureFormat.percent(util))")
         }
         heatHighlight = (sim.revision, highlight)
         return highlight
@@ -345,13 +335,9 @@ final class SimPressureState {
     }
 }
 
-/// Offscreen snapshots: a preview source, a section, heat mode, a pinned blast radius, a tried step.
+/// Offscreen snapshots: a section, heat mode, a pinned blast radius, a tried step.
 @_spi(Snapshots) @MainActor
 public enum SimPressureSnapshot {
-    public static func preview(_ sim: Simulation, source: any SimPressureSource) {
-        SimPressureState.of(sim).source = source
-    }
-
     public static func section(_ sim: Simulation, _ section: SimPressureSection) {
         SimPressureState.of(sim).section = section
     }

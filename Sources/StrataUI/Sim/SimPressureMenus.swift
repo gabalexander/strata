@@ -61,13 +61,14 @@ struct SimPressureInspectorRow: View {
             let flows = (analysis.bottleneckFor[node.id] ?? []).map { sim.level.flow($0.flow)?.label ?? $0.flow }
             let primary = state.primaryFlow(for: node.id, sim: sim).map { sim.level.flow($0.flow)?.label ?? $0.flow }
             let util = capacity.utilization
+            let down = capacity.slots == 0
             Button { state.openTab(flows.isEmpty ? .capacity : .bottlenecks) } label: {
                 // One line: the longest variant that fits the inspector's width.
                 ViewThatFits(in: .horizontal) {
-                    line(util, title: true, flow: primary, named: true, headroom: true)
-                    line(util, title: true, flow: primary, named: true, headroom: false)
-                    line(util, title: false, flow: primary, named: true, headroom: false)
-                    line(util, title: true, flow: primary, named: false, headroom: false)
+                    line(util, down: down, title: true, flow: primary, named: true, headroom: true)
+                    line(util, down: down, title: true, flow: primary, named: true, headroom: false)
+                    line(util, down: down, title: false, flow: primary, named: true, headroom: false)
+                    line(util, down: down, title: true, flow: primary, named: false, headroom: false)
                 }
                 .padding(.horizontal, 9).frame(height: 28)
                 .background(hovered ? Theme.hover : Theme.raised, in: RoundedRectangle(cornerRadius: 8))
@@ -82,7 +83,7 @@ struct SimPressureInspectorRow: View {
     }
 
     /// `Capacity · bottleneck for Place order ······ util 92% · 8% headroom →`
-    private func line(_ util: Double, title: Bool, flow: String?, named: Bool, headroom: Bool) -> some View {
+    private func line(_ util: Double, down: Bool, title: Bool, flow: String?, named: Bool, headroom: Bool) -> some View {
         HStack(spacing: 6) {
             if title { Text("Capacity").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted) }
             if let flow {
@@ -90,9 +91,9 @@ struct SimPressureInspectorRow: View {
                     .font(Theme.ui(11, .medium)).foregroundStyle(Theme.warn)
             }
             Spacer(minLength: 8)
-            Text("util \(SimPressureFormat.percent(util))").font(Theme.mono(11, .medium))
-                .foregroundStyle(SimPressureStyle.calm(util))
-            if headroom || flow == nil {
+            Text(down ? "down" : "util \(SimPressureFormat.percent(util))").font(Theme.mono(11, .medium))
+                .foregroundStyle(down ? Theme.bad : SimPressureStyle.calm(util))
+            if !down, headroom || flow == nil {
                 Text("· \(util > 1 ? "over capacity" : "\(SimPressureFormat.percent(max(0, 1 - util))) headroom")")
                     .font(Theme.mono(11)).foregroundStyle(Theme.muted)
             }
