@@ -1,0 +1,670 @@
+[
+ {
+  "id": "cache-aside",
+  "term": "Cache-aside",
+  "short": "The application checks the cache, loads missing values from storage and fills the cache.",
+  "detail": "On a miss, the caller reads the source, writes the result with a TTL and returns it. Updates need a separate policy.",
+  "design": "Keep the database sized for cold starts and miss spikes. Even a high steady-state hit ratio can hide how much traffic the source receives after eviction.",
+  "match": [
+   "cache-aside"
+  ],
+  "related": [
+   "read-through",
+   "ttl",
+   "stampede"
+  ]
+ },
+ {
+  "id": "read-through",
+  "term": "Read-through cache",
+  "short": "A cache that loads a missing value through its own adapter.",
+  "detail": "Callers always read from the cache API. On a miss, its loader fetches the value and populates the entry before returning it.",
+  "design": "A shared loader centralizes timeouts, miss coordination and instrumentation. Give operators a plan for a loader or cache outage.",
+  "match": [
+   "read-through cache",
+   "read-through"
+  ],
+  "related": [
+   "cache-aside",
+   "coalescing",
+   "write-through"
+  ]
+ },
+ {
+  "id": "write-policy",
+  "term": "Cache write strategy",
+  "short": "The rules that determine who writes each layer and when the application acknowledges a write.",
+  "detail": "Invalidate-on-write and update-on-write commit the source first, then issue a separate cache command. With write-through or write-behind the write enters through the cache layer.",
+  "design": "Choose the order against your durability and freshness requirements. Assign ownership for retries, ordering and recovery from partial writes.",
+  "match": [
+   "write strategy",
+   "update-on-write",
+   "update on write"
+  ],
+  "related": [
+   "invalidation",
+   "write-through",
+   "write-behind"
+  ]
+ },
+ {
+  "id": "write-through",
+  "term": "Write-through",
+  "short": "A cache-mediated write that waits for the backing store before acknowledging.",
+  "detail": "The cache layer synchronously writes the backing store. The simulator makes a new cache value visible after the source commits.",
+  "design": "This centralizes write coordination and puts source write latency on the response path. Handle commit-then-timeout, cache publication failure and retry ordering explicitly.",
+  "match": [
+   "write-through"
+  ],
+  "related": [
+   "write-policy",
+   "write-behind",
+   "read-through"
+  ]
+ },
+ {
+  "id": "write-behind",
+  "term": "Write-behind",
+  "short": "A cache-mediated write that acknowledges before the backing store commits.",
+  "detail": "The new value reaches the cache first. A background worker flushes pending writes, possibly batching or combining successive updates.",
+  "design": "Decide what an acknowledgment promises. Use durable buffering and per-key ordering if acknowledged updates must survive a cache or worker crash.",
+  "match": [
+   "write-behind",
+   "write-back cache"
+  ],
+  "related": [
+   "write-through",
+   "write-policy",
+   "stale-read"
+  ]
+ },
+ {
+  "id": "invalidation",
+  "term": "Cache invalidation",
+  "short": "Removing a cached entry so a later miss has to reload it.",
+  "detail": "Invalidate-on-write deletes the cache key after the source commits. A delete has no memory of the version unless you also keep a version fence.",
+  "design": "Track failed invalidations and bound staleness with a TTL. Where ordering matters, use monotonic versioned fills or a fence that survives the delete.",
+  "match": [
+   "cache invalidation",
+   "invalidation",
+   "invalidate-on-write",
+   "version fence"
+  ],
+  "related": [
+   "stale-race",
+   "ttl",
+   "write-policy"
+  ]
+ },
+ {
+  "id": "stale-read",
+  "term": "Stale read",
+  "short": "A response that uses an older version or a copy past its freshness limit.",
+  "detail": "A cache can return an old value while its TTL is still running. This simulator also counts responses deliberately served past TTL during a grace period.",
+  "design": "Define tolerated staleness by use case. A product description can often lag while authorization or an inventory reservation may require a stronger read.",
+  "match": [
+   "stale read",
+   "stale reads",
+   "stale responses",
+   "stale fill",
+   "stale value"
+  ],
+  "related": [
+   "hit-ratio",
+   "stale-race",
+   "swr"
+  ]
+ },
+ {
+  "id": "stale-race",
+  "term": "Stale-cache race",
+  "short": "An in-flight reader refills a cache with data from before a writer’s invalidation.",
+  "detail": "A reader misses and takes the old database snapshot. A writer commits a new row and deletes the key. The delayed reader then fills the now-empty key with the old snapshot.",
+  "design": "Deleting after commit still leaves a race with a prior read. If you need a freshness guarantee, retain a version fence or use monotonic versioned keys and reads.",
+  "match": [
+   "stale-cache race",
+   "stale cache race"
+  ],
+  "related": [
+   "invalidation",
+   "stale-read",
+   "cache-aside"
+  ]
+ },
+ {
+  "id": "ttl",
+  "term": "Time to live (TTL)",
+  "short": "How long a cached copy is considered fresh after a fill.",
+  "detail": "At expiry a normal lookup misses. Stale-while-revalidate can retain the expired copy for a separate, bounded grace period.",
+  "design": "Choose fresh time from the maximum tolerable stale interval and the expected reload load. Check how cache outage, expiry and rebuild affect the source.",
+  "match": [
+   "TTL",
+   "time to live",
+   "fresh time"
+  ],
+  "related": [
+   "ttl-jitter",
+   "swr",
+   "hit-ratio"
+  ]
+ },
+ {
+  "id": "hit-ratio",
+  "term": "Cache hit ratio",
+  "short": "The fraction of read lookups served directly from the cache.",
+  "detail": "The simulator counts grace-period responses as hits and coalesced waiters as misses. It counts stale responses separately.",
+  "design": "Look at the hit ratio by key family and pair it with source load and freshness. One very popular key can obscure misses elsewhere.",
+  "match": [
+   "cache hit ratio",
+   "hit ratio",
+   "cache hit"
+  ],
+  "related": [
+   "db-qps",
+   "stale-read",
+   "hot-key"
+  ]
+ },
+ {
+  "id": "db-qps",
+  "term": "Database queries per second",
+  "short": "Database operations started over the last modeled second.",
+  "detail": "The rate includes cache fills, refreshes and writes. In-flight counts describe concurrent work, and the peak records its high-water mark.",
+  "design": "Observe both rate and concurrency. A short load spike can exhaust a connection pool while its minute-average QPS still looks normal.",
+  "match": [
+   "DB QPS",
+   "database QPS",
+   "peak DB in flight",
+   "database operations in flight"
+  ],
+  "related": [
+   "hit-ratio",
+   "stampede",
+   "coalescing"
+  ]
+ },
+ {
+  "id": "stampede",
+  "term": "Cache stampede",
+  "short": "Many callers try to reload the same missing cache entry at once.",
+  "detail": "When a popular key expires, every caller that reaches it before the first fill may query the source. This is also called a thundering herd.",
+  "design": "Coalesce reloads within the right scope and protect the source with a concurrency budget. Measure the worst expiry interval as well as the overall hit ratio.",
+  "match": [
+   "cache stampede",
+   "cache stampedes",
+   "thundering herd",
+   "stampede"
+  ],
+  "related": [
+   "coalescing",
+   "early-refresh",
+   "hot-key"
+  ]
+ },
+ {
+  "id": "coalescing",
+  "term": "Request coalescing (singleflight)",
+  "short": "Concurrent misses for the same key share one in-flight fetch.",
+  "detail": "A leader fetches the result and followers wait for it. Singleflight usually coordinates within a process. Several app instances need a common coordinator for fleet-wide deduplication.",
+  "design": "Set a deadline and release followers when a fetch fails. A distributed lease needs a bounded lifetime and may need fencing to prevent an expired owner from writing.",
+  "match": [
+   "request coalescing",
+   "singleflight",
+   "shared fetch"
+  ],
+  "related": [
+   "stampede",
+   "swr",
+   "early-refresh"
+  ]
+ },
+ {
+  "id": "swr",
+  "term": "Stale-while-revalidate",
+  "short": "Serving an expired copy briefly while refreshing it in the background.",
+  "detail": "The stale copy is eligible during a bounded grace interval. A refresh guard limits background reloads while the copy continues to serve requests.",
+  "design": "Use a separate grace budget for data that can lag. Track refresh failures so you know when a cache is relying on expired copies.",
+  "match": [
+   "stale-while-revalidate",
+   "refresh grace period"
+  ],
+  "related": [
+   "ttl",
+   "stale-read",
+   "coalescing"
+  ]
+ },
+ {
+  "id": "early-refresh",
+  "term": "Probabilistic early refresh",
+  "short": "A cache hit sometimes triggers a refresh before its copy expires.",
+  "detail": "A hit draws an exponential random lead time and refreshes when that lead exceeds the remaining TTL. With more hits near expiry, a refresh has more opportunities to start.",
+  "design": "Useful when hot keys have enough lead traffic to refresh ahead of demand. It spends extra database reads and still needs a fallback when no refresh finishes in time.",
+  "match": [
+   "probabilistic early refresh",
+   "early refresh"
+  ],
+  "related": [
+   "ttl",
+   "stampede",
+   "coalescing"
+  ]
+ },
+ {
+  "id": "ttl-jitter",
+  "term": "TTL jitter",
+  "short": "Random variation in the TTL of each new cache fill.",
+  "detail": "The simulator draws each duration independently from 75% to 125% of the configured TTL. One entry still has one expiry shared by all callers.",
+  "design": "Use jitter to spread bulk-loaded expiries. Pair it with per-key protection when the risk is a single hot key.",
+  "match": [
+   "TTL jitter",
+   "expiry jitter"
+  ],
+  "related": [
+   "ttl",
+   "stampede",
+   "early-refresh"
+  ]
+ },
+ {
+  "id": "token-bucket",
+  "term": "Token bucket",
+  "short": "A limiter that saves unused capacity as tokens and spends one token per admitted request.",
+  "detail": "The refill rate controls sustained admission. Capacity limits the stored credit, so a full bucket allows a burst up to that limit.",
+  "design": "Choose burst capacity from the spike the downstream service can absorb. Idle clients can all spend their stored credit together.",
+  "match": [
+   "token bucket",
+   "token buckets"
+  ],
+  "related": [
+   "refill-rate",
+   "burst",
+   "leaky-bucket"
+  ]
+ },
+ {
+  "id": "leaky-bucket",
+  "term": "Leaky bucket",
+  "short": "A finite queue that releases requests at a steady pace.",
+  "detail": "This simulator uses the queueing form. It accepts while slots are available, drains one request per interval and rejects once full.",
+  "design": "Size the buffer from both the tolerated queue delay and expected burst. Adding capacity can trade fewer rejections for worse response tails.",
+  "match": [
+   "leaky bucket",
+   "leaky buckets"
+  ],
+  "related": [
+   "token-bucket",
+   "refill-rate",
+   "admission"
+  ]
+ },
+ {
+  "id": "fixed-window",
+  "term": "Fixed window",
+  "short": "A limiter that counts requests in aligned, non-overlapping time periods.",
+  "detail": "Each boundary resets the counter. Two capacity-sized bursts just before and after a boundary can send twice the limit in a short span.",
+  "design": "Use it when simple counters and low memory matter and the downstream can absorb boundary spikes. Define how clocks agree on the window across instances.",
+  "match": [
+   "fixed window",
+   "fixed-window counter"
+  ],
+  "related": [
+   "sliding-window",
+   "burst",
+   "client-key"
+  ]
+ },
+ {
+  "id": "sliding-window",
+  "term": "Sliding window",
+  "short": "A quota over the most recent interval, measured from each new arrival.",
+  "detail": "An exact rolling log trims old accepted timestamps and tests the number that remain. A weighted pair of fixed counters is a lower-memory approximation.",
+  "design": "Use an exact window when a rolling hard cap matters. Budget timestamp storage and atomic trim-and-admit work per client.",
+  "match": [
+   "sliding window",
+   "sliding-window log",
+   "rolling window"
+  ],
+  "related": [
+   "fixed-window",
+   "client-key",
+   "admission"
+  ]
+ },
+ {
+  "id": "http-429",
+  "term": "HTTP 429",
+  "short": "The HTTP status for a request rejected because it exceeded a rate limit.",
+  "detail": "A server can include Retry-After to suggest when to retry. Callers that retry together can create another spike.",
+  "design": "Provide clients a recovery contract and monitor rejects by quota class. Separate deliberate throttling from backend errors when measuring availability.",
+  "match": [
+   "HTTP 429",
+   "429",
+   "Retry-After"
+  ],
+  "related": [
+   "admission",
+   "burst",
+   "client-key"
+  ]
+ },
+ {
+  "id": "client-key",
+  "term": "Rate-limit client key",
+  "short": "The identity on which a rate limiter groups requests and charges quota.",
+  "detail": "Typical keys include account IDs, credentials, IP addresses or a combination of identity and route. This simulator maintains separate limiter state for two clients.",
+  "design": "Choose keys that match your fairness and abuse model. Shared IPs can group unrelated callers, and unlimited key cardinality can exhaust the limiter.",
+  "match": [
+   "client key",
+   "per-client quota",
+   "client identity"
+  ],
+  "related": [
+   "admission",
+   "fixed-window",
+   "http-429"
+  ]
+ },
+ {
+  "id": "burst",
+  "term": "Traffic burst",
+  "short": "A cluster of arrivals close together compared with service or refill time.",
+  "detail": "Bursts can exceed the instantaneous capacity of a system even when average arrivals over a longer interval are sustainable.",
+  "design": "Model arrival shape as well as sustained rate. Decide which bursts to absorb with credit or queueing and where to reject excess load.",
+  "match": [
+   "traffic burst",
+   "simultaneous requests",
+   "boundary burst"
+  ],
+  "related": [
+   "token-bucket",
+   "leaky-bucket",
+   "stampede"
+  ]
+ },
+ {
+  "id": "admission",
+  "term": "Admission and forwarding",
+  "short": "Admission lets a request into a system, and forwarding sends it on for work.",
+  "detail": "The token and window policies forward immediately after admission here. Leaky bucket admits to a buffer and forwards later as each slot drains.",
+  "design": "Measure admits, forwards and queue time separately. A high admit rate can hide work waiting in a shaping buffer.",
+  "match": [
+   "admission",
+   "immediate admits",
+   "paced output"
+  ],
+  "related": [
+   "leaky-bucket",
+   "http-429",
+   "server-queue"
+  ]
+ },
+ {
+  "id": "refill-rate",
+  "term": "Refill and drain rate",
+  "short": "How quickly the limiter earns a new token or releases a queued request.",
+  "detail": "Token credit accrues continuously up to capacity. The leaky bucket schedules one departure at each configured interval while work waits.",
+  "design": "Select a sustained rate the downstream can handle. Refill rate alone doesn’t determine the worst burst or maximum queue delay.",
+  "match": [
+   "refill rate",
+   "drain pace",
+   "drain rate"
+  ],
+  "related": [
+   "token-bucket",
+   "leaky-bucket",
+   "burst"
+  ]
+ },
+ {
+  "id": "consistent-hashing",
+  "term": "Consistent hashing",
+  "short": "A placement scheme that moves a limited subset of keys when membership changes.",
+  "detail": "On a ring, adding a node transfers ranges from the owners that previously covered them. Removing a node transfers just the ranges that node owned.",
+  "design": "Useful for clients that need a stable, independently calculated placement. Coordinate membership updates, and plan for key migration if data is durable.",
+  "match": [
+   "consistent hashing"
+  ],
+  "related": [
+   "hash-ring",
+   "vnode",
+   "rebalancing"
+  ]
+ },
+ {
+  "id": "hash-ring",
+  "term": "Hash ring",
+  "short": "A circular ordering of key hashes and node positions.",
+  "detail": "Keys belong to the first owner position clockwise. The last hash wraps around to the first position. Each position owns the preceding arc.",
+  "design": "Every router needs the same hash, ring membership and tie-breaking rules. Otherwise two routers can send the same key to different owners.",
+  "match": [
+   "hash ring",
+   "ring position"
+  ],
+  "related": [
+   "consistent-hashing",
+   "vnode",
+   "hash-modulo"
+  ]
+ },
+ {
+  "id": "hash-modulo",
+  "term": "Hash modulo N",
+  "short": "A placement rule that picks the node at index hash(key) remainder N.",
+  "detail": "With a fixed node list and uniform hash it spreads key counts evenly. Changing N changes the remainder for many keys and removal can also shift node indices.",
+  "design": "Modulo works when partition count is stable. Use a fixed partition indirection if you need to add machines without remapping keys against a different divisor.",
+  "match": [
+   "hash modulo N",
+   "hash % N",
+   "modulo placement"
+  ],
+  "related": [
+   "consistent-hashing",
+   "rebalancing",
+   "key-distribution"
+  ]
+ },
+ {
+  "id": "vnode",
+  "term": "Virtual node (vnode)",
+  "short": "One of several ring positions owned by the same physical node.",
+  "detail": "Each position owns a short random arc. Summing many arcs usually evens out the share per physical owner. Capacity weighting can assign more positions to larger nodes.",
+  "design": "Changing position count itself remaps keys. Virtual nodes reduce random ownership skew while a single hot key still maps to one owner.",
+  "match": [
+   "virtual node",
+   "virtual nodes",
+   "vnode",
+   "vnodes"
+  ],
+  "related": [
+   "hash-ring",
+   "key-distribution",
+   "hot-key"
+  ]
+ },
+ {
+  "id": "rebalancing",
+  "term": "Rebalancing",
+  "short": "Changing which nodes own keys after a change in placement.",
+  "detail": "With many evenly spread positions, adding one node to an N-node ring moves about 1/(N+1) of keys. Removing one moves the departing node’s share, about 1/N.",
+  "design": "Measure the amount and demand of moved data. Cache owners may refill on demand, while durable owners need state transfer and an explicit cutover.",
+  "match": [
+   "rebalancing",
+   "owner changes",
+   "data migration"
+  ],
+  "related": [
+   "consistent-hashing",
+   "hash-modulo",
+   "vnode"
+  ]
+ },
+ {
+  "id": "hot-key",
+  "term": "Hot key",
+  "short": "A key that accounts for unusually high traffic compared with other keys.",
+  "detail": "It can dominate cache miss traffic or one physical node’s work, even with an even key distribution. Adding virtual nodes leaves each key with one owner.",
+  "design": "Measure demand per key or group. Replicate safe reads, split the key when semantics permit, or isolate and cap the workload.",
+  "match": [
+   "hot key",
+   "hot-key traffic",
+   "hot-key replay"
+  ],
+  "related": [
+   "stampede",
+   "key-distribution",
+   "vnode"
+  ]
+ },
+ {
+  "id": "key-distribution",
+  "term": "Key distribution and traffic share",
+  "short": "Key distribution counts owned keys, while traffic share weights them by requests.",
+  "detail": "They agree when all keys have equal demand. A hot key can make traffic uneven even when physical nodes hold similar key counts.",
+  "design": "Choose a balance metric that reflects the real bottleneck, such as requests, bytes or CPU. Verify key ownership and load separately.",
+  "match": [
+   "key distribution",
+   "traffic share",
+   "ownership variance"
+  ],
+  "related": [
+   "hot-key",
+   "vnode",
+   "rebalancing"
+  ]
+ },
+ {
+  "id": "load-balancer",
+  "term": "Load balancer",
+  "short": "A component that chooses a backend for each incoming unit of work.",
+  "detail": "This replay compares per-request routing. A transport load balancer can instead choose per connection, which groups requests differently when a connection carries many.",
+  "design": "Choose a routing unit and load signal that reflect the work. Health checks and routing should handle slow backends as well as hard failures.",
+  "match": [
+   "load balancer",
+   "load balancing",
+   "routing policy"
+  ],
+  "related": [
+   "round-robin",
+   "least-outstanding",
+   "p2c"
+  ]
+ },
+ {
+  "id": "server-queue",
+  "term": "Server queue",
+  "short": "The jobs waiting for a server’s limited service capacity.",
+  "detail": "Each server here has one worker and serves jobs in arrival order. The outstanding count includes the job in service and all waiting jobs.",
+  "design": "Bound backlog and track queue wait independently of service time. A service can look healthy on CPU or median latency while some queues build up.",
+  "match": [
+   "server queue",
+   "server queues",
+   "queue wait"
+  ],
+  "related": [
+   "service-time",
+   "tail-latency",
+   "least-outstanding"
+  ]
+ },
+ {
+  "id": "service-time",
+  "term": "Service time",
+  "short": "The time a server spends doing the job after it reaches the head of the queue.",
+  "detail": "The same request has the same underlying work across policy pools. The slow server takes five times longer for the same work in this model.",
+  "design": "Measure service time apart from waiting. Identical queue depths can imply different delays on servers with different workloads or execution speeds.",
+  "match": [
+   "service time",
+   "service times",
+   "in service"
+  ],
+  "related": [
+   "server-queue",
+   "tail-latency",
+   "least-outstanding"
+  ]
+ },
+ {
+  "id": "round-robin",
+  "term": "Round robin",
+  "short": "Routing to each server in turn in a repeating order.",
+  "detail": "Each complete rotation assigns one request to each server. The choice requires no outstanding count and gives degraded servers the same turn as healthy ones.",
+  "design": "A predictable baseline for homogeneous backends and jobs. Weights or feedback are useful if capacity differs or changes.",
+  "match": [
+   "round robin",
+   "round-robin"
+  ],
+  "related": [
+   "random-balancing",
+   "least-outstanding",
+   "service-time"
+  ]
+ },
+ {
+  "id": "random-balancing",
+  "term": "Random routing",
+  "short": "Choosing a backend uniformly at random for every request.",
+  "detail": "Independent routing balances in expectation. Several successive requests can hit one server even when other servers are idle.",
+  "design": "Simple to run across independent balancers. Sampling a second server gives feedback on local imbalance without a full scan.",
+  "match": [
+   "random routing",
+   "random balancing"
+  ],
+  "related": [
+   "round-robin",
+   "p2c",
+   "server-queue"
+  ]
+ },
+ {
+  "id": "least-outstanding",
+  "term": "Least outstanding and least connections",
+  "short": "Routing to a server with the smallest count of pending requests or active connections.",
+  "detail": "This simulator counts running and queued requests. Connection-based implementations count open connections, which can carry multiple requests or remain idle.",
+  "design": "Select a signal that tracks actual work. If several balancers share counters, consider staleness and synchronized decisions when replicas see the same apparent minimum.",
+  "match": [
+   "least outstanding",
+   "least connections",
+   "outstanding-counter reads"
+  ],
+  "related": [
+   "p2c",
+   "server-queue",
+   "load-balancer"
+  ]
+ },
+ {
+  "id": "p2c",
+  "term": "Power of two choices (P2C)",
+  "short": "Compare two randomly sampled backends and pick the one with less work.",
+  "detail": "The replay samples distinct servers and compares outstanding requests. This uses two counter reads per decision regardless of pool size, while a linear least-outstanding scan uses N.",
+  "design": "A fleet can approximate the benefits of least connections or least outstanding without a global minimum. Stale or misleading local signals can still hurt.",
+  "match": [
+   "power of two choices",
+   "P2C"
+  ],
+  "related": [
+   "least-outstanding",
+   "random-balancing",
+   "tail-latency"
+  ]
+ },
+ {
+  "id": "tail-latency",
+  "term": "Latency percentiles and tail latency",
+  "short": "p50 is the middle of the sample, while p99 is the boundary for its slowest roughly 1%.",
+  "detail": "The simulator sorts completed arrivals and selects the nearest-rank observation. Durations include the modeled arrival hop, queue wait and service time.",
+  "design": "Compare equal, fully completed cohorts. During a replay, slow requests can remain queued while fast completions make p99 look lower.",
+  "match": [
+   "tail latency",
+   "p50",
+   "p99",
+   "latency percentile"
+  ],
+  "related": [
+   "server-queue",
+   "service-time",
+   "p2c"
+  ]
+ }
+]

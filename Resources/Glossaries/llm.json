@@ -1,0 +1,632 @@
+[
+ {
+  "id": "token",
+  "term": "Token",
+  "short": "The unit a language model reads and writes: a word, part of a word or a punctuation mark. Roughly ¾ of an English word.",
+  "detail": "Text is split into tokens before the model sees it. Prompts are measured in tokens, the model generates one token at a time, and providers price and rate-limit by tokens.",
+  "design": "Estimate everything in tokens, not requests or characters: latency, memory, rate limits and cost all scale with token counts.",
+  "match": [
+   "token",
+   "tokens"
+  ],
+  "related": [
+   "prompt",
+   "decode",
+   "cost-per-token"
+  ]
+ },
+ {
+  "id": "prompt",
+  "term": "Prompt",
+  "short": "Everything sent to the model for one request: system instructions, conversation history, documents and the question.",
+  "detail": "The whole prompt is processed before the first output token can be produced. In a chat, every turn resends the history, so prompts grow as conversations go on.",
+  "design": "Prompt length drives time to first token and input cost. Trim history, retrieve only relevant chunks, and put stable content first so it can be cached.",
+  "match": [
+   "prompt",
+   "prompts",
+   "prompt tokens"
+  ],
+  "related": [
+   "prefill",
+   "ttft",
+   "context-window",
+   "prefix-caching"
+  ]
+ },
+ {
+  "id": "prefill",
+  "term": "Prefill",
+  "short": "The first phase of a request: the model processes every prompt token in one parallel pass and fills the KV cache.",
+  "detail": "All prompt tokens go through the network together, so the GPU is busy with matrix maths: prefill is compute-bound and its time grows with prompt length (here ≈6,000 tokens/s, illustrative). It ends by producing the first output token.",
+  "design": "Long prompts mean slow first tokens and big bursts of compute that can stall other users. Cache shared prefixes and keep prompts lean.",
+  "match": [
+   "prefill",
+   "prefills",
+   "prefilled",
+   "prefilling"
+  ],
+  "related": [
+   "decode",
+   "ttft",
+   "bound",
+   "chunked-prefill"
+  ]
+ },
+ {
+  "id": "decode",
+  "term": "Decode",
+  "short": "The second phase: the model generates the answer one token per step, each step depending on the token before.",
+  "detail": "Each step runs the whole model for just one new token per sequence, reading every weight and the KV cache from memory. That makes it memory-bandwidth-bound: a step takes about the same time (here ≈26 ms) whether the batch has 1 sequence or 16.",
+  "design": "Output length, not prompt length, decides how long a request streams. Batching many sequences into each step is how servers get throughput from decode.",
+  "match": [
+   "decode",
+   "decoding",
+   "decode step",
+   "decode steps",
+   "decoding requests"
+  ],
+  "related": [
+   "prefill",
+   "tpot",
+   "bound",
+   "batch"
+  ]
+ },
+ {
+  "id": "ttft",
+  "term": "Time to first token (TTFT)",
+  "short": "How long the user waits before the first word appears: queueing plus prefill.",
+  "detail": "TTFT = time waiting for a batch slot (and KV memory) + time to prefill the prompt. A cached prefix shortens the prefill; a busy server lengthens the queue.",
+  "design": "TTFT is what makes an app feel responsive. Track p95 TTFT separately from total latency, and set a TTFT timeout on the client.",
+  "match": [
+   "TTFT",
+   "time to first token",
+   "first token"
+  ],
+  "related": [
+   "prefill",
+   "e2e",
+   "tpot",
+   "streaming"
+  ]
+ },
+ {
+  "id": "tpot",
+  "term": "Time per output token (TPOT / ITL)",
+  "short": "The gap between streamed tokens, also called inter-token latency: roughly the length of one decode step.",
+  "detail": "TPOT grows slowly with batch size (more KV to read each step) and jumps when a long prefill runs as its own step and pauses decoding for everyone. 1000 / TPOT is the reading speed a user sees.",
+  "design": "People read about 5–10 tokens/s, so TPOT under ~100 ms feels smooth. Watch the worst gap too: prefill stalls show up as stutters, not in the average.",
+  "match": [
+   "TPOT",
+   "ITL",
+   "inter-token latency",
+   "time per output token"
+  ],
+  "related": [
+   "decode",
+   "ttft",
+   "chunked-prefill",
+   "throughput"
+  ]
+ },
+ {
+  "id": "e2e",
+  "term": "End-to-end latency",
+  "short": "From sending the request to receiving the last token: TTFT + (output tokens − 1) × TPOT.",
+  "detail": "A long prompt adds to the TTFT part; a long answer multiplies the TPOT part. A 600-token answer at 28 ms per token takes 17 s however fast the first token was.",
+  "design": "Size timeouts and user expectations by output length. For long generations, stream, and cap max_tokens.",
+  "match": [
+   "end-to-end",
+   "E2E"
+  ],
+  "related": [
+   "ttft",
+   "tpot",
+   "streaming"
+  ]
+ },
+ {
+  "id": "throughput",
+  "term": "Throughput (tokens/s)",
+  "short": "How many output tokens the whole server produces per second, across all requests.",
+  "detail": "Throughput ≈ batch size ÷ step time. Since step time barely grows with batch size, bigger batches multiply throughput, until KV reads or compute make each step slower.",
+  "design": "Throughput sets cost per token on your own GPUs; latency sets user experience. Max batch size is the dial between them: pick it from a latency target, then measure.",
+  "match": [
+   "throughput",
+   "tokens/s"
+  ],
+  "related": [
+   "batch",
+   "tpot",
+   "continuous-batching"
+  ]
+ },
+ {
+  "id": "batch",
+  "term": "Batch",
+  "short": "The set of sequences the GPU advances together in one step. Each takes a slot, up to the max batch size.",
+  "detail": "A decode step reads all the weights once and applies them to every sequence in the batch, so the cost of reading memory is shared. Max batch size caps how many requests run at once; the rest wait in a queue.",
+  "design": "Batching is the main lever of LLM serving efficiency. A server with an idle batch slot and a waiting request is wasting money.",
+  "match": [
+   "batch",
+   "batches",
+   "max batch",
+   "batch slot",
+   "batch slots",
+   "slot",
+   "slots"
+  ],
+  "related": [
+   "static-batching",
+   "continuous-batching",
+   "throughput"
+  ]
+ },
+ {
+  "id": "static-batching",
+  "term": "Static batching",
+  "short": "Collect a full batch, run it until every sequence is finished, then start the next batch.",
+  "detail": "Short answers finish early but keep their slot (padding) until the longest one ends, and requests that arrive meanwhile wait for the whole batch. Prompts are padded to the longest one as well.",
+  "design": "Fine for offline jobs of similar length. For interactive traffic with mixed lengths it wastes a large share of the GPU and inflates TTFT.",
+  "match": [
+   "static batching",
+   "static batch",
+   "padding"
+  ],
+  "related": [
+   "batch",
+   "continuous-batching"
+  ]
+ },
+ {
+  "id": "continuous-batching",
+  "term": "Continuous batching",
+  "short": "Schedule at every step: finished sequences leave the batch and waiting ones join immediately.",
+  "detail": "Also called iteration-level scheduling, used by modern inference servers. Slots refill as soon as they free up, so a short request never waits for a long one to finish.",
+  "design": "The default for online serving: several times the throughput of static batching at lower latency. It makes scheduling, memory management and prefill interference the next problems.",
+  "match": [
+   "continuous batching",
+   "iteration-level"
+  ],
+  "related": [
+   "batch",
+   "static-batching",
+   "chunked-prefill"
+  ]
+ },
+ {
+  "id": "chunked-prefill",
+  "term": "Chunked prefill",
+  "short": "Split a long prompt into pieces that run alongside decode steps, instead of one long prefill step.",
+  "detail": "Each step gets a token budget (here 256 or 1,024): decode tokens first, the rest goes to prompt chunks. Steps get a bit longer, but nobody waits a whole 1-second prefill for their next token.",
+  "design": "Use it when long prompts and streaming users share a server: it trades a small TPOT increase for no stalls. Smaller chunks mean smoother streams but slower TTFT for the long prompt.",
+  "match": [
+   "chunked prefill",
+   "chunked"
+  ],
+  "related": [
+   "prefill",
+   "tpot",
+   "continuous-batching"
+  ]
+ },
+ {
+  "id": "kv-cache",
+  "term": "KV cache",
+  "short": "GPU memory holding the attention keys and values of every token in every running sequence, so they are not recomputed each step.",
+  "detail": "Each token of context costs a fixed amount of KV memory (here ≈1 MB, illustrative). A sequence needs room for its prompt plus everything it has generated, and grows as it decodes.",
+  "design": "KV memory, not compute, usually caps concurrency. Long contexts are expensive because they hold memory for the whole request; capacity planning is planning KV memory.",
+  "match": [
+   "KV cache",
+   "KV",
+   "KV blocks",
+   "KV memory",
+   "keys and values"
+  ],
+  "related": [
+   "paging",
+   "gpu-memory",
+   "preemption",
+   "prefix-caching"
+  ]
+ },
+ {
+  "id": "paging",
+  "term": "PagedAttention (paging) and fragmentation",
+  "short": "Store KV in small fixed-size blocks allocated on demand from anywhere in memory, like pages in an operating system.",
+  "detail": "Without paging a server reserves one contiguous region per request for prompt + max_tokens. Most of it sits empty (internal fragmentation) and free gaps get too small to use (external fragmentation). With paging only the last block of each sequence is partly empty.",
+  "design": "Paging is why modern servers fit several times more concurrent requests in the same GPU. It also enables block sharing for prefix caching.",
+  "match": [
+   "paging",
+   "PagedAttention",
+   "fragmentation",
+   "external fragmentation",
+   "internal fragmentation",
+   "contiguous"
+  ],
+  "related": [
+   "kv-cache",
+   "prefix-caching",
+   "preemption"
+  ]
+ },
+ {
+  "id": "preemption",
+  "term": "Preemption",
+  "short": "When the KV cache runs out, the scheduler evicts a running request (the newest) to let the others continue.",
+  "detail": "Paged servers admit requests with only their prompt allocated, betting that not all will grow at once. When the bet fails, a victim is evicted and later resumed by recomputing or swapping its KV.",
+  "design": "Preemptions are a saturation signal: latency spikes and wasted GPU work. Alert on them, cap max batch or context length, or add memory.",
+  "match": [
+   "preemption",
+   "preempts",
+   "preempted",
+   "preempt"
+  ],
+  "related": [
+   "recompute",
+   "kv-cache",
+   "paging"
+  ]
+ },
+ {
+  "id": "recompute",
+  "term": "Recomputation and swapping",
+  "short": "Two ways to resume a preempted request: recompute its KV with a new prefill, or copy its blocks to CPU memory and back.",
+  "detail": "Recompute frees memory instantly and costs a prefill of prompt + generated tokens later. Swap costs PCIe transfer time both ways (here 2 ms per block) but no recomputation.",
+  "design": "Either way the preempted user stalls. Recompute is the usual default because prefill is fast and CPU swap space is limited.",
+  "match": [
+   "recompute",
+   "recomputes",
+   "recomputed",
+   "recomputation",
+   "swapped",
+   "swap",
+   "swaps",
+   "swapping",
+   "CPU memory"
+  ],
+  "related": [
+   "preemption",
+   "prefill",
+   "kv-cache"
+  ]
+ },
+ {
+  "id": "prefix-caching",
+  "term": "Prefix caching",
+  "short": "Keep the KV blocks of a shared prompt prefix (like a system prompt) and reuse them for later requests that start the same way.",
+  "detail": "Blocks are identified by their content, so a request whose prompt starts with cached blocks skips that part of prefill and shares the blocks (reference-counted) instead of copying them. Unused cached blocks are evicted first when memory runs out.",
+  "design": "Put stable content (system prompt, tools, documents) at the start of the prompt and vary only the end. Hit rate is the metric: high hit rates cut TTFT, memory and cost.",
+  "match": [
+   "prefix caching",
+   "prefix cache",
+   "system prompt",
+   "shared prefix",
+   "shared prompt"
+  ],
+  "related": [
+   "prompt-caching",
+   "kv-cache",
+   "ttft"
+  ]
+ },
+ {
+  "id": "prompt-caching",
+  "term": "Prompt caching (API)",
+  "short": "An API feature where the provider reuses the processed prefix of your prompt and bills those input tokens at a large discount.",
+  "detail": "It is prefix caching seen from the outside: identical prompt prefixes within a few minutes hit the cache. Here cached input costs 10% of the normal price (illustrative) and the first token arrives sooner.",
+  "design": "Order prompts as stable-first, variable-last, and keep the prefix byte-identical (no timestamps at the top). Check the cached-token count in responses to confirm it works.",
+  "match": [
+   "prompt caching",
+   "provider's prompt cache",
+   "prompt cache"
+  ],
+  "related": [
+   "prefix-caching",
+   "cost-per-token"
+  ]
+ },
+ {
+  "id": "context-window",
+  "term": "Context window",
+  "short": "The maximum number of tokens (prompt plus output) a model can handle in one request.",
+  "detail": "Models advertise large windows, but every token in context holds KV memory for the whole request and slows each decode step a little.",
+  "design": "Long-context requests cut how many requests a server can run at once and cost more. Retrieve what is relevant instead of sending everything just because it fits.",
+  "match": [
+   "context window",
+   "context length",
+   "max context length",
+   "long-context"
+  ],
+  "related": [
+   "kv-cache",
+   "prompt",
+   "tpm"
+  ]
+ },
+ {
+  "id": "bound",
+  "term": "Compute-bound vs memory-bound",
+  "short": "Whether a step is limited by how fast the GPU can do arithmetic (compute) or by how fast it can read memory (bandwidth).",
+  "detail": "Prefill does lots of maths per byte read, so compute is the bottleneck. Decode reads all the weights to produce one token per sequence, so memory bandwidth is the bottleneck and the arithmetic units mostly wait.",
+  "design": "Memory-bound work gets cheaper per token when batched; compute-bound work does not. That is why batching decode pays off and why quantization (fewer bytes to read) speeds up decode.",
+  "match": [
+   "compute-bound",
+   "memory-bound",
+   "memory-bandwidth-bound",
+   "memory bandwidth"
+  ],
+  "related": [
+   "prefill",
+   "decode",
+   "quantization"
+  ]
+ },
+ {
+  "id": "gpu-memory",
+  "term": "GPU memory",
+  "short": "The GPU's own high-bandwidth memory (HBM). It must hold the model weights, working buffers and the KV cache.",
+  "detail": "Weights take a fixed share; what is left after runtime overhead becomes the KV cache. Here: 24 GB total, 16 GB weights, 2 GB runtime, 6 GB KV (illustrative).",
+  "design": "Memory left for KV decides concurrency. A bigger model on the same GPU means fewer concurrent users, not just slower ones.",
+  "match": [
+   "GPU memory",
+   "HBM",
+   "VRAM"
+  ],
+  "related": [
+   "weights",
+   "kv-cache",
+   "quantization"
+  ]
+ },
+ {
+  "id": "weights",
+  "term": "Model weights",
+  "short": "The model's learned parameters. They are fixed during serving and read from memory on every step.",
+  "detail": "Size ≈ parameters × bytes per parameter: a model with 8 billion parameters at 16-bit is 16 GB. Every decode step streams all of it, which sets the floor of the step time.",
+  "design": "Weight size sets the minimum GPU memory and the minimum time per decode step. Pick the smallest model that meets quality needs.",
+  "match": [
+   "weights",
+   "model weights"
+  ],
+  "related": [
+   "gpu-memory",
+   "quantization",
+   "bound"
+  ]
+ },
+ {
+  "id": "quantization",
+  "term": "Quantization",
+  "short": "Storing weights (and sometimes the KV cache) in fewer bits, such as 8 or 4 instead of 16.",
+  "detail": "Fewer bytes to read makes memory-bound decode faster and frees memory for more KV blocks, at some cost in quality that has to be measured.",
+  "design": "Often the cheapest capacity win: 8-bit weights here would free 8 GB, more than doubling the KV cache. Evaluate quality on your own tasks before switching.",
+  "match": [
+   "quantization",
+   "quantized",
+   "8-bit",
+   "4-bit"
+  ],
+  "related": [
+   "weights",
+   "gpu-memory",
+   "bound"
+  ]
+ },
+ {
+  "id": "speculative-decoding",
+  "term": "Speculative decoding",
+  "short": "A small draft model guesses several tokens ahead and the big model checks them all in one step, keeping the ones it agrees with.",
+  "detail": "Checking k guesses costs about the same as one decode step because decode is memory-bound. With a good draft model, each step yields 2–3 tokens instead of one, and the output is identical to normal decoding.",
+  "design": "Lowers TPOT for small batches and latency-sensitive traffic. It spends spare compute, so the gain shrinks on busy servers with large batches.",
+  "match": [
+   "speculative decoding",
+   "draft model"
+  ],
+  "related": [
+   "decode",
+   "tpot",
+   "bound"
+  ]
+ },
+ {
+  "id": "streaming",
+  "term": "Streaming and its two timeouts",
+  "short": "Sending tokens to the client as they are generated instead of waiting for the whole answer.",
+  "detail": "With streaming, perceived latency is TTFT, not end-to-end time. A stream needs two timeouts: one for the first token (catches a stuck or overloaded backend) and one for the total (caps runaway generations).",
+  "design": "Stream anything a person reads. Set the TTFT timeout from your p99 TTFT, the total timeout from max_tokens × TPOT, and remember tokens streamed before a timeout are still billed.",
+  "match": [
+   "streaming",
+   "streams",
+   "stream",
+   "TTFT timeout",
+   "total timeout",
+   "timeouts",
+   "timeout"
+  ],
+  "related": [
+   "ttft",
+   "e2e",
+   "fallback"
+  ]
+ },
+ {
+  "id": "rpm",
+  "term": "RPM (requests per minute)",
+  "short": "A provider limit on how many requests you can start per minute, whatever their size.",
+  "detail": "Modelled as a bucket that holds up to the limit and refills continuously. Each accepted request takes one; when it is empty the provider answers 429.",
+  "design": "Many small requests hit RPM first. Batch small tasks into one request, or cache them.",
+  "match": [
+   "RPM",
+   "requests per minute"
+  ],
+  "related": [
+   "tpm",
+   "http-429",
+   "limiter"
+  ]
+ },
+ {
+  "id": "tpm",
+  "term": "TPM (tokens per minute) and max_tokens",
+  "short": "A provider limit on tokens per minute. A request reserves its prompt plus its max_tokens when it is accepted.",
+  "detail": "Because the answer length is unknown, providers count max_tokens against the limit up front (here; providers differ). A 350-token question with max_tokens 1,024 reserves 1,374 tokens.",
+  "design": "Set max_tokens close to what you need: an oversized max_tokens turns small requests into TPM hogs. Long documents hit TPM long before RPM.",
+  "match": [
+   "TPM",
+   "tokens per minute",
+   "max_tokens"
+  ],
+  "related": [
+   "rpm",
+   "http-429",
+   "limiter"
+  ]
+ },
+ {
+  "id": "http-429",
+  "term": "429 Too Many Requests",
+  "short": "The HTTP status a provider returns when you exceed a rate limit. The request did nothing and can be retried later.",
+  "detail": "It usually carries a retry-after header saying when capacity will be back. 429s are normal at the edge of your limits; a storm of them means the client is retrying wrong or sending more than its quota.",
+  "design": "Treat 429 as backpressure, not an error to hammer through: back off, limit yourself, shed or degrade. Alert on the rate of 429s after retries, not before.",
+  "match": [
+   "429",
+   "429s",
+   "Too Many Requests",
+   "rate-limited",
+   "rate limit",
+   "rate limits"
+  ],
+  "related": [
+   "retry-after",
+   "backoff",
+   "limiter"
+  ]
+ },
+ {
+  "id": "retry-after",
+  "term": "Retry-after",
+  "short": "A header on a 429 (or 503) telling the client how many seconds to wait before trying again.",
+  "detail": "Here it is the time until the bucket refills enough for that request, rounded up to whole seconds.",
+  "design": "Never retry sooner than retry-after; add jitter on top so all clients told \"2 s\" do not come back in the same instant.",
+  "match": [
+   "retry-after"
+  ],
+  "related": [
+   "http-429",
+   "backoff"
+  ]
+ },
+ {
+  "id": "backoff",
+  "term": "Backoff and jitter",
+  "short": "Wait longer after each failed attempt (exponential backoff), plus a random amount (jitter) so retries spread out.",
+  "detail": "Without jitter, clients that failed together retry together and fail together again, in waves. Here: wait max(retry-after, 1 s × 2^attempt) for backoff; retry-after + random(0, 1 s × 2^attempt) with jitter. At most 5 attempts.",
+  "design": "Always cap attempts and total retry time, honour retry-after, and add jitter. Immediate retries turn an overload into an outage.",
+  "match": [
+   "backoff",
+   "backs off",
+   "jitter",
+   "exponential backoff",
+   "retries",
+   "retry"
+  ],
+  "related": [
+   "retry-after",
+   "http-429",
+   "idempotency"
+  ]
+ },
+ {
+  "id": "limiter",
+  "term": "Client-side limiter",
+  "short": "Limit yourself before the provider does: cap requests in flight (concurrency limit) and track your own token budget.",
+  "detail": "A concurrency limit keeps a burst from flooding the provider. Token-budget-aware scheduling mirrors the provider's TPM and RPM buckets on the client and holds a request until it would be accepted, so it waits locally instead of collecting a 429.",
+  "design": "Put one shared limiter in front of each provider and model (per process or in a shared store). It turns 429 storms into a queue you control, where you can prioritise, shed or fall back.",
+  "match": [
+   "concurrency limit",
+   "token budget",
+   "client-side limiter",
+   "limiter",
+   "token-budget"
+  ],
+  "related": [
+   "tpm",
+   "rpm",
+   "http-429"
+  ]
+ },
+ {
+  "id": "fallback",
+  "term": "Fallback model",
+  "short": "A second, usually smaller and cheaper model used when the main one is rate-limited, down or too slow.",
+  "detail": "It has its own limits and latency, so it can answer when the main model cannot. Here it starts in ~0.2 s, streams 150 tokens/s and costs about a twelfth as much, with weaker answers.",
+  "design": "Decide per feature whether a weaker answer beats an error or a long wait. Trigger it on 503s, TTFT timeouts or long retry-afters, and record which model answered.",
+  "match": [
+   "fallback",
+   "falls back",
+   "small model",
+   "fallback model"
+  ],
+  "related": [
+   "streaming",
+   "http-429",
+   "cost-per-token"
+  ]
+ },
+ {
+  "id": "semantic-cache",
+  "term": "Response and semantic cache",
+  "short": "Store model answers and return them for repeated questions: exactly the same text (response cache) or the same meaning (semantic cache).",
+  "detail": "A semantic cache embeds the question and returns a stored answer if a cached question is similar enough. A loose threshold matches different questions; any cached answer goes stale when the source data changes.",
+  "design": "Great for FAQ-like traffic: hits cost nothing and skip rate limits. Give entries a TTL, invalidate on data changes, tune the threshold on real queries, and never cache personalised answers across users.",
+  "match": [
+   "semantic cache",
+   "response cache",
+   "similarity threshold",
+   "stale"
+  ],
+  "related": [
+   "prompt-caching",
+   "cost-per-token"
+  ]
+ },
+ {
+  "id": "idempotency",
+  "term": "Idempotency",
+  "short": "An operation is idempotent if doing it twice has the same effect as doing it once.",
+  "detail": "When an LLM agent calls a tool with a side effect (refund, email, payment) and the call times out, the first attempt may still have worked. Sending an idempotency key lets the server recognise the retry and return the original result.",
+  "design": "Every side-effecting tool an agent can call needs an idempotency key derived from the request or tool-call id. Retries are safe only for idempotent operations.",
+  "match": [
+   "idempotency",
+   "idempotency key",
+   "idempotent",
+   "side effect",
+   "side effects",
+   "side-effecting"
+  ],
+  "related": [
+   "backoff",
+   "streaming"
+  ]
+ },
+ {
+  "id": "cost-per-token",
+  "term": "Cost per token",
+  "short": "APIs bill per million input tokens and per million output tokens; output usually costs several times more.",
+  "detail": "Here (illustrative): main model $3 per million input, $15 per million output, cached input $0.30; small model $0.25 and $1.25. Cost per request = input × price + output × price.",
+  "design": "Multiply by requests per day before you ship: a cent per request at 10 requests/s is $8,640 a day. Caching, shorter prompts, tight max_tokens and smaller models are the levers.",
+  "match": [
+   "cost per token",
+   "per million tokens",
+   "cost per request",
+   "billed",
+   "per day"
+  ],
+  "related": [
+   "prompt-caching",
+   "fallback",
+   "semantic-cache"
+  ]
+ }
+]

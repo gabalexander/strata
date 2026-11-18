@@ -1,0 +1,764 @@
+[
+ {
+  "id": "rpc",
+  "term": "RPC and stub",
+  "short": "A remote procedure call: the client calls a method on another service as if it were a local function, and the generated stub turns that call into a request.",
+  "detail": "Methods are declared in a `.proto` service (`rpc Get(GetOrderRequest) returns (Order)`). On the wire every RPC is an HTTP/2 POST to `/package.Service/Method`; the server routes on that `:path` alone and runs one handler per call.",
+  "design": "Treat every RPC as a network call that can be slow, fail or run twice, however local the stub makes it look. The method path is your API surface: version it in the package name (`shop.v1`).",
+  "match": [
+   "RPC",
+   "RPCs",
+   "stub",
+   "stubs"
+  ],
+  "related": [
+   "channel",
+   "stream",
+   "unary",
+   "protobuf"
+  ]
+ },
+ {
+  "id": "channel",
+  "term": "Channel",
+  "short": "The client-side object that owns the connections to one service. You create it once and every stub call goes through it.",
+  "detail": "A channel resolves the target name, connects lazily on the first RPC and moves through connectivity states: IDLE, CONNECTING, READY, TRANSIENT_FAILURE. By default RPCs wait while it is CONNECTING and fail fast with UNAVAILABLE while it is in TRANSIENT_FAILURE.",
+  "design": "Create one channel per target and reuse it for the life of the process. A channel per request pays DNS, TCP and TLS on every call and defeats both connection reuse and load balancing.",
+  "match": [
+   "channel",
+   "channels",
+   "READY",
+   "CONNECTING",
+   "TRANSIENT_FAILURE"
+  ],
+  "related": [
+   "http2-connection",
+   "subchannel",
+   "name-resolution",
+   "rpc"
+  ]
+ },
+ {
+  "id": "http2-connection",
+  "term": "HTTP/2 connection and multiplexing",
+  "short": "One long-lived TCP (usually TLS) connection that carries many RPCs at once, each in its own stream.",
+  "detail": "The client agrees on HTTP/2 with ALPN `h2` during the TLS handshake. Frames from different streams interleave on the socket, so one slow response does not hold up the others at the HTTP layer. A lost TCP packet still stalls all of them: head-of-line blocking moves down to TCP.",
+  "design": "Connection setup is paid once, not per call, which is why gRPC is cheap per RPC. The flip side: anything that balances per connection (an L4 balancer) sends every RPC on it to the same backend.",
+  "match": [
+   "HTTP/2 connection",
+   "HTTP/2",
+   "multiplexing",
+   "multiplexes",
+   "multiplexed",
+   "ALPN",
+   "h2",
+   "long-lived connection",
+   "long-lived connections"
+  ],
+  "related": [
+   "stream",
+   "frame",
+   "settings",
+   "l4-lb"
+  ]
+ },
+ {
+  "id": "stream",
+  "term": "Stream and stream id",
+  "short": "One RPC on an HTTP/2 connection: an independent, ordered sequence of frames with its own id.",
+  "detail": "Client-opened streams use odd ids (1, 3, 5…) that only go up; stream 0 is the connection itself (SETTINGS, PING, GOAWAY). A stream goes idle → open → half-closed once one side has sent END_STREAM → closed once both have, or at once on RST_STREAM. The server runs one handler per stream.",
+  "design": "Streams are cheap but capped per connection by `SETTINGS_MAX_CONCURRENT_STREAMS` (often 100). Past the cap, new calls queue on the client until a stream frees up: a hidden source of latency on busy channels.",
+  "match": [
+   "stream",
+   "streams",
+   "stream id",
+   "stream ids",
+   "stream 0",
+   "HTTP/2 stream"
+  ],
+  "related": [
+   "http2-connection",
+   "frame",
+   "end-stream",
+   "half-close",
+   "rst-stream"
+  ]
+ },
+ {
+  "id": "frame",
+  "term": "HTTP/2 frame",
+  "short": "The unit HTTP/2 writes on the socket: a 9-byte header followed by a payload.",
+  "detail": "The header holds a 24-bit payload length, an 8-bit type (DATA 0, HEADERS 1, RST_STREAM 3, SETTINGS 4, PING 6, GOAWAY 7), 8 flag bits (END_STREAM, END_HEADERS, ACK) and a 31-bit stream id. Frames are capped by `SETTINGS_MAX_FRAME_SIZE`, 16 KiB by default.",
+  "design": "Thinking in frames explains most gRPC behaviour: why errors arrive after data, why a cancel kills one call but not the connection, and what a proxy must forward for gRPC to work through it.",
+  "match": [
+   "frame",
+   "frames",
+   "frame header",
+   "9-byte frame header"
+  ],
+  "related": [
+   "headers-frame",
+   "data-frame",
+   "stream",
+   "end-stream"
+  ]
+ },
+ {
+  "id": "headers-frame",
+  "term": "HEADERS frame",
+  "short": "The frame that opens a stream and carries its metadata: method, path, content type, deadline, and at the end the status.",
+  "detail": "Request HEADERS carry pseudo-headers (`:method POST`, `:path`, `:authority`) plus `content-type: application/grpc`, `te: trailers` and `grpc-timeout`. The response starts with HEADERS (`:status 200`) and ends with a second HEADERS frame, the trailers. Header blocks are HPACK-compressed.",
+  "design": "gRPC metadata (auth tokens, trace ids, tenant ids) travels here, on every call. Keep it small and stable: large or ever-changing values are paid in full each time.",
+  "match": [
+   "HEADERS",
+   "HEADERS frame",
+   "END_HEADERS",
+   "metadata"
+  ],
+  "related": [
+   "trailers",
+   "hpack",
+   "frame",
+   "grpc-timeout"
+  ]
+ },
+ {
+  "id": "data-frame",
+  "term": "DATA frame",
+  "short": "The frame that carries a stream's request and response messages.",
+  "detail": "Inside DATA, gRPC writes length-prefixed messages: one message may span several DATA frames and one frame may hold several messages. An empty DATA frame with END_STREAM is how a client half-closes.",
+  "design": "DATA is subject to HTTP/2 flow control (per-stream and per-connection windows, 64 KiB to start), so a slow reader eventually stops the writer instead of letting buffers grow without limit.",
+  "match": [
+   "DATA frame",
+   "DATA frames",
+   "empty DATA frame"
+  ],
+  "related": [
+   "length-prefixed",
+   "end-stream",
+   "half-close",
+   "frame"
+  ]
+ },
+ {
+  "id": "trailers",
+  "term": "Trailers",
+  "short": "A final HEADERS frame sent after the response messages. It carries the real outcome of the call: `grpc-status` and `grpc-message`.",
+  "detail": "Response headers (`:status 200`) leave before the handler has finished, so the result can only come at the end. The trailers frame has END_STREAM set and closes the server side of the stream. `te: trailers` in the request tells proxies the client expects them.",
+  "design": "Every hop between client and server must forward HTTP/2 trailers. Proxies, CDNs and HTTP/1.1 gateways that drop them break gRPC in confusing ways, which is why browsers need gRPC-Web.",
+  "match": [
+   "trailers",
+   "te: trailers",
+   "grpc-message"
+  ],
+  "related": [
+   "trailers-only",
+   "grpc-status",
+   "headers-frame",
+   "end-stream"
+  ]
+ },
+ {
+  "id": "trailers-only",
+  "term": "Trailers-Only response",
+  "short": "A response that is a single HEADERS frame: HTTP status, gRPC status and END_STREAM together, with no messages.",
+  "detail": "Used when the handler fails before sending any message, for example `NOT_FOUND` on a lookup. From the outside it looks like an HTTP 200 with an empty body; the failure is only in `grpc-status`.",
+  "design": "Monitoring that reads HTTP status codes counts these failures as successes. For gRPC traffic, alert on `grpc-status` (your gRPC metrics), never on HTTP codes.",
+  "match": [
+   "Trailers-Only"
+  ],
+  "related": [
+   "trailers",
+   "grpc-status"
+  ]
+ },
+ {
+  "id": "end-stream",
+  "term": "END_STREAM flag",
+  "short": "A flag on a HEADERS or DATA frame meaning \"this side has nothing more to send on this stream\". On the stage it is the bar after a frame.",
+  "detail": "The client sets it on its last request DATA frame, or on an empty one (half-close); the server sets it on the trailers. The stream is closed once both sides have sent it.",
+  "design": "Forgetting to close the send side is a classic leak: the server handler and its stream stay open until a deadline or a cancel ends them.",
+  "match": [
+   "END_STREAM"
+  ],
+  "related": [
+   "half-close",
+   "trailers",
+   "stream",
+   "data-frame"
+  ]
+ },
+ {
+  "id": "half-close",
+  "term": "Half-close (CloseSend)",
+  "short": "The client saying \"I am done sending\" while it keeps reading what the server sends back.",
+  "detail": "It sends END_STREAM, usually as an empty DATA frame, and the stream becomes half-closed (local). Client-streaming servers typically answer only after it; bidi servers may keep streaming after it.",
+  "design": "Client-streaming and bidi APIs must define when each side stops. Half-close on every code path (`defer`, `finally`) and give long streams a deadline or a cancel, so a forgotten half-close cannot leak them.",
+  "match": [
+   "half-close",
+   "half-closes",
+   "half-closed",
+   "half-closing",
+   "CloseSend",
+   "CloseSend()"
+  ],
+  "related": [
+   "end-stream",
+   "streaming-rpc",
+   "stream"
+  ]
+ },
+ {
+  "id": "rst-stream",
+  "term": "RST_STREAM",
+  "short": "A frame that ends one stream immediately, with an error code, without touching the connection or the other streams.",
+  "detail": "A client that cancels, or whose deadline expires, sends RST_STREAM(CANCEL, code 8); frames already on the wire for that stream are discarded when they arrive. A server that finished before the client half-closed sends RST_STREAM(NO_ERROR) to say \"stop sending\".",
+  "design": "This is why cancelling one call is cheap in gRPC: no reconnect and no impact on other calls. It only saves server work if the handler notices the cancellation.",
+  "match": [
+   "RST_STREAM",
+   "NO_ERROR",
+   "RST"
+  ],
+  "related": [
+   "cancellation",
+   "stream",
+   "goaway"
+  ]
+ },
+ {
+  "id": "settings",
+  "term": "SETTINGS and the connection preface",
+  "short": "The frame each side sends first, on stream 0, to announce its limits for the whole connection.",
+  "detail": "The client opens with a 24-byte magic string (`PRI * HTTP/2.0…`) plus SETTINGS; the server answers with its own, and each side ACKs the other's. Typical parameters: `SETTINGS_MAX_CONCURRENT_STREAMS` (100), `SETTINGS_INITIAL_WINDOW_SIZE` (the 64 KiB flow-control window), `SETTINGS_MAX_FRAME_SIZE` (16 KiB).",
+  "design": "These limits shape throughput: a small flow-control window throttles large messages on high-latency links (gRPC grows it with BDP estimation), and the stream cap bounds concurrency per connection.",
+  "match": [
+   "SETTINGS",
+   "SETTINGS_MAX_CONCURRENT_STREAMS",
+   "MAX_CONCURRENT_STREAMS",
+   "SETTINGS_INITIAL_WINDOW_SIZE",
+   "connection preface",
+   "preface",
+   "flow-control window"
+  ],
+  "related": [
+   "http2-connection",
+   "stream",
+   "ping"
+  ]
+ },
+ {
+  "id": "ping",
+  "term": "PING and keepalive",
+  "short": "A connection-level frame with 8 opaque bytes that the peer must echo back with ACK: proof the connection is still alive.",
+  "detail": "gRPC keepalive sends PINGs on quiet connections (`KeepaliveParams` in grpc-go). No ACK within the timeout and the connection is declared dead: its RPCs fail and the channel reconnects. Servers enforce a minimum interval and answer clients that ping too often with GOAWAY (`too_many_pings`).",
+  "design": "NATs, firewalls and cloud load balancers silently drop idle TCP connections, often after a few minutes. Without keepalive the next RPC hangs until TCP gives up; with it you find the dead connection first. Keep client keepalive within the server's enforcement policy.",
+  "match": [
+   "PING",
+   "keepalive",
+   "keepalives",
+   "PING ACK",
+   "keepalive timeout"
+  ],
+  "related": [
+   "http2-connection",
+   "goaway",
+   "settings"
+  ]
+ },
+ {
+  "id": "goaway",
+  "term": "GOAWAY",
+  "short": "A frame that tells the peer \"finish what you have, but open no new streams on this connection\".",
+  "detail": "It carries the last stream id the sender will process. Streams above it were never handled and can be retried safely elsewhere, which gRPC does transparently. The client then opens a new connection, which re-resolves the name and gets a fresh load-balancing decision.",
+  "design": "GOAWAY is how servers drain gracefully on shutdown and how `MAX_CONNECTION_AGE` recycles connections. Send it before stopping a pod and give in-flight RPCs a grace period (`MAX_CONNECTION_AGE_GRACE`).",
+  "match": [
+   "GOAWAY",
+   "GOAWAYs",
+   "draining",
+   "drained"
+  ],
+  "related": [
+   "max-connection-age",
+   "http2-connection",
+   "name-resolution"
+  ]
+ },
+ {
+  "id": "hpack",
+  "term": "HPACK",
+  "short": "HTTP/2 header compression: headers seen before become one-byte references into a table.",
+  "detail": "Both sides keep a static table (`:method POST`, `:status 200`…) and a per-connection dynamic table of headers already sent. A repeated header costs about one byte; a new value is sent as a Huffman-coded literal and added to the table.",
+  "design": "Repeated metadata is almost free, but high-cardinality values (unique request ids, per-call signed tokens) are paid in full every time. The dynamic table is per connection, so every new connection starts cold.",
+  "match": [
+   "HPACK",
+   "dynamic table",
+   "static table"
+  ],
+  "related": [
+   "headers-frame",
+   "http2-connection"
+  ]
+ },
+ {
+  "id": "length-prefixed",
+  "term": "Length-prefixed message",
+  "short": "How gRPC frames each message inside DATA: 1 byte compressed flag, 4 bytes big-endian length, then the protobuf bytes.",
+  "detail": "The prefix lets the receiver find message boundaries however HTTP/2 splits the DATA frames. The compressed flag says whether this message was compressed with the codec named in `grpc-encoding`.",
+  "design": "Each message is buffered whole before your code sees it, and receivers cap its size (4 MiB by default in the main implementations). For bulk data, stream many small messages instead of sending one huge one.",
+  "match": [
+   "length-prefixed",
+   "length-prefixed message",
+   "length-prefixed messages",
+   "5-byte prefix",
+   "compressed flag"
+  ],
+  "related": [
+   "data-frame",
+   "protobuf"
+  ]
+ },
+ {
+  "id": "protobuf",
+  "term": "Protocol Buffers (protobuf)",
+  "short": "The schema language and compact binary encoding gRPC uses for messages by default.",
+  "detail": "A `.proto` file declares messages with typed, numbered fields, and code generators produce message classes and stubs. On the wire a message is a run of (tag, value) pairs with no field names and no separators, usually several times smaller than the same data as JSON.",
+  "design": "The `.proto` file is a contract between every client and server version that will ever run at the same time. Review changes to it like database migrations: what will old readers and old writers do with the new bytes?",
+  "match": [
+   "protobuf",
+   "proto3",
+   "Protocol Buffers",
+   ".proto"
+  ],
+  "related": [
+   "field-number",
+   "wire-type",
+   "schema-evolution",
+   "length-prefixed"
+  ]
+ },
+ {
+  "id": "field-number",
+  "term": "Field number and tag",
+  "short": "Every field has a number, and its tag `(field_number << 3) | wire_type` is all that identifies it on the wire.",
+  "detail": "Tags are varints, so field numbers 1–15 take one byte and 16–2047 take two. Names never travel: a reader matches fields purely by number, which is why renaming is free on the binary wire and renumbering breaks every existing reader.",
+  "design": "Field numbers are forever. Give the most frequent fields 1–15, never change a field's number, and never reuse a deleted one: mark it `reserved` (number and name) so nobody brings it back with a new meaning.",
+  "match": [
+   "field number",
+   "field numbers",
+   "tag",
+   "tag byte",
+   "reserved"
+  ],
+  "related": [
+   "wire-type",
+   "varint",
+   "schema-evolution",
+   "unknown-fields"
+  ]
+ },
+ {
+  "id": "wire-type",
+  "term": "Wire type",
+  "short": "The low 3 bits of each tag, saying how the value is laid out, so any reader can parse or skip it without the schema.",
+  "detail": "0 VARINT (ints, bools, enums), 1 I64 (fixed64, double), 2 LEN (length-delimited: a varint byte count, then that many bytes; strings, bytes, nested messages, packed repeated numbers), 5 I32 (fixed32, float).",
+  "design": "Changing a field to a type with another wire type (int32 to string) makes old readers drop or reject it; changing within a wire type (int64 to sint64) can silently change the values they read. Both need a new field number instead.",
+  "match": [
+   "wire type",
+   "wire types",
+   "LEN",
+   "I32",
+   "I64",
+   "length-delimited",
+   "wire type 2"
+  ],
+  "related": [
+   "field-number",
+   "varint",
+   "unknown-fields"
+  ]
+ },
+ {
+  "id": "varint",
+  "term": "Varint",
+  "short": "A variable-length integer: 7 bits of the number per byte, low bits first, with the top bit meaning \"another byte follows\".",
+  "detail": "0–127 fit in one byte and up to 16 383 in two. Negative int32 and int64 values are sign-extended to 64 bits and always take 10 bytes.",
+  "design": "Small non-negative numbers are cheap, so ids, enums, counts and lengths stay compact. Use sint32/sint64 for fields that are often negative, and fixed64 for large, evenly spread values like hashes.",
+  "match": [
+   "varint",
+   "varints",
+   "continuation bit",
+   "base-128"
+  ],
+  "related": [
+   "zigzag",
+   "wire-type",
+   "field-number"
+  ]
+ },
+ {
+  "id": "zigzag",
+  "term": "Zigzag encoding (sint32, sint64)",
+  "short": "A mapping that interleaves negative and positive numbers (0, -1, 1, -2 → 0, 1, 2, 3) so small negatives stay small varints.",
+  "detail": "sint32/sint64 store `(n << 1) ^ (n >> 63)` as a varint: -1 costs 1 byte instead of 10. The wire type is the same as int64, so a reader using the other type decodes a different number with no error at all.",
+  "design": "Choose sint* up front for values that are often negative (deltas, offsets, temperatures). Switching an existing field between int64 and sint64 is a breaking change even though nothing fails to parse.",
+  "match": [
+   "zigzag",
+   "zigzag-encoded",
+   "sint32",
+   "sint64",
+   "sint32/sint64"
+  ],
+  "related": [
+   "varint",
+   "wire-type",
+   "schema-evolution"
+  ]
+ },
+ {
+  "id": "unknown-fields",
+  "term": "Unknown fields",
+  "short": "Fields the reader's schema does not define. It skips them using their wire type and keeps the raw bytes.",
+  "detail": "proto3 parsers (since protobuf 3.5) preserve unknown fields and write them back on re-serialization, so a service in the middle that decodes, edits and re-encodes a message does not strip fields it has never heard of.",
+  "design": "This is what makes adding fields safe while old readers are still deployed. Code paths that convert to JSON or to your own structs and back still lose them.",
+  "match": [
+   "unknown field",
+   "unknown fields"
+  ],
+  "related": [
+   "schema-evolution",
+   "wire-type",
+   "field-number"
+  ]
+ },
+ {
+  "id": "schema-evolution",
+  "term": "Schema evolution",
+  "short": "Changing a .proto while old and new versions of clients and servers keep exchanging messages.",
+  "detail": "Safe: add fields with new numbers, rename fields (binary wire only), delete fields while reserving their numbers. Unsafe: change a number, change a type across encodings, reuse a deleted number. New writers with old readers is forward compatibility; old writers with new readers is backward compatibility.",
+  "design": "Deploys are never atomic, so assume every pair of versions will talk. Run a breaking-change check (`buf breaking`) in CI, and remember that JSON transcoding makes field names part of the contract too.",
+  "match": [
+   "schema evolution",
+   "wire-compatible",
+   "breaking change",
+   "forward compatible",
+   "backward compatible",
+   "old reader",
+   "old readers"
+  ],
+  "related": [
+   "field-number",
+   "unknown-fields",
+   "default-values",
+   "zigzag"
+  ]
+ },
+ {
+  "id": "default-values",
+  "term": "Default values and optional",
+  "short": "proto3 does not write a field that holds its default (0, \"\", false, empty list), and the reader fills the default back in.",
+  "detail": "That saves bytes, but a plain proto3 field cannot tell \"set to zero\" from \"never set\". Declaring it `optional` adds presence tracking (`has_…` accessors) and writes the value even when it is zero.",
+  "design": "Use `optional` (or a wrapper type) wherever zero means something different from absent: partial updates that set a value to 0, flags whose default matters, counters that may legitimately be zero.",
+  "match": [
+   "default value",
+   "default values",
+   "defaults",
+   "optional"
+  ],
+  "related": [
+   "protobuf",
+   "schema-evolution"
+  ]
+ },
+ {
+  "id": "unary",
+  "term": "Unary RPC",
+  "short": "One request message, one response message: the gRPC version of a function call.",
+  "detail": "On the wire: request HEADERS plus one DATA with END_STREAM; response HEADERS, one DATA, then trailers. The status in the trailers decides whether it succeeded.",
+  "design": "Prefer unary unless you need a stream: each call is balanced, retried and timed out on its own, and is far easier to reason about in proxies, load balancers and dashboards.",
+  "match": [
+   "unary"
+  ],
+  "related": [
+   "streaming-rpc",
+   "rpc",
+   "deadline"
+  ]
+ },
+ {
+  "id": "streaming-rpc",
+  "term": "Streaming RPCs (server, client, bidi)",
+  "short": "Calls where one or both sides send a sequence of messages on the same stream instead of one each.",
+  "detail": "Server streaming: one request, many responses (watches, feeds). Client streaming: many requests, one response after the client half-closes (uploads, imports). Bidi: both sides send independently until each has sent END_STREAM (chat, sync).",
+  "design": "A stream pins all its messages to one backend for its whole life, can fail after delivering some messages, and does not fit a short deadline. Design resume points (last seen id or version), idempotent handling and keepalives, and recycle long streams.",
+  "match": [
+   "server streaming",
+   "client streaming",
+   "bidi streaming",
+   "server stream",
+   "client stream",
+   "bidi",
+   "bidirectional streaming"
+  ],
+  "related": [
+   "unary",
+   "half-close",
+   "end-stream",
+   "ping"
+  ]
+ },
+ {
+  "id": "grpc-status",
+  "term": "gRPC status code",
+  "short": "The real result of an RPC, sent as `grpc-status` in the trailers: 0 is OK, anything else is an error.",
+  "detail": "The HTTP status is 200 even when the call fails. Common codes: CANCELLED 1, INVALID_ARGUMENT 3, DEADLINE_EXCEEDED 4, NOT_FOUND 5, RESOURCE_EXHAUSTED 8, INTERNAL 13, UNAVAILABLE 14 (transient: server draining, connection reset, no backend ready).",
+  "design": "Pick codes deliberately, because clients and proxies act on them: retry policies normally retry only UNAVAILABLE, and alerts should separate caller mistakes (INVALID_ARGUMENT, NOT_FOUND) from server trouble (INTERNAL, UNAVAILABLE, DEADLINE_EXCEEDED).",
+  "match": [
+   "grpc-status",
+   "status code",
+   "status codes",
+   "NOT_FOUND",
+   "INVALID_ARGUMENT",
+   "RESOURCE_EXHAUSTED",
+   "UNAVAILABLE",
+   "grpc-status: 0",
+   ":status 200"
+  ],
+  "related": [
+   "trailers",
+   "trailers-only",
+   "retries",
+   "deadline"
+  ]
+ },
+ {
+  "id": "deadline",
+  "term": "Deadline",
+  "short": "The point in time by which the caller needs an answer. After it the call fails with DEADLINE_EXCEEDED and the stream is cancelled.",
+  "detail": "gRPC has no default deadline: without one a call can wait forever. The client library enforces it locally; the server learns it from `grpc-timeout` and cancels its context when it expires. A call started after the deadline has passed fails without touching the network.",
+  "design": "Set deadlines at the edge from the user-facing latency budget and let them flow down; never leave internal calls unbounded. Without them, one hung dependency pins goroutines, streams and memory at every hop above it until the chain falls over.",
+  "match": [
+   "deadline",
+   "deadlines",
+   "DEADLINE_EXCEEDED",
+   "no deadline"
+  ],
+  "related": [
+   "grpc-timeout",
+   "cancellation",
+   "retries",
+   "grpc-status"
+  ]
+ },
+ {
+  "id": "grpc-timeout",
+  "term": "grpc-timeout and deadline propagation",
+  "short": "The request header that carries the remaining time budget to the server, such as `300m` (milliseconds) or `1S` (seconds).",
+  "detail": "It is relative, so clock skew between machines does not matter. The server turns it into a context deadline; passing that context to outgoing calls forwards what is left, minus the time this hop has already spent.",
+  "design": "Propagate the incoming context into every downstream call (in Go, never `context.Background()` inside a handler). Each hop then gets only what remains, and deeper services stop instead of finishing work nobody is waiting for.",
+  "match": [
+   "grpc-timeout",
+   "deadline propagation",
+   "propagates",
+   "remaining budget"
+  ],
+  "related": [
+   "deadline",
+   "cancellation",
+   "headers-frame"
+  ]
+ },
+ {
+  "id": "cancellation",
+  "term": "Cancellation and ctx.Done()",
+  "short": "Telling every hop that the caller has given up, so they can stop working on the request.",
+  "detail": "A cancel or an expired deadline sends RST_STREAM(CANCEL), and the call ends locally with CANCELLED or DEADLINE_EXCEEDED. On the server the request context is cancelled and `ctx.Done()` closes; outgoing calls made with that context are cancelled by the library. The handler's own loop only stops if it checks `ctx.Done()` or passes ctx into its I/O.",
+  "design": "Cancellation is cooperative. Handlers that ignore it keep burning CPU, DB connections and locks for nobody, which turns a latency spike into an overload. Pass ctx into every DB and RPC call and check it in long loops.",
+  "match": [
+   "cancellation",
+   "cancel()",
+   "cancelled",
+   "cancels",
+   "CANCELLED",
+   "ctx.Done()",
+   "ctx",
+   "wasted work"
+  ],
+  "related": [
+   "rst-stream",
+   "deadline",
+   "grpc-timeout"
+  ]
+ },
+ {
+  "id": "retries",
+  "term": "Retries and retry amplification",
+  "short": "Sending a failed call again. Done at several layers, retries multiply: 3 attempts at each of 3 layers is 27 calls at the bottom.",
+  "detail": "gRPC retries according to a `retryPolicy` in the service config (retryable codes such as UNAVAILABLE, max attempts, exponential backoff with jitter) and caps them with `retryThrottling`, a token bucket that stops retrying when too many calls fail. Retries always stay inside the original deadline.",
+  "design": "Retry at one layer only (usually the edge or the mesh), only idempotent calls, only retryable codes, with backoff and a budget. Otherwise a struggling service gets its load multiplied exactly when it can least take it.",
+  "match": [
+   "retry",
+   "retries",
+   "retried",
+   "retryPolicy",
+   "retryThrottling",
+   "retry budget",
+   "retry budgets",
+   "backoff",
+   "exponential backoff"
+  ],
+  "related": [
+   "grpc-status",
+   "deadline",
+   "l7-lb"
+  ]
+ },
+ {
+  "id": "l4-lb",
+  "term": "L4 (connection-level) load balancer",
+  "short": "A balancer that forwards TCP connections and picks a backend once per connection. It sees bytes, not RPCs.",
+  "detail": "kube-proxy (ClusterIP Services), AWS NLB and most TCP load balancers work this way. With gRPC's single long-lived HTTP/2 connection, every RPC from a client lands on whichever backend that connection was given.",
+  "design": "Behind an L4 balancer gRPC load is as uneven as your clients: few clients mean hot pods, and new or restarted pods sit idle. Use client-side `round_robin`, an L7 proxy, or at least `MAX_CONNECTION_AGE`.",
+  "match": [
+   "L4",
+   "L4 balancer",
+   "TCP load balancer",
+   "kube-proxy",
+   "ClusterIP",
+   "NLB",
+   "VIP",
+   "connection-level"
+  ],
+  "related": [
+   "l7-lb",
+   "round-robin",
+   "max-connection-age",
+   "http2-connection"
+  ]
+ },
+ {
+  "id": "l7-lb",
+  "term": "L7 proxy (Envoy)",
+  "short": "A proxy that terminates HTTP/2, sees each stream and picks a backend for every RPC.",
+  "detail": "Envoy, Linkerd and gRPC-aware ingresses keep their own connections to every backend and spread streams across them. Envoy learns endpoints from a control plane (EDS, part of xDS) and adds retries, outlier detection and per-RPC metrics.",
+  "design": "Even per-RPC balancing without touching clients, at the cost of an extra hop: more latency and a proxy fleet to run and scale. The usual answer in a service mesh or at the edge.",
+  "match": [
+   "L7",
+   "Envoy",
+   "L7 proxy",
+   "EDS",
+   "outlier detection",
+   "Linkerd"
+  ],
+  "related": [
+   "l4-lb",
+   "xds",
+   "round-robin"
+  ]
+ },
+ {
+  "id": "pick-first",
+  "term": "pick_first",
+  "short": "gRPC's default load-balancing policy: connect to the first resolved address that works and send every RPC there.",
+  "detail": "It only moves to the next address when that connection fails. Clients that get the same DNS answer in the same order all pick the same backend.",
+  "design": "Resolving every pod (a headless Service) is not enough on its own: without a service config that selects `round_robin`, a gRPC client still talks to a single backend.",
+  "match": [
+   "pick_first"
+  ],
+  "related": [
+   "round-robin",
+   "subchannel",
+   "name-resolution"
+  ]
+ },
+ {
+  "id": "round-robin",
+  "term": "round_robin",
+  "short": "A client-side policy that keeps a connection to every resolved backend and rotates RPCs across the READY ones.",
+  "detail": "Enabled through the service config (`loadBalancingConfig: [{\"round_robin\": {}}]`). It needs a resolver that returns individual backend addresses, such as DNS for a Kubernetes headless Service, or xDS.",
+  "design": "Per-RPC balancing with no extra hop. The client now owns discovery and backend health, so its resolver must stay fresh, and clients × backends connections add up in large fleets.",
+  "match": [
+   "round_robin",
+   "loadBalancingConfig",
+   "service config"
+  ],
+  "related": [
+   "pick-first",
+   "subchannel",
+   "name-resolution",
+   "l7-lb"
+  ]
+ },
+ {
+  "id": "subchannel",
+  "term": "Subchannel",
+  "short": "A channel's connection to one backend address. A channel holds one subchannel per address its policy uses.",
+  "detail": "Each subchannel has its own connectivity state (CONNECTING, READY, TRANSIENT_FAILURE). `round_robin` sends RPCs only to READY ones and reconnects failed ones with backoff.",
+  "design": "With client-side balancing the connection count is clients × backends: fine for tens of backends, worth capping with subsetting for hundreds.",
+  "match": [
+   "subchannel",
+   "subchannels"
+  ],
+  "related": [
+   "channel",
+   "round-robin",
+   "pick-first"
+  ]
+ },
+ {
+  "id": "xds",
+  "term": "xDS",
+  "short": "The APIs a control plane uses to push endpoints, routes and load-balancing config to Envoy, or straight to gRPC clients.",
+  "detail": "EDS (endpoints), CDS (clusters), RDS (routes) and LDS (listeners) are streamed from the control plane, so changes arrive in seconds instead of at the next DNS lookup. gRPC speaks xDS natively (\"proxyless\" service mesh).",
+  "design": "Gives client-side or proxy balancing a live view of the fleet: new pods get traffic at once and draining pods stop getting it. The cost is running a control plane (Istio, Traffic Director or your own).",
+  "match": [
+   "xDS",
+   "control plane"
+  ],
+  "related": [
+   "name-resolution",
+   "l7-lb",
+   "round-robin"
+  ]
+ },
+ {
+  "id": "max-connection-age",
+  "term": "MAX_CONNECTION_AGE",
+  "short": "A server setting that sends GOAWAY to each connection after a set lifetime, so clients reconnect.",
+  "detail": "Each connection gets the age plus jitter (±10%) so they do not all reconnect at once, and `MAX_CONNECTION_AGE_GRACE` bounds how long in-flight RPCs may take to finish. The reconnect re-resolves the name and goes through the balancer again.",
+  "design": "The standard fix for gRPC behind L4 balancers: load evens out over time and new pods pick up traffic. Typical values are minutes; shorter spreads load faster but costs more handshakes.",
+  "match": [
+   "MAX_CONNECTION_AGE",
+   "MaxConnectionAge",
+   "max connection age",
+   "MAX_CONNECTION_AGE_GRACE"
+  ],
+  "related": [
+   "goaway",
+   "l4-lb",
+   "name-resolution"
+  ]
+ },
+ {
+  "id": "name-resolution",
+  "term": "Name resolution (resolver)",
+  "short": "How a channel turns a target like `dns:///orders:443` into the backend addresses its load-balancing policy uses.",
+  "detail": "gRPC's DNS resolver looks up once and re-resolves only when a connection fails or receives GOAWAY; it does not poll. A Kubernetes ClusterIP name resolves to one virtual IP, a headless Service to every pod IP.",
+  "design": "A stale resolver hides new pods. Pair DNS with connection recycling (`MAX_CONNECTION_AGE`), or use a push-based resolver (xDS, Kubernetes endpoints) when the backend set changes often.",
+  "match": [
+   "resolver",
+   "resolvers",
+   "DNS resolver",
+   "re-resolve",
+   "re-resolves",
+   "name resolution",
+   "headless Service",
+   "resolve the name"
+  ],
+  "related": [
+   "pick-first",
+   "round-robin",
+   "xds",
+   "max-connection-age"
+  ]
+ }
+]

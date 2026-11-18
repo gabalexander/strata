@@ -1,0 +1,776 @@
+[
+ {
+  "id": "olap",
+  "term": "OLAP vs OLTP",
+  "short": "OLTP systems serve many small reads and writes of single rows; OLAP systems answer analytical queries that scan millions of rows but only a few columns.",
+  "detail": "Postgres and MySQL are built for OLTP: find a row by key, update it, inside a transaction. ClickHouse is built for OLAP: append-mostly data, aggregations over large ranges, no per-row updates in the hot path.",
+  "design": "Keep the transactional source of truth in an OLTP database and stream changes (CDC, Kafka) into ClickHouse for analytics. Point lookups and frequent updates in ClickHouse, or billion-row scans in Postgres, fight the storage layout.",
+  "match": [
+   "OLAP",
+   "OLTP",
+   "analytical queries"
+  ],
+  "related": [
+   "row-store",
+   "column-store",
+   "mergetree"
+  ]
+ },
+ {
+  "id": "row-store",
+  "term": "Row store",
+  "short": "A layout that keeps all the columns of a row together on disk, like a Postgres heap of 8 KB pages.",
+  "detail": "Reading one column means reading the pages that hold it, and those pages hold every other column too. Here a query that needs 7 bytes of a 276-byte row still pulls all 276 bytes off disk.",
+  "design": "Ideal for reading or updating whole rows by key. For scans over a few columns of a wide table, I/O grows with the full row width, which is why analytics on a row store gets slow and expensive as tables grow.",
+  "match": [
+   "row store",
+   "row stores",
+   "row-oriented",
+   "Postgres heap",
+   "whole-row reads"
+  ],
+  "related": [
+   "column-store",
+   "olap",
+   "bytes-read"
+  ]
+ },
+ {
+  "id": "column-store",
+  "term": "Column store (columnar storage)",
+  "short": "A layout that stores each column separately, so a query reads only the columns it names.",
+  "detail": "Values of one column sit next to each other, which also makes them compress far better than mixed-type rows. Columns a query does not reference are never opened; `SELECT *` opens them all and gives most of the advantage back.",
+  "design": "Query cost follows the columns you touch, not the table width, so wide denormalized tables are fine in ClickHouse. Name the columns you need and keep `SELECT *` out of dashboards and APIs.",
+  "match": [
+   "column store",
+   "columnar",
+   "column-oriented",
+   "column skipping",
+   "untouched columns",
+   "SELECT *"
+  ],
+  "related": [
+   "row-store",
+   "column-file",
+   "compression",
+   "olap"
+  ]
+ },
+ {
+  "id": "column-file",
+  "term": "Column file (.bin) and part format",
+  "short": "In a Wide part every column is its own compressed file, `<column>.bin`, with a `.mrk2` marks file next to it.",
+  "detail": "The `.bin` file holds the column’s values for the part, in sort order, as a run of compressed blocks. Small parts (under `min_bytes_for_wide_part`, 10 MiB by default) use the Compact format instead: all columns in one `data.bin`, so a tiny insert does not create a file per column.",
+  "design": "Files per table ≈ columns × parts, so many tiny parts on a wide table means many files and inodes. Per-column sizes are in `system.columns` and `system.parts_columns`: that is where you find the column that dominates storage and I/O.",
+  "match": [
+   "column file",
+   "column files",
+   ".bin",
+   "data.bin",
+   "Wide part",
+   "Compact part",
+   "min_bytes_for_wide_part",
+   "event_date.bin",
+   "event_time.bin",
+   "user_id.bin",
+   "country.bin",
+   "url.bin",
+   "referer.bin",
+   "user_agent.bin",
+   "duration_ms.bin"
+  ],
+  "related": [
+   "column-store",
+   "mark",
+   "part",
+   "compression"
+  ]
+ },
+ {
+  "id": "compression",
+  "term": "Column compression",
+  "short": "Each column file is stored as compressed blocks, so a column takes far less space on disk than its raw values.",
+  "detail": "ClickHouse compresses blocks of 64 KB to 1 MB of one column at a time. Similar values next to each other (sorted data, repeated strings, small numbers) compress best, so the same type can shrink 2× or 100× depending on the data. Data is decompressed after the disk read, so bytes read are compressed bytes.",
+  "design": "Compression is a performance feature, not only a storage one: a column 40× smaller is also read 40× faster. The sorting key drives it, because sorting puts repeated values next to each other.",
+  "match": [
+   "compression",
+   "compressed",
+   "compresses",
+   "compress"
+  ],
+  "related": [
+   "codec",
+   "compression-ratio",
+   "cardinality",
+   "bytes-read"
+  ]
+ },
+ {
+  "id": "codec",
+  "term": "Codec (LZ4, ZSTD, Delta…)",
+  "short": "The compression algorithm for a column, set per column with `CODEC(...)`.",
+  "detail": "LZ4 is the default: very fast to decompress, moderate ratio. ZSTD compresses better for more CPU per read. Specialized codecs transform the data first and are chained with a general one: `Delta` and `DoubleDelta` for timestamps and counters, `Gorilla` for float gauges, `T64` for integers, as in `CODEC(Delta, ZSTD)`.",
+  "design": "Keep LZ4 on hot columns where CPU matters, use ZSTD on large, cold or storage-bound columns, and add Delta or DoubleDelta on monotonic time columns. Compare `data_compressed_bytes` with `data_uncompressed_bytes` in `system.columns` before and after.",
+  "match": [
+   "codec",
+   "codecs",
+   "LZ4",
+   "ZSTD",
+   "ZSTD(1)",
+   "CODEC(NONE)",
+   "CODEC(Delta, ZSTD)",
+   "Delta",
+   "DoubleDelta",
+   "Gorilla"
+  ],
+  "related": [
+   "compression",
+   "compression-ratio"
+  ]
+ },
+ {
+  "id": "low-cardinality",
+  "term": "LowCardinality(String)",
+  "short": "A column type that stores each distinct string once in a dictionary and keeps only a small integer per row.",
+  "detail": "`country` has about 200 distinct values: each row stores a 1-byte index into the dictionary instead of the string, and those indexes compress again. Filters and GROUP BY also work on the integers, which is faster than comparing strings.",
+  "design": "Use it for strings with up to roughly 10,000 distinct values (country, status, event type, service name). On ids, URLs and other high-cardinality strings the dictionary gets huge and it makes things worse.",
+  "match": [
+   "LowCardinality",
+   "LowCardinality(String)",
+   "dictionary encoding"
+  ],
+  "related": [
+   "cardinality",
+   "compression"
+  ]
+ },
+ {
+  "id": "cardinality",
+  "term": "Cardinality",
+  "short": "How many distinct values a column has: `country` about 200, `user_id` tens of thousands, `url` hundreds of thousands.",
+  "detail": "Low-cardinality columns repeat values constantly, so they compress well and sort into long runs. High-cardinality columns look nearly random, to a compressor and to an index.",
+  "design": "Cardinality drives three schema decisions: the type and codec (LowCardinality), the order of columns in the sorting key (lower cardinality first), and which skip index can help (bloom filters for high-cardinality needles).",
+  "match": [
+   "cardinality",
+   "low cardinality",
+   "low-cardinality",
+   "high cardinality",
+   "high-cardinality",
+   "distinct values"
+  ],
+  "related": [
+   "low-cardinality",
+   "compression",
+   "sorting-key",
+   "bloom-filter"
+  ]
+ },
+ {
+  "id": "compression-ratio",
+  "term": "Compression ratio",
+  "short": "Raw size divided by size on disk: “40× smaller” means the column file is 1/40 of its raw bytes.",
+  "detail": "The ratio depends on the data, not the type. In this table `user_agent` is the widest column but shrinks about 20× because a few thousand strings repeat, while `url` only manages 4×.",
+  "design": "Low-ratio columns (unique strings, random ids, noisy floats) dominate storage cost and scan time. They are the ones to move out of hot queries, store as ids, or give a better codec.",
+  "match": [
+   "compression ratio",
+   "smaller than raw"
+  ],
+  "related": [
+   "compression",
+   "codec",
+   "cardinality"
+  ]
+ },
+ {
+  "id": "bytes-read",
+  "term": "Bytes read",
+  "short": "How much data a query pulls off disk, after compression. The main cost metric of a ClickHouse query.",
+  "detail": "clickhouse-client prints it as “Processed N rows, X MB”, and `system.query_log` keeps `read_rows` and `read_bytes` for every query. It drops when a query names fewer columns, when the sorting key lets it skip granules, and when PREWHERE avoids reading the other columns.",
+  "design": "When a query is slow, look at bytes read first: it tells you whether the fix is fewer columns, a better sorting key, a skip index or a better codec. A disk-bound server serves roughly disk bandwidth ÷ bytes read per query.",
+  "match": [
+   "bytes read",
+   "less I/O",
+   "read_bytes"
+  ],
+  "related": [
+   "row-store",
+   "column-store",
+   "compression",
+   "prewhere",
+   "granule"
+  ]
+ },
+ {
+  "id": "prewhere",
+  "term": "PREWHERE",
+  "short": "Read the filter column first, then read the other columns only where the filter matched.",
+  "detail": "ClickHouse moves a selective WHERE condition to PREWHERE automatically (`optimize_move_to_prewhere = 1`). It evaluates the condition on that column, then reads the remaining columns only for granules with at least one match. If matches are spread over every granule, it saves nothing.",
+  "design": "It pays off most with `SELECT *` or wide string columns plus a selective filter on a cheap column. If the optimizer picks a poor column, write `PREWHERE` yourself and compare bytes read.",
+  "match": [
+   "PREWHERE",
+   "optimize_move_to_prewhere",
+   "optimize_move_to_prewhere = 1"
+  ],
+  "related": [
+   "bytes-read",
+   "granule",
+   "column-store"
+  ]
+ },
+ {
+  "id": "mergetree",
+  "term": "MergeTree",
+  "short": "ClickHouse’s main table engine: data is written as immutable sorted parts that background merges combine.",
+  "detail": "It is close to an LSM tree: writes are cheap appends, and the cost of keeping data organized is paid later by merges. The family (ReplacingMergeTree, AggregatingMergeTree, SummingMergeTree, the Replicated variants) adds behaviour that runs during those merges.",
+  "design": "Design for append-only data. Updates and deletes are mutations that rewrite parts (or lightweight deletes that mask rows), so model changes as new rows with a version and let a MergeTree variant collapse them.",
+  "match": [
+   "MergeTree",
+   "MergeTree table",
+   "table engine"
+  ],
+  "related": [
+   "part",
+   "merge",
+   "replacing",
+   "sorting-key"
+  ]
+ },
+ {
+  "id": "part",
+  "term": "Part (data part)",
+  "short": "An immutable directory of files holding some rows of a table, sorted by the sorting key. Every INSERT writes at least one.",
+  "detail": "A part has a file per column (one file if Compact), marks, `primary.idx` and checksums. It is active while it serves queries, stays active while a merge reads it, and becomes outdated once the merged result replaces it; outdated parts are deleted a few minutes later.",
+  "design": "Part count follows the number of INSERTs (and the partitions each touches), not the number of rows. Watch active parts per partition in `system.parts`: every query opens every part it reads, so many small parts slow reads too, not only inserts.",
+  "match": [
+   "part",
+   "parts",
+   "data part",
+   "data parts",
+   "active parts",
+   "immutable part",
+   "part count"
+  ],
+  "related": [
+   "part-name",
+   "merge",
+   "too-many-parts",
+   "partition",
+   "column-file"
+  ]
+ },
+ {
+  "id": "part-name",
+  "term": "Part name (all_1_4_1)",
+  "short": "A part is named `partition_minblock_maxblock_level`: `all_1_4_1` holds blocks 1 to 4 of partition `all` and has been merged once.",
+  "detail": "Every INSERT gets the next block number, so a fresh part is `all_N_N_0`. A merge takes the lowest and highest block numbers of its sources and a level one above the highest, which is why merges only ever join neighbours. Mutations add a fifth number.",
+  "design": "Names in `system.parts` tell you how a table is doing: many `_0` parts means merges are behind, high levels mean rows were rewritten many times. `all` means the table has no PARTITION BY.",
+  "match": [
+   "part name",
+   "block number",
+   "partition_minblock_maxblock_level"
+  ],
+  "related": [
+   "part",
+   "merge-level",
+   "partition",
+   "merge"
+  ]
+ },
+ {
+  "id": "partition",
+  "term": "Partition (PARTITION BY)",
+  "short": "A coarse split of a table, usually by month. Parts are only ever merged with parts of the same partition.",
+  "detail": "A table without PARTITION BY has a single partition called `all`. An INSERT whose rows span several partitions writes one part per partition, and the parts limits are counted per partition.",
+  "design": "Partition for data lifecycle (drop or move a month at once, TTL), not for query speed; the sorting key does that. Partitioning by hour, by day on a small table, or by customer multiplies parts and is a classic cause of Too many parts.",
+  "match": [
+   "partition",
+   "partitions",
+   "partitioning",
+   "partitioned",
+   "PARTITION BY"
+  ],
+  "related": [
+   "part",
+   "part-name",
+   "too-many-parts"
+  ]
+ },
+ {
+  "id": "merge",
+  "term": "Background merge",
+  "short": "A background job that reads a few adjacent parts, writes them out as one bigger sorted part and retires the originals.",
+  "detail": "Each source is already sorted, so a merge is a streaming merge sort. The old parts keep serving queries until the new one is committed, then become outdated. Engines like ReplacingMergeTree apply their logic (dedup, aggregation) only at this point.",
+  "design": "Merges are the price of cheap writes: they use CPU and disk bandwidth all the time, and the insert pattern decides how much. Watch `system.merges` and part counts; a merge that keeps failing (full disk, broken part) quietly becomes an insert outage later.",
+  "match": [
+   "merge",
+   "merges",
+   "merged",
+   "merging",
+   "background merge",
+   "background merges"
+  ],
+  "related": [
+   "merge-threads",
+   "merge-level",
+   "write-amplification",
+   "part",
+   "mergetree"
+  ]
+ },
+ {
+  "id": "merge-level",
+  "term": "Merge level",
+  "short": "How many rounds of merging a part’s rows have been through. A part written by an INSERT is level 0.",
+  "detail": "A merge produces a part one level above its highest source. On the stage the colour shows the level: big, old parts are high, fresh small ones are at 0.",
+  "design": "Each level is one more rewrite of the same rows. Many small inserts push rows through more levels, so the level spread in `system.parts` is a quick read on write amplification.",
+  "match": [
+   "merge level",
+   "level 0",
+   "level 1",
+   "level 2",
+   "level 3",
+   "level 4"
+  ],
+  "related": [
+   "merge",
+   "part-name",
+   "write-amplification"
+  ]
+ },
+ {
+  "id": "merge-threads",
+  "term": "Background merge threads",
+  "short": "The pool of threads that run merges; a merge selector decides which adjacent parts each one works on.",
+  "detail": "The pool size is `background_pool_size` (16 by default, shared with mutations); the sim uses 2. The selector prefers several small parts of similar size and won’t fold a tiny part into a huge one, so the cost of a merge stays in line with what it gains.",
+  "design": "When every thread is busy, parts pile up whatever the insert pattern. Big merges can hold a thread for minutes, so a server with many busy tables can fall behind on all of them: size the pool and the insert pattern together.",
+  "match": [
+   "merge thread",
+   "merge threads",
+   "merge pool",
+   "background merge pool",
+   "merge selector",
+   "merge scheduler",
+   "background_pool_size"
+  ],
+  "related": [
+   "merge",
+   "too-many-parts",
+   "stop-merges"
+  ]
+ },
+ {
+  "id": "write-amplification",
+  "term": "Write amplification",
+  "short": "Rows written to disk (by the INSERT and by every merge after it) per row inserted.",
+  "detail": "A row inserted once and merged three times has been written four times. Small inserts make more parts, more merges and more levels, so the same data costs several times the disk writes of one big batch.",
+  "design": "It spends disk bandwidth that queries could use and wears out SSDs. Batching inserts is the main lever; it also explains how a cluster can be write-bound at a modest insert rate.",
+  "match": [
+   "write amplification",
+   "rewritten",
+   "rewrites"
+  ],
+  "related": [
+   "merge",
+   "merge-level",
+   "batch-insert"
+  ]
+ },
+ {
+  "id": "parts-to-delay",
+  "term": "parts_to_delay_insert",
+  "short": "The number of active parts in a partition above which ClickHouse slows every INSERT down so merges can catch up.",
+  "detail": "Past the threshold each INSERT sleeps before writing, longer as the count nears `parts_to_throw_insert`, up to `max_delay_to_insert` (1 s by default). The real default is 1000 (150 in older releases); the sim uses 12.",
+  "design": "This is backpressure: clients see insert latency rise before they see errors. Alert on the max active parts per partition well below this number, because once inserts are delayed you are close to rejections.",
+  "match": [
+   "parts_to_delay_insert",
+   "max_delay_to_insert",
+   "inserts are delayed",
+   "inserts delayed",
+   "delay zone"
+  ],
+  "related": [
+   "too-many-parts",
+   "part",
+   "merge-threads"
+  ]
+ },
+ {
+  "id": "too-many-parts",
+  "term": "TOO_MANY_PARTS (parts_to_throw_insert)",
+  "short": "The error an INSERT fails with once a partition has `parts_to_throw_insert` active parts. The data is not written.",
+  "detail": "The message is “Too many parts (N). Merges are processing significantly slower than inserts”. The real default threshold is 3000 (300 in older releases); the sim uses 20. It means parts are created faster than merges remove them.",
+  "design": "The fix is almost always the write pattern: fewer, bigger INSERTs, `async_insert`, or coarser partitions. Raising the limit only postpones the failure and makes every query open more parts. Clients must retry or buffer, or rejected rows are lost.",
+  "match": [
+   "Too many parts",
+   "TOO_MANY_PARTS",
+   "parts_to_throw_insert"
+  ],
+  "related": [
+   "parts-to-delay",
+   "batch-insert",
+   "async-insert",
+   "partition",
+   "merge-threads"
+  ]
+ },
+ {
+  "id": "batch-insert",
+  "term": "Batch inserts",
+  "short": "Sending many rows per INSERT (10,000 to 1,000,000), about once a second, instead of one row at a time.",
+  "detail": "Every INSERT creates a part whatever its size: 1 row per INSERT at 10 a second makes 10 parts a second, while 100,000 rows every 1.5 s makes one part per 1.5 s and moves thousands of times more rows. Bigger parts also compress better.",
+  "design": "Put a buffer between producers and ClickHouse: batch in the client, consume from Kafka and flush by size and time, or use `async_insert` when clients can’t batch. Row-at-a-time inserts are the most common ClickHouse production incident.",
+  "match": [
+   "batch insert",
+   "batch inserts",
+   "big batches",
+   "small batches",
+   "bigger INSERTs",
+   "row by row",
+   "row-by-row"
+  ],
+  "related": [
+   "async-insert",
+   "too-many-parts",
+   "part",
+   "write-amplification"
+  ]
+ },
+ {
+  "id": "async-insert",
+  "term": "async_insert",
+  "short": "A setting that makes the server collect small INSERTs in a memory buffer and write one part per flush.",
+  "detail": "The buffer is flushed when it reaches `async_insert_max_data_size` (10 MiB) or after `async_insert_busy_timeout_ms` (200 ms by default; the sim uses 1 s). With `wait_for_async_insert = 1`, the default, the client gets its OK only after the flush, so an OK still means the data is on disk.",
+  "design": "Use it when many clients send small inserts and can’t batch (agents, IoT devices, serverless functions). It trades insert latency for part count. `wait_for_async_insert = 0` is fire-and-forget: a crash loses whatever was buffered.",
+  "match": [
+   "async_insert",
+   "async insert",
+   "async insert buffer",
+   "async buffer",
+   "async_insert = 1",
+   "async_insert = 0",
+   "wait_for_async_insert",
+   "wait_for_async_insert = 1"
+  ],
+  "related": [
+   "batch-insert",
+   "too-many-parts",
+   "part"
+  ]
+ },
+ {
+  "id": "stop-merges",
+  "term": "SYSTEM STOP MERGES",
+  "short": "An admin command that stops new merges for a table (or the whole server). `SYSTEM START MERGES` resumes them.",
+  "detail": "Running merges are cancelled and nothing new starts, but every INSERT still adds a part, so the part count only grows. A merge that keeps failing (full disk, a corrupted part, a memory limit) has the same effect without anyone running the command.",
+  "design": "Handy during maintenance (moving disks, debugging a bad merge), dangerous if forgotten: a table under steady inserts walks into Too many parts. Alert on part count growth, not only on insert errors.",
+  "match": [
+   "SYSTEM STOP MERGES",
+   "SYSTEM START MERGES",
+   "SYSTEM STOP MERGES hits",
+   "SYSTEM START MERGES hits",
+   "merges are stopped"
+  ],
+  "related": [
+   "merge",
+   "too-many-parts",
+   "merge-threads"
+  ]
+ },
+ {
+  "id": "optimize",
+  "term": "OPTIMIZE TABLE … FINAL",
+  "short": "Forces every partition to be merged into a single part, right now.",
+  "detail": "It waits for running merges, then rewrites the whole partition. On ReplacingMergeTree this is what finally removes every duplicate, because the merge selector may never put the duplicates in the same merge on its own.",
+  "design": "An admin tool for small or cold partitions, not a routine. On a large table it rewrites everything and competes with normal merges and queries; never put it in an ingest path to “fix” duplicates.",
+  "match": [
+   "OPTIMIZE FINAL",
+   "OPTIMIZE TABLE",
+   "OPTIMIZE … FINAL",
+   "OPTIMIZE TABLE hits FINAL"
+  ],
+  "related": [
+   "replacing",
+   "final",
+   "merge"
+  ]
+ },
+ {
+  "id": "replacing",
+  "term": "ReplacingMergeTree",
+  "short": "A MergeTree that keeps only the last row for each sorting key, but only once a merge brings the duplicates together.",
+  "detail": "Rows with the same ORDER BY key are collapsed during merges, keeping the last inserted one (or the highest value of a version column, if given). Until then both copies are visible, so `count()` and `count() FINAL` disagree. An `is_deleted` column can also turn rows into deletes.",
+  "design": "Good for upserts and CDC streams with a version column. Any query that needs exact results must deduplicate at read time (`FINAL`, or `argMax` with GROUP BY): design queries for duplicates instead of hoping merges have run.",
+  "match": [
+   "ReplacingMergeTree",
+   "deduplicated",
+   "deduplicates",
+   "duplicate rows"
+  ],
+  "related": [
+   "final",
+   "optimize",
+   "merge",
+   "sorting-key",
+   "insert-retry"
+  ]
+ },
+ {
+  "id": "final",
+  "term": "FINAL (query modifier)",
+  "short": "`SELECT … FROM t FINAL` merges rows at read time, so a ReplacingMergeTree query sees one row per key.",
+  "detail": "The query does the deduplication a merge would do, across all the parts it reads, so it costs more the more unmerged parts there are. Recent versions parallelize it and skip ranges of parts that can’t contain duplicates.",
+  "design": "Use it (or `argMax`) whenever correctness matters on a Replacing or Collapsing table. Keep it affordable by filtering on the partition and the sorting key, so FINAL only touches a small slice.",
+  "match": [
+   "count() … FINAL",
+   "count() FROM hits FINAL",
+   "SELECT count() FROM hits FINAL"
+  ],
+  "related": [
+   "replacing",
+   "optimize"
+  ]
+ },
+ {
+  "id": "insert-retry",
+  "term": "Retried INSERTs and duplicates",
+  "short": "A client that times out and re-sends its INSERT can write the same rows twice.",
+  "detail": "A plain MergeTree keeps both copies forever. Replicated tables drop an identical retried block by its hash (`insert_deduplicate`); non-replicated tables only do so if `non_replicated_deduplication_window` is set. `insert_deduplication_token` lets the client name a batch so a retry is recognized even if it is rebuilt.",
+  "design": "Retries are unavoidable over a network, so make inserts idempotent: resend identical batches with a dedup token, or use ReplacingMergeTree with a natural key and deduplicate on read.",
+  "match": [
+   "re-sent",
+   "re-send",
+   "retried",
+   "insert_deduplication_token",
+   "insert_deduplicate"
+  ],
+  "related": [
+   "replacing",
+   "final",
+   "batch-insert"
+  ]
+ },
+ {
+  "id": "sorting-key",
+  "term": "Sorting key (ORDER BY) and primary key",
+  "short": "The columns a MergeTree table is sorted by on disk, set once with `ORDER BY` in CREATE TABLE.",
+  "detail": "Rows in every part are sorted by this tuple, and the sparse primary index is built from it. The primary key defaults to the same columns (it may be a prefix) and, unlike in Postgres, is not unique: it only decides order and what the index can skip.",
+  "design": "The most important schema decision in ClickHouse. Lead with the columns most queries filter on, lowest cardinality first, which also helps compression. Changing it means a new table and re-inserting, so plan a projection or materialized view for a second access pattern.",
+  "match": [
+   "ORDER BY",
+   "sorting key",
+   "sort order",
+   "key order",
+   "key prefix",
+   "primary key",
+   "key column",
+   "leading key column"
+  ],
+  "related": [
+   "sparse-index",
+   "cardinality",
+   "binary-search",
+   "exclusion-search",
+   "replacing"
+  ]
+ },
+ {
+  "id": "sparse-index",
+  "term": "Sparse primary index (primary.idx)",
+  "short": "An index with one entry per granule instead of one per row: the sorting key of each granule’s first row.",
+  "detail": "For 262,144 rows it holds 33 marks instead of 262,144 entries, so the index of a billion-row table still fits in memory. It can’t point at a row; it only rules out granules that can’t contain a match, and the rest are read whole.",
+  "design": "This is why ClickHouse scans ranges fast but is not a key-value store: a point lookup still reads at least one granule (8,192 rows) of every column it needs. For single-row lookups put a cache or an OLTP store in front.",
+  "match": [
+   "sparse primary index",
+   "sparse index",
+   "primary index",
+   "primary.idx",
+   "PrimaryKey"
+  ],
+  "related": [
+   "mark",
+   "granule",
+   "sorting-key",
+   "index-granularity"
+  ]
+ },
+ {
+  "id": "mark",
+  "term": "Mark",
+  "short": "One entry of the sparse index: the key where a granule starts, plus where that granule begins in each column file.",
+  "detail": "`primary.idx` stores the key of each granule’s first row, and each column’s `.mrk2` file stores the matching offsets into its `.bin`, so a granule can be read without reading what comes before it. The final mark holds the last row’s key and closes the last range.",
+  "design": "Two consecutive marks bound what a granule can contain, and that is all the index ever knows. Marks are kept in the mark cache; cold misses after a restart show up as slow first queries.",
+  "match": [
+   "mark",
+   "marks",
+   "final mark",
+   ".mrk2",
+   "marks file",
+   "mark cache"
+  ],
+  "related": [
+   "sparse-index",
+   "granule",
+   "column-file"
+  ]
+ },
+ {
+  "id": "granule",
+  "term": "Granule",
+  "short": "A block of 8,192 consecutive rows (in sort order): the smallest unit ClickHouse reads.",
+  "detail": "The index decides per granule: skip it, or read all of it. A granule read for one matching row costs the same as one where every row matches, which is why “Useful rows” can be low.",
+  "design": "Granules set the latency floor of selective queries and the waste of scattered matches. If matches are spread thinly over many granules, a better sorting key helps far more than any setting.",
+  "match": [
+   "granule",
+   "granules"
+  ],
+  "related": [
+   "index-granularity",
+   "mark",
+   "sparse-index",
+   "skip-index"
+  ]
+ },
+ {
+  "id": "index-granularity",
+  "term": "index_granularity",
+  "short": "How many rows go in a granule, and so how many rows each mark covers: 8,192 by default.",
+  "detail": "A granule also ends early when it reaches `index_granularity_bytes` (10 MiB), so very wide rows get smaller granules (adaptive granularity). Halving it doubles the index and halves the rows a selective query reads.",
+  "design": "The default suits analytics. Lower it (1,024 to 4,096) only for tables dominated by selective lookups, and accept a bigger index and more marks in memory.",
+  "match": [
+   "index_granularity",
+   "index granularity",
+   "index_granularity_bytes",
+   "8,192 rows",
+   "8192 rows",
+   "adaptive granularity"
+  ],
+  "related": [
+   "granule",
+   "mark",
+   "sparse-index"
+  ]
+ },
+ {
+  "id": "binary-search",
+  "term": "Binary search over marks",
+  "short": "When the WHERE pins a prefix of the sorting key, matching rows form one contiguous run, and ClickHouse finds its two edges by binary search over the marks.",
+  "detail": "Each step probes one mark and halves the range: about log₂ 33 ≈ 5 steps per edge here. The server log says “Running binary search on index range” and “Found continuous range in N steps”.",
+  "design": "The fast path: cost grows with the log of the table size. Queries that filter on the leading key columns (equality on the first, a range on the next) get it, so design the key so your most important queries do.",
+  "match": [
+   "binary search",
+   "Running binary search on index range",
+   "Found continuous range"
+  ],
+  "related": [
+   "exclusion-search",
+   "sorting-key",
+   "mark"
+  ]
+ },
+ {
+  "id": "exclusion-search",
+  "term": "Generic exclusion search",
+  "short": "The fallback when the condition is on a later key column: test ranges of marks and drop the ones where the condition can’t hold.",
+  "detail": "It checks the key range of a block of marks. If the condition is impossible anywhere in it, the block is skipped; otherwise it is split into 8 (`coarse_index_granularity`) and each piece is checked again, down to single granules. A later key column only rules out a granule if every earlier column is constant inside it.",
+  "design": "How well it works depends on the cardinality of the columns before the filtered one: a low-cardinality leading column leaves long constant runs, so the second column still prunes. Behind a high-cardinality first column it reads almost everything.",
+  "match": [
+   "generic exclusion search",
+   "exclusion search",
+   "coarse_index_granularity"
+  ],
+  "related": [
+   "binary-search",
+   "sorting-key",
+   "cardinality"
+  ]
+ },
+ {
+  "id": "skip-index",
+  "term": "Data-skipping index",
+  "short": "A small summary per granule (or per N granules) of a column that is not in the sorting key, checked after the primary index.",
+  "detail": "Declared as `INDEX name expr TYPE minmax | set | bloom_filter … GRANULARITY N`, built on insert for new parts and with `MATERIALIZE INDEX` for existing ones. When the summary proves a granule can’t match, the granule is skipped.",
+  "design": "They help when values are clustered or rare (needles), cost insert time and disk, and do nothing for scattered common values. Check with `EXPLAIN indexes = 1` that one really drops granules; they don’t fix a bad sorting key.",
+  "match": [
+   "skip index",
+   "skip indexes",
+   "data-skipping index",
+   "data-skipping indexes",
+   "skipping index",
+   "MATERIALIZE INDEX"
+  ],
+  "related": [
+   "minmax",
+   "bloom-filter",
+   "false-positive",
+   "explain-indexes"
+  ]
+ },
+ {
+  "id": "minmax",
+  "term": "minmax index",
+  "short": "A skip index that stores the minimum and maximum of a column for each granule.",
+  "detail": "A granule is skipped if the filter value lies outside its [min, max]. Cheap to store and check, but only useful when the column moves with the sort order: sorted by `user_id`, every granule spans almost every date, so `minmax(event_date)` rules nothing out.",
+  "design": "Great on columns correlated with the key, such as a timestamp under `ORDER BY (tenant_id, ts)`, or time in tables whose parts each cover a narrow window. Useless on columns that look random within the sort order.",
+  "match": [
+   "minmax",
+   "minmax index",
+   "min/max pair",
+   "minmax(event_date)"
+  ],
+  "related": [
+   "skip-index",
+   "bloom-filter",
+   "sorting-key"
+  ]
+ },
+ {
+  "id": "bloom-filter",
+  "term": "bloom_filter index",
+  "short": "A skip index that keeps a compact probabilistic set of each granule’s values: it answers “definitely not here” or “maybe”.",
+  "detail": "For `user_id = 42`, granules whose filter says “definitely not” are skipped and “maybe” granules are read, including a few false positives (2.5% by default, set with `bloom_filter(0.01)`). It works for equality and IN, not for ranges.",
+  "design": "The tool for needle lookups on high-cardinality columns that can’t lead the key: trace ids, request ids, user ids. `tokenbf_v1` and `ngrambf_v1` apply the same idea to words and substrings in text.",
+  "match": [
+   "bloom filter",
+   "bloom filters",
+   "bloom_filter"
+  ],
+  "related": [
+   "skip-index",
+   "false-positive",
+   "cardinality"
+  ]
+ },
+ {
+  "id": "false-positive",
+  "term": "False positive",
+  "short": "A granule the bloom filter said “maybe” for, read in full, that turns out to hold no match.",
+  "detail": "A bloom filter never misses a value that is there, but sometimes claims one that isn’t. Each false positive costs a whole granule read for nothing.",
+  "design": "A lower false-positive rate means a bigger filter: trade index size against wasted reads. With `GRANULARITY` above 1 one filter covers several granules, so each “maybe” costs several granule reads.",
+  "match": [
+   "false positive",
+   "false positives"
+  ],
+  "related": [
+   "bloom-filter",
+   "granule"
+  ]
+ },
+ {
+  "id": "explain-indexes",
+  "term": "EXPLAIN indexes = 1",
+  "short": "Shows which indexes a query used and how many parts and granules each one kept.",
+  "detail": "Under `ReadFromMergeTree` it lists the primary key (the key columns used, the condition, `Granules: 3/32`) and every skip index that dropped something. `Condition: true` means the primary index can’t help with this filter.",
+  "design": "Run it on every important query while you design a schema: it is how you confirm the sorting key and skip indexes do what you expect before the table holds a billion rows.",
+  "match": [
+   "EXPLAIN indexes",
+   "EXPLAIN indexes = 1",
+   "Condition: true",
+   "PrimaryKey Condition: true"
+  ],
+  "related": [
+   "sparse-index",
+   "skip-index",
+   "sorting-key"
+  ]
+ }
+]

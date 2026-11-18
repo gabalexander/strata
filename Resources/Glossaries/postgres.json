@@ -1,0 +1,727 @@
+[
+ {
+  "id": "transaction",
+  "term": "Transaction",
+  "short": "A group of statements that takes effect as one unit. `BEGIN` starts it; `COMMIT` or `ROLLBACK` ends it.",
+  "detail": "Without BEGIN every statement is its own transaction (autocommit). The isolation level is fixed when the transaction starts, and once any statement in it fails, the whole transaction is aborted.",
+  "design": "Keep transactions short and never wait on users, network calls or queues inside one. Every open transaction holds its locks and holds back vacuum for as long as it lives.",
+  "match": [
+   "BEGIN",
+   "COMMIT",
+   "ROLLBACK",
+   "transaction block"
+  ],
+  "related": [
+   "autocommit",
+   "txid",
+   "isolation-level",
+   "idle-in-transaction"
+  ]
+ },
+ {
+  "id": "autocommit",
+  "term": "Autocommit",
+  "short": "Running a statement without BEGIN: Postgres wraps it in a transaction of its own and commits it immediately.",
+  "detail": "Each autocommit statement gets its own snapshot and, if it writes, its own txid. A COMMIT or ROLLBACK afterwards does nothing, because no transaction is open.",
+  "design": "Fine for single statements, wrong for read-modify-write sequences, which need one transaction and the right locking around them. Drivers and ORMs differ on when they open transactions: know which mode your code runs in.",
+  "match": [
+   "autocommit",
+   "one-statement transaction"
+  ],
+  "related": [
+   "transaction",
+   "lost-update"
+  ]
+ },
+ {
+  "id": "txid",
+  "term": "Transaction id (txid)",
+  "short": "A 32-bit number a transaction gets the first time it writes. Tuples are stamped with it in xmin and xmax.",
+  "detail": "Ids are handed out in increasing order, and read-only transactions never get one. The counter wraps around, so VACUUM must \"freeze\" old tuples before they are about 2 billion transactions old.",
+  "design": "Txid consumption is a capacity metric: a high write rate with vacuum falling behind leads to wraparound warnings and, at the limit, Postgres refusing writes. Monitor `age(datfrozenxid)`.",
+  "match": [
+   "txid",
+   "txids",
+   "transaction id"
+  ],
+  "related": [
+   "vxid",
+   "tuple-xmin",
+   "tuple-xmax",
+   "pg-xact"
+  ]
+ },
+ {
+  "id": "vxid",
+  "term": "Virtual transaction id (vxid)",
+  "short": "The temporary id every transaction gets at BEGIN, written backend/counter like `3/1`. It lives only in memory.",
+  "detail": "A real txid is assigned lazily, at the first write (or the first FOR UPDATE lock), so read-only transactions run their whole life on a vxid and never consume a txid or touch pg_xact.",
+  "design": "Read-only traffic costs nothing in txid terms. In `pg_stat_activity` a session whose `backend_xid` is empty has not written anything yet in its transaction.",
+  "match": [
+   "virtual xid",
+   "vxid",
+   "virtual transaction id"
+  ],
+  "related": [
+   "txid",
+   "transaction",
+   "pid"
+  ]
+ },
+ {
+  "id": "pg-xact",
+  "term": "Commit log (pg_xact)",
+  "short": "A compact map from txid to status: in progress, committed or aborted, two bits per transaction.",
+  "detail": "COMMIT and ROLLBACK just flip the status here (plus a WAL record); no tuple is rewritten. Readers look up the xmin and xmax of each tuple to decide visibility and cache the answer on the tuple as hint bits. It was called pg_clog before Postgres 10.",
+  "design": "Commit and rollback cost the same no matter how many rows the transaction touched, which is why a huge rollback is instant. The cost moves to read time (status lookups) and to VACUUM (removing what aborted transactions left).",
+  "match": [
+   "pg_xact",
+   "pg_clog",
+   "clog",
+   "commit log",
+   "commit status",
+   "hint bits"
+  ],
+  "related": [
+   "txid",
+   "visibility",
+   "dead-tuple"
+  ]
+ },
+ {
+  "id": "mvcc",
+  "term": "MVCC (multiversion concurrency control)",
+  "short": "Keeping several versions of each row, so readers see a consistent snapshot while writers create new versions.",
+  "detail": "In Postgres an UPDATE writes a new tuple and stamps its txid on the old one; nothing is overwritten in place. Each reader picks the version its snapshot allows, so readers never block writers and writers never block readers.",
+  "design": "You get high read concurrency without read locks and pay for it in dead versions that VACUUM must clean up. Update-heavy tables need vacuum tuning, and long transactions turn the cost into bloat.",
+  "match": [
+   "MVCC",
+   "multiversion"
+  ],
+  "related": [
+   "tuple",
+   "snapshot",
+   "visibility",
+   "vacuum"
+  ]
+ },
+ {
+  "id": "tuple",
+  "term": "Tuple (row version)",
+  "short": "One physical version of a row in the table's heap. A row updated three times has four tuples until vacuum runs.",
+  "detail": "Each tuple has a header (xmin, xmax, t_ctid, flags, hint bits) followed by the column data. The data never changes once written; only the header is updated, to mark the tuple replaced, deleted or locked.",
+  "design": "Every UPDATE copies the whole row, even to change one column, so wide rows that change often bloat fastest. Keep hot, frequently updated values (counters, statuses) in narrow tables.",
+  "match": [
+   "tuple",
+   "tuples",
+   "tuple version",
+   "row version",
+   "row versions",
+   "n_live_tup"
+  ],
+  "related": [
+   "ctid",
+   "tuple-xmin",
+   "tuple-xmax",
+   "heap-page",
+   "mvcc"
+  ]
+ },
+ {
+  "id": "ctid",
+  "term": "ctid",
+  "short": "A tuple's physical address: (page number, line pointer), like `(0,3)`.",
+  "detail": "Indexes point at ctids. An UPDATE gives the new version a new ctid, on the same page if it is a HOT update; VACUUM FULL rewrites the table and gives every tuple a new one.",
+  "design": "Never store or rely on a ctid as an identifier: it changes on every update and rewrite. It is useful for debugging and one-off dedupe queries only.",
+  "match": [
+   "ctid",
+   "ctids",
+   "line pointer"
+  ],
+  "related": [
+   "tuple",
+   "heap-page",
+   "t-ctid",
+   "hot-update"
+  ]
+ },
+ {
+  "id": "heap-page",
+  "term": "Heap and heap pages",
+  "short": "A table's storage: a file of 8 kB pages, each holding as many tuples as fit, in no particular order.",
+  "detail": "Each page has a header, an array of line pointers and the tuples. New tuples go wherever the free space map says there is room, and the file grows by whole pages when nothing fits. This sim fits 8 tuples per page; a real page holds dozens of small rows.",
+  "design": "Table size is pages × 8 kB, live or dead. A table that is mostly dead tuples still costs that I/O on every sequential scan and that memory in the cache.",
+  "match": [
+   "heap",
+   "heap page",
+   "heap pages",
+   "heap file"
+  ],
+  "related": [
+   "tuple",
+   "ctid",
+   "bloat",
+   "vacuum"
+  ]
+ },
+ {
+  "id": "tuple-xmin",
+  "term": "xmin (tuple header)",
+  "short": "The txid of the transaction that created this tuple version.",
+  "detail": "A snapshot sees the version only if its xmin committed before the snapshot was taken, or is the reader's own txid. If xmin aborted, the tuple never existed for anyone and is dead at once.",
+  "design": "Not the same as a snapshot's xmin. It is readable as a hidden column (`SELECT xmin, * FROM accounts`), which some ORMs use as a free optimistic-locking version.",
+  "match": [
+   "xmin"
+  ],
+  "related": [
+   "tuple-xmax",
+   "txid",
+   "visibility",
+   "snapshot"
+  ]
+ },
+ {
+  "id": "tuple-xmax",
+  "term": "xmax (tuple header)",
+  "short": "The txid that deleted, replaced or locked this tuple version. 0 means none of those.",
+  "detail": "UPDATE and DELETE stamp their txid here; FOR UPDATE stamps it with a lock-only flag. While that transaction runs, the stamp is a row lock; once it commits, the tuple is dead to new snapshots; if it aborts, the stamp is ignored.",
+  "design": "Because locks live in the tuple header, Postgres never escalates row locks, but locking rows writes to their pages: a `FOR UPDATE` over many rows dirties every page it touches.",
+  "match": [
+   "xmax"
+  ],
+  "related": [
+   "tuple-xmin",
+   "row-lock",
+   "for-update",
+   "dead-tuple"
+  ]
+ },
+ {
+  "id": "t-ctid",
+  "term": "Update chain (t_ctid)",
+  "short": "A pointer in each tuple header to the newer version an UPDATE created. The newest version points to itself.",
+  "detail": "A writer that finds a row already updated follows this chain to the latest version (that is how EvalPlanQual works), and HOT updates use it to reach newer versions on the same page without touching any index.",
+  "design": "A row updated many times between vacuums grows a long chain that every lookup of it walks. A single hot row (a global counter) becomes a contention and vacuum hotspot.",
+  "match": [
+   "t_ctid",
+   "update chain"
+  ],
+  "related": [
+   "ctid",
+   "epq",
+   "hot-update"
+  ]
+ },
+ {
+  "id": "snapshot",
+  "term": "Snapshot (xmin:xmax:running)",
+  "short": "The record of which transactions a reader treats as committed. It decides which tuple versions that reader sees.",
+  "detail": "Written `xmin:xmax:in-progress list`. xmin is the oldest txid still running when it was taken (everything older is finished); xmax is the next txid to be handed out (anything at or above it started later and is invisible); the list holds the txids in between that were still running. A txid counts as committed only if it is below xmax, not in the list, and committed in pg_xact.",
+  "design": "Every open snapshot pins history: no version it might need can be vacuumed. That is the mechanism behind \"long-running queries cause bloat\". A snapshot's xmin is a different thing from a tuple's xmin.",
+  "match": [
+   "snapshot",
+   "snapshots",
+   "xmin:xmax:in-progress list",
+   "xmin:xmax:in-progress txids",
+   "in-progress list",
+   "snapshot xmax"
+  ],
+  "related": [
+   "visibility",
+   "xmin-horizon",
+   "read-committed",
+   "repeatable-read"
+  ]
+ },
+ {
+  "id": "visibility",
+  "term": "Visibility check",
+  "short": "The test every read applies to every tuple it meets: does my snapshot see this version?",
+  "detail": "Visible if xmin committed before the snapshot (or is my own earlier statement) and xmax is 0, only a lock, aborted, or not committed before the snapshot. Within a transaction, command ids make a statement skip the versions it is itself writing.",
+  "design": "Visibility is computed at read time, not stored, so two sessions can read the same page at the same moment and get different rows. Index-only scans skip the per-tuple check only on pages VACUUM has marked all-visible.",
+  "match": [
+   "visibility",
+   "visible",
+   "command id"
+  ],
+  "related": [
+   "snapshot",
+   "tuple-xmin",
+   "tuple-xmax",
+   "pg-xact"
+  ]
+ },
+ {
+  "id": "isolation-level",
+  "term": "Isolation level",
+  "short": "How much a transaction is shielded from other transactions' concurrent changes.",
+  "detail": "Postgres offers read committed (the default), repeatable read and serializable; READ UNCOMMITTED behaves as read committed. The levels differ in when snapshots are taken and in what happens when a write collides with a concurrent update.",
+  "design": "Choose per transaction, not per database: read committed plus explicit locks for most OLTP work, repeatable read for consistent reports, serializable when an invariant spans several rows. Anything above read committed needs retry logic.",
+  "match": [
+   "isolation level",
+   "isolation levels"
+  ],
+  "related": [
+   "read-committed",
+   "repeatable-read",
+   "serializable"
+  ]
+ },
+ {
+  "id": "read-committed",
+  "term": "Read committed",
+  "short": "The default level: every statement takes a fresh snapshot, so it sees everything committed before that statement started.",
+  "detail": "Two SELECTs in one transaction can disagree (non-repeatable reads, phantoms). A write that hits a row a concurrent transaction updated and committed does not fail: it re-checks the newest version (EvalPlanQual) and applies itself there.",
+  "design": "No serialization errors to handle, but read-then-write logic in the application can lose updates. Use atomic UPDATEs, `SELECT … FOR UPDATE` or a version column for read-modify-write.",
+  "match": [
+   "read committed",
+   "READ UNCOMMITTED"
+  ],
+  "related": [
+   "repeatable-read",
+   "non-repeatable-read",
+   "epq",
+   "lost-update"
+  ]
+ },
+ {
+  "id": "repeatable-read",
+  "term": "Repeatable read",
+  "short": "One snapshot for the whole transaction, taken by its first statement, not by BEGIN.",
+  "detail": "Reads are stable: the transaction never sees changes committed after its snapshot, phantoms included. If it updates or locks a row that a concurrent transaction changed and committed after the snapshot, it fails with SQLSTATE 40001 instead of overwriting.",
+  "design": "Good for consistent multi-query reads (reports, exports) and for read-modify-write inside a retry loop. Its long-lived snapshot holds back vacuum for as long as the transaction stays open.",
+  "match": [
+   "repeatable read"
+  ],
+  "related": [
+   "read-committed",
+   "serializable",
+   "serialization-failure",
+   "xmin-horizon"
+  ]
+ },
+ {
+  "id": "serializable",
+  "term": "Serializable (SSI)",
+  "short": "The strictest level: the outcome must match some one-at-a-time order of the transactions, or one of them fails.",
+  "detail": "Postgres builds it on repeatable read plus Serializable Snapshot Isolation: it tracks what each transaction read (predicate locks, shown as SIReadLock) and aborts one transaction when a dangerous pattern such as write skew appears. Not modelled in this sim.",
+  "design": "Lets you enforce invariants across rows (no double booking, at least one doctor on call) without hand-written locking. Expect more 40001 errors under contention, keep transactions short and always retry.",
+  "match": [
+   "SERIALIZABLE",
+   "SSI",
+   "write skew",
+   "predicate locks",
+   "predicate lock"
+  ],
+  "related": [
+   "repeatable-read",
+   "serialization-failure",
+   "isolation-level"
+  ]
+ },
+ {
+  "id": "non-repeatable-read",
+  "term": "Non-repeatable read",
+  "short": "Reading the same row twice in one transaction and getting different values, because another transaction committed in between.",
+  "detail": "Happens under read committed, where every statement takes a new snapshot. Repeatable read and serializable prevent it by keeping the first snapshot.",
+  "design": "Harmless for independent queries, a bug when the second read is checked or combined with the first. Read once and reuse the value, or run the transaction in repeatable read.",
+  "match": [
+   "non-repeatable read",
+   "non-repeatable reads"
+  ],
+  "related": [
+   "phantom",
+   "read-committed",
+   "repeatable-read"
+  ]
+ },
+ {
+  "id": "phantom",
+  "term": "Phantom read",
+  "short": "Running the same query twice in one transaction and getting a different set of rows: some appeared or disappeared.",
+  "detail": "Caused by INSERTs or DELETEs that committed between the two statements. Possible under read committed; Postgres's repeatable read already prevents it because the snapshot is fixed.",
+  "design": "\"Check that nothing overlaps, then insert\" is phantom-prone under read committed. Enforce it with a constraint (unique or exclusion), a lock on a parent row, or serializable.",
+  "match": [
+   "phantom",
+   "phantoms",
+   "phantom read"
+  ],
+  "related": [
+   "non-repeatable-read",
+   "repeatable-read",
+   "serializable"
+  ]
+ },
+ {
+  "id": "lost-update",
+  "term": "Lost update",
+  "short": "Two transactions read the same value, both compute a new one and both write it back: one change silently disappears.",
+  "detail": "Under read committed the second writer waits for the first, then re-checks only its WHERE clause on the newest version and writes its literal value over it. No error is raised.",
+  "design": "The classic read-modify-write bug. Prevent it with an atomic update (`SET balance = balance + 10`), `SELECT … FOR UPDATE`, an optimistic version column (`WHERE version = n`), or repeatable read plus retries.",
+  "match": [
+   "lost update",
+   "lost updates"
+  ],
+  "related": [
+   "for-update",
+   "read-committed",
+   "epq",
+   "serialization-failure"
+  ]
+ },
+ {
+  "id": "serialization-failure",
+  "term": "Serialization failure (40001)",
+  "short": "The error Postgres raises when a repeatable read or serializable transaction cannot continue without breaking its guarantee.",
+  "detail": "\"could not serialize access due to concurrent update\" when it tries to change a row someone changed after its snapshot; \"due to read/write dependencies among transactions\" for SSI conflicts. The whole transaction is aborted.",
+  "design": "Not a bug but a request to retry. Wrap every repeatable read and serializable transaction in a loop that re-runs it from BEGIN, with jittered backoff and a cap.",
+  "match": [
+   "serialization failure",
+   "serialization failures",
+   "40001",
+   "SQLSTATE 40001",
+   "could not serialize access",
+   "could not serialize access due to concurrent update"
+  ],
+  "related": [
+   "repeatable-read",
+   "serializable",
+   "lost-update"
+  ]
+ },
+ {
+  "id": "row-lock",
+  "term": "Row lock",
+  "short": "A writer's claim on a row, stored as its txid in the tuple's xmax while its transaction runs.",
+  "detail": "UPDATE, DELETE and SELECT … FOR UPDATE take it; plain SELECTs ignore it. There is no row lock table: another writer that finds a running txid in xmax waits for that whole transaction to end.",
+  "design": "Row locks last until COMMIT or ROLLBACK, not until the statement ends. A long transaction that touches a hot row (a counter, a balance, a job) queues every other writer of that row behind it.",
+  "match": [
+   "row lock",
+   "row locks",
+   "lock-only",
+   "lock only",
+   "lock-only flag"
+  ],
+  "related": [
+   "tuple-xmax",
+   "for-update",
+   "sharelock",
+   "lock-wait"
+  ]
+ },
+ {
+  "id": "for-update",
+  "term": "SELECT … FOR UPDATE",
+  "short": "A read that also locks the rows it returns, so nobody else can update, delete or lock them until this transaction ends.",
+  "detail": "It stamps the reader's txid into xmax with a lock-only flag. A concurrent FOR UPDATE or write waits, and under read committed it then returns the newest committed version. FOR SHARE, FOR NO KEY UPDATE and FOR KEY SHARE are weaker variants.",
+  "design": "The pessimistic fix for read-modify-write. Lock rows in a consistent order to avoid deadlocks; use `SKIP LOCKED` for job-queue tables and `NOWAIT` when failing beats waiting.",
+  "match": [
+   "FOR UPDATE",
+   "SELECT … FOR UPDATE",
+   "FOR SHARE",
+   "SKIP LOCKED",
+   "NOWAIT"
+  ],
+  "related": [
+   "row-lock",
+   "lost-update",
+   "deadlock",
+   "lock-wait"
+  ]
+ },
+ {
+  "id": "sharelock",
+  "term": "ShareLock on transaction",
+  "short": "What a blocked writer really waits for: a lock on the other transaction's id, which that transaction holds until it ends.",
+  "detail": "Every transaction holds an exclusive lock on its own txid. A session that finds a running txid in a tuple's xmax asks for ShareLock on it and sleeps; COMMIT or ROLLBACK releases it. That is why `pg_locks` shows the waiter on a `transactionid` lock, not on a row.",
+  "design": "When debugging blocking, follow `pg_blocking_pids(pid)` (or the `transactionid` rows in `pg_locks`) to the holder in `pg_stat_activity`. The culprit is usually a session that is idle in transaction.",
+  "match": [
+   "ShareLock",
+   "ShareLock on transaction",
+   "transactionid",
+   "pg_locks",
+   "pg_blocking_pids()"
+  ],
+  "related": [
+   "lock-wait",
+   "row-lock",
+   "deadlock",
+   "idle-in-transaction"
+  ]
+ },
+ {
+  "id": "lock-wait",
+  "term": "Lock wait",
+  "short": "A session blocked because another transaction holds a lock it needs. It stays active, waiting, until the holder ends.",
+  "detail": "By default it waits forever. `lock_timeout` caps the wait; after `deadlock_timeout` (1 s) the backend checks whether it is in a deadlock, and `log_lock_waits` logs the wait at that moment.",
+  "design": "Lock waits turn one slow transaction into a queue of stuck connections and an exhausted pool. Set `lock_timeout` and `statement_timeout` for application roles, and alert on sessions that wait more than a few seconds.",
+  "match": [
+   "lock wait",
+   "lock waits",
+   "waiting for a lock",
+   "lock_timeout",
+   "waits for"
+  ],
+  "related": [
+   "sharelock",
+   "deadlock",
+   "deadlock-timeout",
+   "row-lock"
+  ]
+ },
+ {
+  "id": "deadlock",
+  "term": "Deadlock and the wait-for graph",
+  "short": "Two or more transactions each waiting for a lock another one holds: a cycle in the wait-for graph, so none can move.",
+  "detail": "The wait-for graph has an edge from each waiting session to the session it waits for. Postgres does not prevent cycles; it detects them after `deadlock_timeout` and aborts one transaction with `deadlock detected` (SQLSTATE 40P01), which releases its locks so the others go ahead.",
+  "design": "Deadlocks come from taking the same locks in different orders. Lock rows in a consistent order (sort by primary key), keep transactions short, and retry 40P01 like a serialization failure.",
+  "match": [
+   "deadlock",
+   "deadlocks",
+   "deadlock detected",
+   "deadlock detector",
+   "wait-for graph",
+   "40P01"
+  ],
+  "related": [
+   "deadlock-timeout",
+   "lock-wait",
+   "sharelock",
+   "for-update"
+  ]
+ },
+ {
+  "id": "deadlock-timeout",
+  "term": "deadlock_timeout",
+  "short": "How long a waiting backend sleeps (1 s by default) before it checks whether it is part of a deadlock.",
+  "detail": "Deadlock detection walks the lock graph and is relatively expensive, so it only runs for waits longer than this. The backend whose timer fires first runs the check and, if it finds a cycle, aborts its own transaction.",
+  "design": "Raising it makes deadlock victims wait longer before failing; lowering it burns CPU under heavy lock contention. Leave it near 1 s and fix the lock order instead. It also sets when `log_lock_waits` logs a wait.",
+  "match": [
+   "deadlock_timeout",
+   "log_lock_waits"
+  ],
+  "related": [
+   "deadlock",
+   "lock-wait"
+  ]
+ },
+ {
+  "id": "epq",
+  "term": "EvalPlanQual (re-check)",
+  "short": "How read committed handles a write collision: wait for the other transaction, then re-run the WHERE clause on the newest version of the row.",
+  "detail": "If the other transaction committed an update, the waiter follows the t_ctid chain to the new version, re-evaluates its conditions there and, if they still match, applies its change on top. If the row was deleted, the statement skips it.",
+  "design": "This is why `balance = balance + 10` is safe under read committed. A value the application computed from an earlier read is not: the re-check re-tests WHERE, not your arithmetic.",
+  "match": [
+   "EvalPlanQual",
+   "re-check",
+   "re-checks",
+   "re-checking"
+  ],
+  "related": [
+   "read-committed",
+   "t-ctid",
+   "lost-update",
+   "lock-wait"
+  ]
+ },
+ {
+  "id": "table-lock",
+  "term": "Table locks (ACCESS SHARE, ACCESS EXCLUSIVE)",
+  "short": "Locks on a whole table. Every query takes at least ACCESS SHARE; schema changes and VACUUM FULL need ACCESS EXCLUSIVE, which conflicts with everything.",
+  "detail": "They are held until the transaction ends. An ACCESS EXCLUSIVE request queues behind the current holders, and every later query on the table queues behind it, plain SELECTs included.",
+  "design": "A migration stuck behind one long transaction can take the whole table offline. Run DDL with a short `lock_timeout` and retry it, and keep transactions short so these locks are released quickly.",
+  "match": [
+   "ACCESS SHARE",
+   "ACCESS EXCLUSIVE",
+   "table lock",
+   "table locks"
+  ],
+  "related": [
+   "vacuum-full",
+   "lock-wait",
+   "idle-in-transaction"
+  ]
+ },
+ {
+  "id": "dead-tuple",
+  "term": "Dead tuple",
+  "short": "A tuple version no new snapshot will see: replaced or deleted by a committed transaction, or written by one that aborted.",
+  "detail": "It keeps its slot in the page until VACUUM removes it. A dead tuple that some open snapshot might still need is \"recently dead\" (amber on the stage) and cannot be removed yet.",
+  "design": "Dead tuples are the price of MVCC. Watch `n_dead_tup` and `last_autovacuum` in `pg_stat_user_tables`: a growing dead count means vacuum is falling behind or something holds the horizon back.",
+  "match": [
+   "dead tuple",
+   "dead tuples",
+   "dead version",
+   "dead versions",
+   "n_dead_tup",
+   "recently dead"
+  ],
+  "related": [
+   "vacuum",
+   "bloat",
+   "xmin-horizon",
+   "mvcc"
+  ]
+ },
+ {
+  "id": "bloat",
+  "term": "Bloat",
+  "short": "A table or index bigger than its live data, because pages are full of dead tuples or free space that is not being reused.",
+  "detail": "Plain VACUUM makes dead space reusable but rarely shrinks the file. If updates outpace vacuum, or vacuum is blocked, the table keeps growing; only a rewrite (VACUUM FULL, pg_repack, CLUSTER) gives the space back.",
+  "design": "Bloat costs I/O, cache, backup size and scan time. Prevent it with timely autovacuum and short transactions rather than curing it with rewrites.",
+  "match": [
+   "bloat",
+   "bloated",
+   "table bloat"
+  ],
+  "related": [
+   "dead-tuple",
+   "vacuum",
+   "vacuum-full",
+   "autovacuum"
+  ]
+ },
+ {
+  "id": "vacuum",
+  "term": "VACUUM",
+  "short": "The maintenance pass that removes dead tuples and records their space as free for reuse.",
+  "detail": "It runs alongside normal reads and writes. Freed space goes into the free space map so later inserts and updates fill it; only completely empty pages at the end of the file are cut off and returned to the OS. It also maintains the visibility map and freezes old txids.",
+  "design": "VACUUM keeps a table's size stable rather than shrinking it, and it can only remove what is older than the xmin horizon: one long transaction can make it useless.",
+  "match": [
+   "VACUUM",
+   "vacuums",
+   "vacuumed",
+   "free space map"
+  ],
+  "related": [
+   "dead-tuple",
+   "autovacuum",
+   "vacuum-full",
+   "xmin-horizon"
+  ]
+ },
+ {
+  "id": "vacuum-full",
+  "term": "VACUUM FULL",
+  "short": "Rewrites the whole table into a new, compact file and deletes the old one, giving the space back to the OS.",
+  "detail": "It copies only live tuples, so every tuple gets a new ctid and every index is rebuilt. It holds ACCESS EXCLUSIVE the whole time (no reads or writes on the table) and needs disk space for the new copy.",
+  "design": "Rarely the right tool on a live system. Use pg_repack or pg_squeeze, which rewrite online with only brief locks, and fix the cause (vacuum settings, long transactions) so the bloat does not come back.",
+  "match": [
+   "VACUUM FULL",
+   "pg_repack",
+   "pg_squeeze"
+  ],
+  "related": [
+   "vacuum",
+   "bloat",
+   "table-lock"
+  ]
+ },
+ {
+  "id": "autovacuum",
+  "term": "Autovacuum",
+  "short": "Background workers that run VACUUM (and ANALYZE) on each table automatically as changes accumulate.",
+  "detail": "A table is vacuumed once its dead tuples exceed `autovacuum_vacuum_threshold` + `autovacuum_vacuum_scale_factor` × rows (50 + 20% by default). Workers throttle their I/O with a cost limit. This sim only vacuums when you ask.",
+  "design": "The 20% default is far too lazy for big or update-heavy tables. Tune it per table (a scale factor around 0.01–0.05, a higher cost limit), never turn it off, and alert when `last_autovacuum` gets old.",
+  "match": [
+   "autovacuum"
+  ],
+  "related": [
+   "vacuum",
+   "dead-tuple",
+   "bloat"
+  ]
+ },
+ {
+  "id": "xmin-horizon",
+  "term": "xmin horizon (removable cutoff)",
+  "short": "The oldest txid that any running transaction or open snapshot might still care about. VACUUM can only remove versions deleted before it.",
+  "detail": "It is held back by the oldest running txid, the oldest snapshot's xmin, replication slots, and standbys with `hot_standby_feedback`. Postgres calls it OldestXmin; the stage shows it as the removable cutoff.",
+  "design": "One forgotten transaction, idle session or abandoned replication slot stops vacuum for the whole database, and bloat grows everywhere at once. Monitor `backend_xmin` in `pg_stat_activity` and the age of replication slots.",
+  "match": [
+   "xmin horizon",
+   "removable cutoff",
+   "OldestXmin",
+   "horizon",
+   "hot_standby_feedback",
+   "replication slots",
+   "not yet removable",
+   "not removable yet"
+  ],
+  "related": [
+   "snapshot",
+   "idle-in-transaction",
+   "vacuum",
+   "dead-tuple"
+  ]
+ },
+ {
+  "id": "hot-update",
+  "term": "HOT update and fillfactor",
+  "short": "A heap-only tuple update: the new version goes on the same page and no index changes, because no indexed column changed.",
+  "detail": "Indexes keep pointing at the original line pointer and readers follow the t_ctid chain within the page; old versions can be pruned without VACUUM. It needs free space on that page, which `fillfactor` reserves: 90 (default 100) leaves 10% of each page empty for updates.",
+  "design": "HOT avoids index write amplification, often the largest cost of an update. For update-heavy tables lower the fillfactor and avoid indexing columns that change often; compare `n_tup_hot_upd` with `n_tup_upd`.",
+  "match": [
+   "HOT update",
+   "HOT",
+   "heap-only tuple",
+   "fillfactor"
+  ],
+  "related": [
+   "t-ctid",
+   "heap-page",
+   "ctid"
+  ]
+ },
+ {
+  "id": "pid",
+  "term": "Backend (pid)",
+  "short": "Each client connection is served by its own Postgres server process, called a backend; pid is its operating-system process id.",
+  "detail": "The pid identifies the session in `pg_stat_activity`, `pg_locks`, the logs and error details such as \"Process 4101 waits for ShareLock…\". Deadlock detection runs inside the waiting backend itself.",
+  "design": "A process per connection makes connections expensive (memory, context switches): put a pooler such as PgBouncer in front instead of opening thousands. `pg_cancel_backend(pid)` and `pg_terminate_backend(pid)` stop a runaway session.",
+  "match": [
+   "backend",
+   "pid"
+  ],
+  "related": [
+   "vxid",
+   "sharelock",
+   "idle-in-transaction"
+  ]
+ },
+ {
+  "id": "idle-in-transaction",
+  "term": "Idle in transaction",
+  "short": "A session with an open transaction that is not running any statement: the application began and has not committed yet.",
+  "detail": "One of the states in `pg_stat_activity.state`, next to idle, active and \"idle in transaction (aborted)\". It keeps its row locks, its txid and (under repeatable read) its snapshot for as long as it sits there.",
+  "design": "The most common cause of lock pile-ups and stalled vacuum. Never hold a transaction open across network calls or user think time, and set `idle_in_transaction_session_timeout` as a safety net.",
+  "match": [
+   "idle in transaction",
+   "idle_in_transaction_session_timeout",
+   "pg_stat_activity"
+  ],
+  "related": [
+   "xmin-horizon",
+   "row-lock",
+   "transaction",
+   "failed-transaction"
+  ]
+ },
+ {
+  "id": "failed-transaction",
+  "term": "Aborted transaction block",
+  "short": "After any error inside BEGIN … COMMIT the transaction is aborted, and every further statement fails until ROLLBACK.",
+  "detail": "Postgres answers \"current transaction is aborted, commands ignored until end of transaction block\", and a COMMIT at that point performs a rollback. Savepoints let you recover from an error without losing the whole transaction.",
+  "design": "Error handling must roll back (or roll back to a savepoint) before the connection is reused. A pool that hands out a connection still in a failed transaction causes baffling errors in unrelated requests.",
+  "match": [
+   "current transaction is aborted",
+   "failed transaction",
+   "idle in transaction (aborted)"
+  ],
+  "related": [
+   "transaction",
+   "serialization-failure",
+   "deadlock"
+  ]
+ }
+]

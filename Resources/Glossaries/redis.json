@@ -1,0 +1,673 @@
+[
+ {
+  "id": "event-loop",
+  "term": "Event loop",
+  "short": "The main Redis thread executes one ordinary command at a time.",
+  "detail": "Redis multiplexes connections with an event loop. It serializes ordinary commands such as `GET` (read a string), `SET` (store a string) and `INCR` (increment an integer stored as a string). Socket I/O and background jobs can use other threads.",
+  "design": "A command can run quickly in isolation and still miss its deadline behind someone else’s work. Isolate bulky workloads or bound the work done per command.",
+  "match": [
+   "event loop",
+   "command thread",
+   "execution queue"
+  ],
+  "related": [
+   "slow-command",
+   "io-threads",
+   "rtt"
+  ]
+ },
+ {
+  "id": "io-threads",
+  "term": "Socket I/O threads",
+  "short": "Workers that share the work of moving data on and off client sockets.",
+  "detail": "Threaded I/O can reduce pressure from reading or writing network data. The event loop still serializes execution of ordinary Redis commands.",
+  "design": "Enable I/O threading when the bottleneck is network handling. Partition the data or reduce command cost when execution is saturated.",
+  "match": [
+   "io-threads",
+   "socket I/O threads",
+   "I/O threading"
+  ],
+  "related": [
+   "event-loop",
+   "slow-command",
+   "pipelining"
+  ]
+ },
+ {
+  "id": "rtt",
+  "term": "Round-trip time (RTT)",
+  "short": "The network there-and-back time between a client and server.",
+  "detail": "End-to-end latency also includes socket handling, queueing and command execution. A 120 µs command on a 2 ms network still takes over 2 ms from the client’s point of view.",
+  "design": "Measure latency at the client and on the server. A fast command histogram can coexist with a slow user request.",
+  "match": [
+   "RTT",
+   "RTTs",
+   "round trip",
+   "round trips",
+   "end-to-end latency"
+  ],
+  "related": [
+   "pipelining",
+   "event-loop"
+  ]
+ },
+ {
+  "id": "pipelining",
+  "term": "Pipelining",
+  "short": "Send several commands without waiting for a reply between them.",
+  "detail": "A batch of N independent commands can pay one network round trip instead of N. The server still executes each command and buffers replies as required.",
+  "design": "Bound batches by command count and payload size. Large buffers and queue monopolization can buy throughput at the cost of memory and tail latency.",
+  "match": [
+   "pipelining",
+   "pipeline depth",
+   "Redis pipeline"
+  ],
+  "related": [
+   "rtt",
+   "event-loop",
+   "io-threads"
+  ]
+ },
+ {
+  "id": "slow-command",
+  "term": "Slow command",
+  "short": "A command that occupies the main thread long enough for other requests to queue behind it.",
+  "detail": "`KEYS *` scans the keyspace, `SMEMBERS` builds an entire set reply, and a long Lua script runs without interleaving ordinary commands. Cost depends on cardinality and amount of work.",
+  "design": "Review worst-case work and payload size before deploying a command on a shared primary. Monitor tail latency as well as the slow log.",
+  "match": [
+   "slow command",
+   "KEYS *",
+   "DEL",
+   "SMEMBERS",
+   "Lua script"
+  ],
+  "related": [
+   "event-loop",
+   "scan",
+   "unlink"
+  ]
+ },
+ {
+  "id": "scan",
+  "term": "SCAN",
+  "short": "A cursor-based walk split into many small commands.",
+  "detail": "`SCAN` returns a cursor to send back for the next step, with zero ending the walk. COUNT is a hint, results may repeat, and iteration over a changing collection is not a consistent snapshot.",
+  "design": "Use small chunks to yield the server to foreground traffic. Make consumers of the scan safe to run twice.",
+  "match": [
+   "SCAN",
+   "cursor-based scan"
+  ],
+  "related": [
+   "slow-command",
+   "event-loop"
+  ]
+ },
+ {
+  "id": "unlink",
+  "term": "UNLINK and lazy free",
+  "short": "Remove a key from the keyspace now and defer expensive deallocation.",
+  "detail": "`UNLINK` detaches the key on the command thread. Expensive frees run in the background, so the memory can remain allocated after the key has vanished.",
+  "design": "Use asynchronous deletion to protect latency when deleting large collections, and give the background worker room to catch up.",
+  "match": [
+   "UNLINK",
+   "lazy free",
+   "background reclamation"
+  ],
+  "related": [
+   "slow-command",
+   "event-loop",
+   "maxmemory"
+  ]
+ },
+ {
+  "id": "maxmemory",
+  "term": "maxmemory",
+  "short": "The memory threshold Redis uses when deciding whether to evict keys or refuse a memory-growing command.",
+  "detail": "Some buffers are excluded from eviction accounting. Resident memory can diverge from the limit due to fragmentation, those buffers or snapshot copy-on-write.",
+  "design": "Leave host headroom above maxmemory and monitor both keyspace use and real resident memory. Choose a limit and an eviction policy together.",
+  "match": [
+   "maxmemory",
+   "memory pressure",
+   "eviction policy"
+  ],
+  "related": [
+   "noeviction",
+   "allkeys-lru",
+   "copy-on-write"
+  ]
+ },
+ {
+  "id": "noeviction",
+  "term": "noeviction",
+  "short": "Keep existing keys and return an OOM error when an allocation-sensitive command needs more memory.",
+  "detail": "Reads and commands such as deletes can still run. TTL expiry still works and can return the dataset below the threshold.",
+  "design": "Choose this when silent eviction would break correctness. Budget capacity, alert near the cap and make callers handle rejected writes.",
+  "match": [
+   "noeviction",
+   "OOM",
+   "OOM errors"
+  ],
+  "related": [
+   "maxmemory",
+   "expiry",
+   "volatile-lru"
+  ]
+ },
+ {
+  "id": "allkeys-lru",
+  "term": "allkeys-lru",
+  "short": "Any key may be evicted, with preference for keys untouched for the longest time.",
+  "detail": "TTL is optional for eligibility. Redis uses approximate LRU with candidate sampling instead of maintaining a global sorted order.",
+  "design": "A good baseline for a cache whose working set shifts over time. A one-time scan can still push out useful keys if it touches enough entries.",
+  "match": [
+   "allkeys-lru"
+  ],
+  "related": [
+   "lru",
+   "sampling",
+   "allkeys-lfu"
+  ]
+ },
+ {
+  "id": "allkeys-lfu",
+  "term": "allkeys-lfu",
+  "short": "Any key may be evicted, with preference for keys accessed least frequently.",
+  "detail": "Redis uses approximate logarithmic counters and ages their values over time. A sample helps find low-frequency candidates.",
+  "design": "Consider LFU when a stable popular subset should survive bursts of new traffic. Tune decay for how quickly popularity changes.",
+  "match": [
+   "allkeys-lfu"
+  ],
+  "related": [
+   "lfu",
+   "sampling",
+   "allkeys-lru"
+  ]
+ },
+ {
+  "id": "volatile-lru",
+  "term": "volatile-lru",
+  "short": "Use approximate LRU among keys with a TTL.",
+  "detail": "Persistent keys never enter the candidate pool. With memory pressure and zero TTL keys, memory-growing writes behave as with noeviction.",
+  "design": "A mixed cache and persistent dataset can strand reclaimable capacity. Give disposable keys a TTL or use separate instances to isolate the budgets.",
+  "match": [
+   "volatile-lru"
+  ],
+  "related": [
+   "ttl",
+   "lru",
+   "noeviction"
+  ]
+ },
+ {
+  "id": "volatile-ttl",
+  "term": "volatile-ttl",
+  "short": "Prefer to evict a sampled TTL key that is due to expire soonest.",
+  "detail": "Remaining lifetime ranks candidates, regardless of access frequency. Keys without a TTL are ineligible.",
+  "design": "Use this only when your chosen TTLs reflect how painful eviction would be. A short-lived but very hot entry can still get evicted first.",
+  "match": [
+   "volatile-ttl"
+  ],
+  "related": [
+   "ttl",
+   "sampling",
+   "volatile-lru"
+  ]
+ },
+ {
+  "id": "allkeys-random",
+  "term": "allkeys-random",
+  "short": "Pick an eviction candidate at random from the keyspace.",
+  "detail": "Recency, frequency and TTL do not affect the victim decision. Very hot keys are eligible just like cold ones.",
+  "design": "Random replacement is a useful baseline with roughly uniform access. Hot/cold skew makes preservation of hot keys more valuable.",
+  "match": [
+   "allkeys-random"
+  ],
+  "related": [
+   "allkeys-lru",
+   "allkeys-lfu",
+   "hit-ratio"
+  ]
+ },
+ {
+  "id": "lru",
+  "term": "Least recently used (LRU)",
+  "short": "Prefer to evict the item with the longest time since its last access.",
+  "detail": "A read can make a historically unpopular item recent. Redis approximates LRU with sampled candidates and a pool of promising eviction candidates.",
+  "design": "Recency adapts quickly to shifting traffic. One-time reads can briefly look valuable enough to displace the working set.",
+  "match": [
+   "LRU",
+   "least recently used",
+   "last touch"
+  ],
+  "related": [
+   "lfu",
+   "allkeys-lru",
+   "sampling"
+  ]
+ },
+ {
+  "id": "lfu",
+  "term": "Least frequently used (LFU)",
+  "short": "Prefer to evict items with the lowest estimated access frequency.",
+  "detail": "Counters rise probabilistically with access and decay with age. Redis compares estimates instead of maintaining exact lifetime hit counts.",
+  "design": "Frequency protects stable hot keys from short recency bursts. Decay prevents historically popular keys from staying protected indefinitely.",
+  "match": [
+   "LFU",
+   "least frequently used",
+   "frequency score"
+  ],
+  "related": [
+   "lru",
+   "allkeys-lfu",
+   "sampling"
+  ]
+ },
+ {
+  "id": "sampling",
+  "term": "Eviction sampling (maxmemory-samples)",
+  "short": "Inspect a small number of candidate keys before choosing a victim.",
+  "detail": "Five samples is the default. Redis uses sampled candidates to approximate ordered policies and retains a small candidate pool. The stage shows one sample round without that pool.",
+  "design": "More samples usually improve the decision and cost more CPU. Test hit ratio and latency under memory pressure together.",
+  "match": [
+   "maxmemory-samples",
+   "eviction sampling",
+   "sampled candidates"
+  ],
+  "related": [
+   "lru",
+   "lfu",
+   "maxmemory"
+  ]
+ },
+ {
+  "id": "ttl",
+  "term": "Time to live (TTL)",
+  "short": "The remaining time before a key expires.",
+  "detail": "TTL is backed by an expiration deadline. After it passes, a lookup sees a miss even if an expiry cycle has yet to reclaim the key’s memory.",
+  "design": "Pick TTLs from staleness and refresh capacity. If many hot entries share a deadline, spread expiration times to reduce simultaneous refreshes.",
+  "match": [
+   "TTL",
+   "TTL-bearing keys",
+   "time to live"
+  ],
+  "related": [
+   "expiry",
+   "volatile-ttl",
+   "hit-ratio"
+  ]
+ },
+ {
+  "id": "expiry",
+  "term": "Lazy and active expiry",
+  "short": "Redis removes timed-out keys during access and through periodic sampling on the main thread.",
+  "detail": "Lazy expiry removes a key when an operation encounters its passed TTL. Active expiry periodically samples keys with deadlines and removes expired ones even without a lookup.",
+  "design": "Expired entries can retain memory briefly. Distinguish expiry driven by freshness from eviction driven by memory pressure when diagnosing cache misses.",
+  "match": [
+   "lazy expiry",
+   "active expiry",
+   "expiry cycle"
+  ],
+  "related": [
+   "ttl",
+   "maxmemory",
+   "hit-ratio"
+  ]
+ },
+ {
+  "id": "hit-ratio",
+  "term": "Cache hit ratio",
+  "short": "The share of cache lookups that found an unexpired key.",
+  "detail": "The scenario divides hits by hits plus misses. Absent keys and lazy expiry both count as misses, even if the underlying application can fetch the data elsewhere.",
+  "design": "Hit ratio is workload-specific. Translate misses into traffic and latency on the backing store when choosing memory and eviction policy.",
+  "match": [
+   "hit ratio",
+   "cache miss",
+   "cache hits"
+  ],
+  "related": [
+   "allkeys-lfu",
+   "ttl",
+   "client-cache"
+  ]
+ },
+ {
+  "id": "rdb",
+  "term": "RDB snapshot",
+  "short": "A point-in-time image of the Redis dataset written to a file.",
+  "detail": "The snapshot describes the dataset at capture time. Writes after that point require a later snapshot or AOF to survive a restart.",
+  "design": "RDB is useful for compact backups and restores. Choose snapshot cadence against the recovery point objective and burst changes during saves.",
+  "match": [
+   "RDB",
+   "RDB snapshot",
+   "fork-time view"
+  ],
+  "related": [
+   "bgsave",
+   "copy-on-write",
+   "aof"
+  ]
+ },
+ {
+  "id": "bgsave",
+  "term": "BGSAVE",
+  "short": "Start a child process to save an RDB snapshot while the primary continues serving.",
+  "detail": "The main process forks, which can itself stall the event loop. A successful child replaces the snapshot with its view at fork time.",
+  "design": "Schedule and size snapshots for peak dirty memory, fork latency and disk bandwidth. A successful snapshot can still hide a costly period of elevated RSS.",
+  "match": [
+   "BGSAVE",
+   "background snapshot"
+  ],
+  "related": [
+   "rdb",
+   "fork",
+   "copy-on-write"
+  ]
+ },
+ {
+  "id": "fork",
+  "term": "Fork",
+  "short": "Create a child process that initially shares the parent’s memory pages.",
+  "detail": "The kernel duplicates page tables and maps shared pages copy-on-write. The child can read the original view while the parent applies new writes.",
+  "design": "Large heaps can make the initial fork pause measurable even before any page is copied. Measure the pause as well as save duration.",
+  "match": [
+   "forked",
+   "fork pause",
+   "page tables"
+  ],
+  "related": [
+   "bgsave",
+   "copy-on-write",
+   "event-loop"
+  ]
+ },
+ {
+  "id": "copy-on-write",
+  "term": "Copy-on-write and resident memory",
+  "short": "A write to a still-shared memory page creates a private copy.",
+  "detail": "The snapshot child keeps the old version. Physical memory across parent and child rises for each distinct page group dirtied while both need the versions.",
+  "design": "Reserve headroom for changed pages as well as normal use. Summing per-process RSS can count shared pages twice, so watch host or cgroup resident memory and Redis COW metrics.",
+  "match": [
+   "copy-on-write",
+   "combined resident memory",
+   "resident memory",
+   "RSS"
+  ],
+  "related": [
+   "fork",
+   "bgsave",
+   "maxmemory"
+  ]
+ },
+ {
+  "id": "aof",
+  "term": "Append-only file (AOF)",
+  "short": "A log of changes that Redis replays to reconstruct the dataset.",
+  "detail": "Appended bytes can be in filesystem buffers before they reach durable storage. Redis rewrites AOF over time to bound the log’s size.",
+  "design": "Choose AOF settings around the acceptable loss window. Distinguish local restart recovery from failing over to another node.",
+  "match": [
+   "AOF",
+   "append-only file"
+  ],
+  "related": [
+   "fsync",
+   "rdb",
+   "failover"
+  ]
+ },
+ {
+  "id": "fsync",
+  "term": "fsync and appendfsync",
+  "short": "A request to flush buffered writes to durable storage.",
+  "detail": "AOF always flushes on each append group before replying. Everysec targets one second between flushes. With no, Redis leaves flushing up to the OS, so the window depends on the host.",
+  "design": "Tighter loss windows cost disk I/O and can worsen write latency. Test with realistic disks and failure modes before promising a durability target.",
+  "match": [
+   "fsync",
+   "appendfsync",
+   "power loss"
+  ],
+  "related": [
+   "aof",
+   "failover",
+   "wait"
+  ]
+ },
+ {
+  "id": "replication-offset",
+  "term": "Replication offset and lag",
+  "short": "A byte position in the primary’s replication stream. The gap shows how much the replica still needs.",
+  "detail": "The primary advances an offset as it emits changes. Replicas report their progress, so bytes of lag are different from time since the last acknowledgement.",
+  "design": "Track offsets alongside heartbeat age and throughput. A large byte gap creates a real loss window if a lagging replica is promoted.",
+  "match": [
+   "replication offset",
+   "replication lag",
+   "replica lag",
+   "replication stream"
+  ],
+  "related": [
+   "backlog",
+   "wait",
+   "failover"
+  ]
+ },
+ {
+  "id": "backlog",
+  "term": "Replication backlog",
+  "short": "A bounded buffer of recently emitted replication bytes.",
+  "detail": "A reconnecting replica that presents the expected replication ID and an offset still covered by the buffer can resume with a partial resync. Otherwise it needs a full resync.",
+  "design": "Size the buffer using peak write bandwidth times tolerable link downtime. Frequent full resyncs tie up the network and may create snapshot load.",
+  "match": [
+   "replication backlog",
+   "partial resync",
+   "full resync"
+  ],
+  "related": [
+   "replication-offset",
+   "bgsave",
+   "failover"
+  ]
+ },
+ {
+  "id": "failover",
+  "term": "Failover",
+  "short": "Promote a surviving replica when the primary is unavailable.",
+  "detail": "Async replication may leave the promoted copy behind. A successful primary write reply and a durable local AOF both say little about what is already on that replica.",
+  "design": "Treat availability and durability as separate goals. Design idempotent retries and reconciliation for uncertain writes after a leadership change.",
+  "match": [
+   "failover",
+   "promote the replica",
+   "promoted replica",
+   "SET replies"
+  ],
+  "related": [
+   "wait",
+   "replication-offset",
+   "aof"
+  ]
+ },
+ {
+  "id": "wait",
+  "term": "WAIT",
+  "short": "Ask how many replicas confirmed all preceding writes on this connection.",
+  "detail": "`WAIT 1 1200` returns when at least one replica acknowledges the required offset or when 1,200 ms passes. A timeout reports the actual count and does not roll back the write.",
+  "design": "Check the returned count and plan for timeouts. WAIT reduces loss risk but does not fsync replicas, select the failover winner or confer strong consistency.",
+  "match": [
+   "WAIT",
+   "WAIT 1 1200",
+   "replica acknowledgement"
+  ],
+  "related": [
+   "replication-offset",
+   "failover",
+   "fsync"
+  ]
+ },
+ {
+  "id": "hash-slot",
+  "term": "Hash slot and slot map",
+  "short": "One of 16,384 routing buckets that Redis Cluster assigns to primaries.",
+  "detail": "The client hashes a key to a slot, then looks up its owner in a slot map. Resharding changes ownership without changing how a key hashes.",
+  "design": "Measure traffic by key and shard. Owning an even share of slots does not imply that primaries see even load.",
+  "match": [
+   "hash slot",
+   "hash slots",
+   "slot map",
+   "slot ownership"
+  ],
+  "related": [
+   "crc16",
+   "moved",
+   "hash-tag",
+   "hot-key"
+  ]
+ },
+ {
+  "id": "crc16",
+  "term": "CRC16",
+  "short": "The checksum Redis Cluster reduces modulo 16,384 to choose a slot.",
+  "detail": "Redis uses CRC16/XMODEM on the key’s bytes or the selected hash tag. Modulo 16,384 retains the low 14 bits.",
+  "design": "Use the official cluster algorithm in every client or you will add needless redirects and route requests inconsistently.",
+  "match": [
+   "CRC16",
+   "CRC16/XMODEM"
+  ],
+  "related": [
+   "hash-slot",
+   "hash-tag"
+  ]
+ },
+ {
+  "id": "moved",
+  "term": "MOVED",
+  "short": "A redirect that reports the current owner of a slot.",
+  "detail": "A client gets MOVED when its request reaches a node that does not own the slot. It updates the slot map or refreshes the topology and retries.",
+  "design": "Treat topology as changeable. Bound redirect retries and watch spikes in MOVED as a sign of reconfiguration or stale topology.",
+  "match": [
+   "MOVED",
+   "MOVED redirect"
+  ],
+  "related": [
+   "ask",
+   "hash-slot"
+  ]
+ },
+ {
+  "id": "ask",
+  "term": "ASK and ASKING",
+  "short": "A temporary redirect during slot migration. It applies to the current request.",
+  "detail": "The source still owns the slot but the requested key is at the importing node. The client sends ASKING to that node before retrying and leaves the slot map alone.",
+  "design": "Caching ASK as permanent can misroute other keys in the same slot that are still on the source.",
+  "match": [
+   "ASK",
+   "ASKING",
+   "ASK redirect"
+  ],
+  "related": [
+   "moved",
+   "hash-slot"
+  ]
+ },
+ {
+  "id": "hash-tag",
+  "term": "Hash tag",
+  "short": "A non-empty substring between braces used for hashing instead of the full key.",
+  "detail": "`profile:{user:42}` and `cart:{user:42}` both hash `user:42`. Redis considers the first opening brace and its first following closing brace.",
+  "design": "Use tags to colocate keys that need same-slot commands. Avoid one global tag, which can collapse your traffic onto one shard.",
+  "match": [
+   "hash tag",
+   "hash tags",
+   "user:42"
+  ],
+  "related": [
+   "crc16",
+   "crossslot",
+   "hot-key"
+  ]
+ },
+ {
+  "id": "crossslot",
+  "term": "CROSSSLOT",
+  "short": "The error when a multi-key command needs keys from different slots.",
+  "detail": "An MGET in Redis Cluster requires all key arguments to hash to the same slot, even if those slots happen to be hosted by the same primary.",
+  "design": "Choose key layout from the operations you need. If a client fans out separate requests, handle partial failure and the loss of a single atomic operation.",
+  "match": [
+   "CROSSSLOT",
+   "MGET",
+   "multi-key command"
+  ],
+  "related": [
+   "hash-tag",
+   "hash-slot"
+  ]
+ },
+ {
+  "id": "hot-key",
+  "term": "Hot key",
+  "short": "A key that attracts a disproportionate share of requests.",
+  "detail": "One key maps to one slot owned by one primary. A read-heavy hot key can saturate that shard while the other primaries have capacity.",
+  "design": "Find the source of skew before adding nodes. Use replicas or client caches for eligible reads, and change the data model for indivisible write hot spots.",
+  "match": [
+   "hot key",
+   "hot keys",
+   "hot-key workload",
+   "hot:post"
+  ],
+  "related": [
+   "hash-slot",
+   "client-cache",
+   "read-replica",
+   "key-splitting"
+  ]
+ },
+ {
+  "id": "client-cache",
+  "term": "Client-side caching",
+  "short": "Keep frequently read Redis values in the application process.",
+  "detail": "Redis Tracking can notify clients that cached keys changed. After invalidation, the next read fetches the new value. Disconnect handling needs to discard entries that may have missed updates.",
+  "design": "Cache stable, frequently read values to remove network and shard load. Budget per-client memory and design for invalidation fan-out and reconnects.",
+  "match": [
+   "client-side caching",
+   "local cache hits",
+   "tracking invalidation"
+  ],
+  "related": [
+   "hot-key",
+   "rtt",
+   "read-replica"
+  ]
+ },
+ {
+  "id": "read-replica",
+  "term": "Replica reads",
+  "short": "Offload some read traffic to a copy that follows the primary asynchronously.",
+  "detail": "Redis Cluster clients can use READONLY to read from suitable replicas. Reads may lag the primary, and writes still go to the primary.",
+  "design": "Route only freshness-tolerant reads to replicas. Test read-after-write and failure behavior before promising consistent reads.",
+  "match": [
+   "read replica",
+   "replica reads",
+   "stale-read window",
+   "stale reads"
+  ],
+  "related": [
+   "hot-key",
+   "replication-offset",
+   "client-cache"
+  ]
+ },
+ {
+  "id": "key-splitting",
+  "term": "Key splitting",
+  "short": "Partition a logical object or its workload across several physical keys.",
+  "detail": "Each part can hash to a different primary. A request must be able to target one part, or an application must merge results from multiple parts.",
+  "design": "Split data that has a natural partition key, such as counter stripes or per-region records. All-parts reads and exact atomic updates across stripes can erase the advantage.",
+  "match": [
+   "key splitting",
+   "split keys",
+   "physical keys"
+  ],
+  "related": [
+   "hot-key",
+   "hash-slot",
+   "crossslot"
+  ]
+ }
+]

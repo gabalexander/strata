@@ -1,0 +1,703 @@
+[
+ {
+  "id": "connection-pool",
+  "term": "Connection pool",
+  "short": "A set of open connections that callers borrow and return.",
+  "detail": "An application can keep idle sessions open across requests and grow its pool on demand. Each process has its own pool unless it connects through an external pooler.",
+  "design": "Budget for all pools across every replica and deployment generation. A pool makes connection setup cheaper and bounds local concurrency.",
+  "match": [
+   "connection pool",
+   "connection pools",
+   "app pool",
+   "app pools"
+  ],
+  "related": [
+   "pool-size",
+   "checkout",
+   "max-connections"
+  ]
+ },
+ {
+  "id": "app-replicas",
+  "term": "App replicas",
+  "short": "Separate running copies of the app, each with its own pool in this example.",
+  "detail": "Scaling out adds both request-serving capacity and potential database sessions. Blue-green deployments can run two sets of pools simultaneously.",
+  "design": "Set a connection budget at maximum fleet size, including rollout overlap. Recheck it before changing autoscaler limits.",
+  "match": [
+   "app replicas",
+   "application replicas",
+   "rollout overlap"
+  ],
+  "related": [
+   "pool-size",
+   "max-connections",
+   "transaction-pooling"
+  ]
+ },
+ {
+  "id": "pool-size",
+  "term": "Min and max pool size",
+  "short": "Minimum size reserves warm sessions. Maximum size caps how many sessions a pool may open.",
+  "detail": "An idle warm session avoids opening and authenticating on the first request. Once every session up to the maximum is in use, acquisition waits for a return.",
+  "design": "Tune the minimum for cold-start latency and the maximum for sustainable database concurrency. A large minimum multiplied by many replicas can consume the budget at startup.",
+  "match": [
+   "min pool size",
+   "max pool size",
+   "warm sessions",
+   "maximum pool size"
+  ],
+  "related": [
+   "connection-pool",
+   "wait-queue",
+   "littles-law"
+  ]
+ },
+ {
+  "id": "checkout",
+  "term": "Connection checkout",
+  "short": "The period in which a request has exclusive use of a pooled session.",
+  "detail": "A connection can stay checked out across SQL, transaction commit and app work done inside the transaction. It goes back to the pool only when the caller releases it.",
+  "design": "Measure checkout duration separately from query time. Holding a session while waiting on a remote API can exhaust the pool even when Postgres is mostly idle.",
+  "match": [
+   "connection checkout",
+   "checked out",
+   "checkout duration",
+   "query time"
+  ],
+  "related": [
+   "connection-pool",
+   "littles-law",
+   "transaction-pooling"
+  ]
+ },
+ {
+  "id": "wait-queue",
+  "term": "Acquire wait queue",
+  "short": "Requests waiting for a session in their own application pool.",
+  "detail": "When the pool cannot open another session and every session it owns is busy, it queues borrowers. An idle connection in another process belongs to that process.",
+  "design": "Track wait latency and queue depth per replica. Fleet-wide averages can hide an overloaded instance beside idle peers.",
+  "match": [
+   "wait queue",
+   "acquire queue",
+   "acquisition waits"
+  ],
+  "related": [
+   "acquire-timeout",
+   "backend-queue",
+   "checkout"
+  ]
+ },
+ {
+  "id": "acquire-timeout",
+  "term": "Acquire timeout",
+  "short": "How long a caller will wait to borrow a connection from its pool.",
+  "detail": "In the lab the timer covers the app pool wait. Query execution begins after acquisition, and a pooler can introduce a separate backend wait.",
+  "design": "Keep acquisition within the caller’s overall latency budget. Lengthening it can hide saturation while more requests accumulate.",
+  "match": [
+   "acquire timeout",
+   "acquire timeouts",
+   "acquisition timeout"
+  ],
+  "related": [
+   "wait-queue",
+   "backend-queue",
+   "rpc-status"
+  ]
+ },
+ {
+  "id": "max-connections",
+  "term": "Postgres max_connections",
+  "short": "Postgres limits simultaneous sessions, including idle ones.",
+  "detail": "The app budget in the model is the portion left after reserved slots and other clients. The number of active queries can be far smaller than the number of sessions.",
+  "design": "Coordinate changes with memory and concurrency limits. Reserve access for operations and avoid sizing each app as if it owned the whole database.",
+  "match": [
+   "max_connections",
+   "Postgres session budget",
+   "application budget"
+  ],
+  "related": [
+   "too-many-clients",
+   "pool-size",
+   "transaction-pooling"
+  ]
+ },
+ {
+  "id": "too-many-clients",
+  "term": "Too many clients",
+  "short": "Postgres refused a new session because the connection limit available to that client was reached.",
+  "detail": "Postgres can report SQLSTATE 53300 for lack of slots. Already established idle or busy sessions remain open.",
+  "design": "Separate rejected opens from acquire timeouts. The first points to an exhausted database session budget, while the second can come from just one busy app pool.",
+  "match": [
+   "too many clients",
+   "SQLSTATE 53300",
+   "rejected opens"
+  ],
+  "related": [
+   "max-connections",
+   "acquire-timeout"
+  ]
+ },
+ {
+  "id": "transaction-pooling",
+  "term": "PgBouncer transaction pooling",
+  "short": "Many client connections share a smaller pool of Postgres sessions.",
+  "detail": "A client owns a server connection for the transaction and releases it when that transaction ends. The next transaction may run on a different server session.",
+  "design": "This separates the app socket budget from the database session budget. Verify session-scoped features before choosing the mode, including LISTEN and session-level advisory locks.",
+  "match": [
+   "PgBouncer",
+   "transaction pooling",
+   "server sessions"
+  ],
+  "related": [
+   "max-connections",
+   "backend-queue",
+   "checkout"
+  ]
+ },
+ {
+  "id": "backend-queue",
+  "term": "Pooler backend queue",
+  "short": "Transactions waiting for a free Postgres session at PgBouncer.",
+  "detail": "The application has already borrowed its PgBouncer client socket. The transaction still needs one of the pooler’s server connections before it can execute.",
+  "design": "Adding a pooler moves some waiting downstream. Observe both queues and bound the backend wait with pooler or end-to-end timeouts.",
+  "match": [
+   "backend queue",
+   "backend wait",
+   "pooler slots"
+  ],
+  "related": [
+   "transaction-pooling",
+   "acquire-timeout",
+   "wait-queue"
+  ]
+ },
+ {
+  "id": "littles-law",
+  "term": "Little’s law",
+  "short": "Average concurrency equals throughput per second times average time in the same system.",
+  "detail": "For queries averaging 100 ms at 30 queries/s, the average executing is 3. At 600 ms, the same 30 queries/s would require an average of 18 executing.",
+  "design": "Use the calculation as a starting point. Include time spent holding the session, then account for burstiness, target utilization and where the database saturates.",
+  "match": [
+   "Little’s law",
+   "Little's law",
+   "concurrent queries"
+  ],
+  "related": [
+   "checkout",
+   "pool-size",
+   "wait-queue"
+  ]
+ },
+ {
+  "id": "http2-connection",
+  "term": "HTTP/2 connection",
+  "short": "A transport that can carry many simultaneous RPC streams over one TCP socket.",
+  "detail": "An HTTP/2 PING is a connection-level frame. A socket failure can interrupt all of its streams at once.",
+  "design": "Keep separate budgets for transports and streams. A single long-lived connection can pin substantial traffic to one backend.",
+  "match": [
+   "HTTP/2 connection",
+   "HTTP/2 transport",
+   "RPC streams"
+  ],
+  "related": [
+   "http2-ping",
+   "grpc-channel",
+   "goaway"
+  ]
+ },
+ {
+  "id": "conntrack",
+  "term": "NAT and conntrack",
+  "short": "A middlebox can keep a short-lived table entry for each flow it forwards.",
+  "detail": "A NAT uses the entry to translate addresses and ports in both directions. A firewall or load balancer may also track flows to apply forwarding rules.",
+  "design": "Trace the whole network path. Idle expiry or state loss at any stateful hop can break a connection even when both endpoints are healthy.",
+  "match": [
+   "NAT",
+   "conntrack",
+   "flow mapping",
+   "flow entry"
+  ],
+  "related": [
+   "network-idle",
+   "half-open",
+   "tcp-keepalive"
+  ]
+ },
+ {
+  "id": "network-idle",
+  "term": "Middlebox idle timeout",
+  "short": "How long a network hop retains flow state without seeing eligible traffic.",
+  "detail": "This lab uses a silent-drop NAT and a 350 s example. Other devices can respond with RST to a packet for an expired flow. AWS Network Load Balancer TCP listeners are one example.",
+  "design": "Identify the shortest idle budget along the path and check what traffic refreshes it. Confirm whether expiry drops subsequent packets or resets the socket.",
+  "match": [
+   "load balancer idle timeout",
+   "middlebox idle timeout",
+   "NAT idle timer",
+   "NAT idle budget"
+  ],
+  "related": [
+   "conntrack",
+   "half-open",
+   "keep-alive-race"
+  ]
+ },
+ {
+  "id": "half-open",
+  "term": "Half-open connection",
+  "short": "An endpoint still believes its socket works, but the path or peer can no longer carry that connection.",
+  "detail": "Here this includes a black-holed path after NAT expiry. Without FIN, RST or a failed probe, the local socket can still look open.",
+  "design": "Differentiate local socket state from end-to-end liveness. Set request deadlines and use a detection policy suited to the path.",
+  "match": [
+   "half-open",
+   "black-holed path",
+   "silent-drop NAT"
+  ],
+  "related": [
+   "retransmission",
+   "conntrack",
+   "grpc-keepalive"
+  ]
+ },
+ {
+  "id": "retransmission",
+  "term": "TCP retransmission",
+  "short": "TCP resends unacknowledged data and waits progressively longer between attempts.",
+  "detail": "A silent drop provides no immediate indication of failure. The lab uses a representative 930 s budget. Real elapsed time varies with the stack, retransmission timeout and settings such as TCP_USER_TIMEOUT.",
+  "design": "Use an application deadline that fits the user-visible operation. A kernel retransmission budget can outlast it by minutes.",
+  "match": [
+   "TCP retransmission",
+   "TCP retransmissions",
+   "retransmits",
+   "TCP_USER_TIMEOUT"
+  ],
+  "related": [
+   "half-open",
+   "rpc-status",
+   "tcp-keepalive"
+  ]
+ },
+ {
+  "id": "tcp-keepalive",
+  "term": "TCP keepalive",
+  "short": "Kernel-level probes for an idle socket when keepalive is enabled on it.",
+  "detail": "On Linux the default tcp_keepalive_time is 7,200 s before the first probe. The probe interval and failure count then govern when the socket is closed.",
+  "design": "Check per-socket enablement and the actual OS values. The two-hour default cannot protect a path expiring flows after 350 s.",
+  "match": [
+   "TCP keepalive",
+   "tcp_keepalive_time",
+   "SO_KEEPALIVE"
+  ],
+  "related": [
+   "retransmission",
+   "network-idle",
+   "http2-ping"
+  ]
+ },
+ {
+  "id": "http2-ping",
+  "term": "HTTP/2 PING and ACK",
+  "short": "A connection-level frame and reply that test whether the HTTP/2 peer can answer.",
+  "detail": "PING uses stream zero. The reply echoes its payload with the ACK flag. Keepalive PINGs can refresh some middleboxes that track TCP traffic.",
+  "design": "A PING ACK proves responsiveness of that HTTP/2 hop. If a proxy terminates HTTP/2, it says nothing about the proxy’s upstream application.",
+  "match": [
+   "HTTP/2 PING",
+   "PING ACK",
+   "idle PING",
+   "idle PINGs"
+  ],
+  "related": [
+   "grpc-keepalive",
+   "too-many-pings",
+   "http2-connection"
+  ]
+ },
+ {
+  "id": "grpc-keepalive",
+  "term": "gRPC keepalive time and timeout",
+  "short": "One timer schedules a probe after inactivity and another limits how long the reply may take.",
+  "detail": "keepalive_time is the probe interval after inactivity. keepalive_timeout starts with the PING and closes the transport when its ACK does not arrive. Language implementations and service policies vary.",
+  "design": "Fit the interval between server enforcement and the shortest path idle budget. Budget the timeout for network and scheduler delay to avoid false failures.",
+  "match": [
+   "gRPC keepalive",
+   "keepalive_time",
+   "keepalive_timeout"
+  ],
+  "related": [
+   "http2-ping",
+   "permit-without-stream",
+   "network-idle",
+   "too-many-pings"
+  ]
+ },
+ {
+  "id": "permit-without-stream",
+  "term": "permit_without_stream",
+  "short": "Whether a gRPC client may probe while it has zero outstanding streams.",
+  "detail": "Names vary by language, such as PermitWithoutStream or KEEPALIVE_WITHOUT_CALLS. The client’s choice and the server’s enforcement policy are separate.",
+  "design": "Idle pooled channels benefit only if the service permits the traffic. At scale idle PINGs can dominate network and connection-processing work.",
+  "match": [
+   "permit_without_stream",
+   "PermitWithoutStream",
+   "KEEPALIVE_WITHOUT_CALLS"
+  ],
+  "related": [
+   "grpc-keepalive",
+   "http2-ping",
+   "too-many-pings"
+  ]
+ },
+ {
+  "id": "too-many-pings",
+  "term": "ENHANCE_YOUR_CALM / too_many_pings",
+  "short": "An HTTP/2 GOAWAY error and diagnostic that can report excessive keepalive traffic.",
+  "detail": "A server can enforce a minimum idle PING spacing and count violations. This lab illustrates enforcement with a 60 s minimum and one strike. Real implementations may tolerate multiple violations.",
+  "design": "Agree on settings with whoever owns the server. An interval below the permitted minimum can turn probes into connection churn.",
+  "match": [
+   "ENHANCE_YOUR_CALM",
+   "too_many_pings",
+   "PING enforcement"
+  ],
+  "related": [
+   "grpc-keepalive",
+   "permit-without-stream",
+   "goaway"
+  ]
+ },
+ {
+  "id": "goaway",
+  "term": "GOAWAY",
+  "short": "An HTTP/2 frame that stops new streams from opening on a connection.",
+  "detail": "Its last stream ID bounds which streams might have been processed. In a graceful drain, eligible streams can finish. In an enforcement failure the transport can close immediately.",
+  "design": "Plan for transport replacement and enough grace for in-flight work. An RPC already processed can have side effects even if its response is lost.",
+  "match": [
+   "GOAWAY",
+   "draining transport",
+   "graceful drain"
+  ],
+  "related": [
+   "max-connection-age",
+   "too-many-pings",
+   "dns-resolution"
+  ]
+ },
+ {
+  "id": "grpc-channel",
+  "term": "gRPC channel",
+  "short": "The client-side object that manages connectivity and chooses transports for RPCs.",
+  "detail": "A channel handles name resolution, connection setup and failure recovery. Depending on load-balancing policy it can manage several transports or have none.",
+  "design": "Share channels when appropriate and measure channel state separately from RPC outcomes. During a drain, calls can still finish on the old transport while the channel replaces it.",
+  "match": [
+   "gRPC channel",
+   "gRPC channels",
+   "client connectivity"
+  ],
+  "related": [
+   "channel-idle",
+   "channel-connecting",
+   "channel-ready",
+   "channel-failure"
+  ]
+ },
+ {
+  "id": "channel-idle",
+  "term": "IDLE and connection inactivity",
+  "short": "An idle channel has no active transport and can connect when demand arrives.",
+  "detail": "Client idle timeout is a channel policy. Server MAX_CONNECTION_IDLE measures time without outstanding RPCs on a transport and can send GOAWAY even if PINGs still flow.",
+  "design": "Use client idle to free quiet resources and server idle to bound the cost of quiet sockets. Frequent idle closes trade resource savings for first-RPC dial latency.",
+  "match": [
+   "MAX_CONNECTION_IDLE",
+   "client idle timeout",
+   "channel returned to IDLE",
+   "IDLE state"
+  ],
+  "related": [
+   "grpc-channel",
+   "channel-connecting",
+   "max-connection-age",
+   "goaway"
+  ]
+ },
+ {
+  "id": "channel-connecting",
+  "term": "CONNECTING",
+  "short": "The channel is establishing a usable transport.",
+  "detail": "Connection establishment may include DNS, TCP, TLS and HTTP/2 handshakes. RPCs can wait during establishment subject to their deadlines.",
+  "design": "Budget for connection setup latency even with fail-fast calls. A cold channel and one already in TRANSIENT_FAILURE have different call admission behavior.",
+  "match": [
+   "CONNECTING state",
+   "connection attempt",
+   "connection establishment"
+  ],
+  "related": [
+   "channel-ready",
+   "channel-failure",
+   "dns-resolution",
+   "wait-for-ready"
+  ]
+ },
+ {
+  "id": "channel-ready",
+  "term": "READY",
+  "short": "A gRPC transport has completed its handshakes and the channel can send RPCs.",
+  "detail": "This is the channel’s observation of a usable transport. An unobserved partition can leave a previously healthy transport looking ready until I/O fails.",
+  "design": "Use READY as a connectivity signal. Track actual request success and service health independently.",
+  "match": [
+   "reached READY",
+   "READY state",
+   "ready channels"
+  ],
+  "related": [
+   "channel-failure",
+   "grpc-channel",
+   "half-open"
+  ]
+ },
+ {
+  "id": "channel-failure",
+  "term": "TRANSIENT_FAILURE",
+  "short": "The channel has observed a transport failure and may try to connect again.",
+  "detail": "Default fail-fast calls can fail with UNAVAILABLE in this state. Wait-for-ready calls can wait for a usable transport up to their RPC deadlines.",
+  "design": "Treat reconnect and call retry as distinct policies. A channel can recover while the application still has failed calls to handle.",
+  "match": [
+   "TRANSIENT_FAILURE",
+   "transport failure"
+  ],
+  "related": [
+   "backoff",
+   "wait-for-ready",
+   "rpc-status"
+  ]
+ },
+ {
+  "id": "channel-shutdown",
+  "term": "SHUTDOWN",
+  "short": "A channel has closed permanently and will take no further calls.",
+  "detail": "Closing the channel cancels pending work and stops reconnect attempts. A later caller needs a new channel object.",
+  "design": "Tie the channel lifetime to its owner. Closing a shared channel from one request can interrupt unrelated callers.",
+  "match": [
+   "SHUTDOWN state",
+   "SHUTDOWN is terminal",
+   "closed the channel"
+  ],
+  "related": [
+   "grpc-channel",
+   "channel-idle"
+  ]
+ },
+ {
+  "id": "backoff",
+  "term": "Exponential reconnect backoff",
+  "short": "Repeated connection failures increase the interval between retries, up to a cap.",
+  "detail": "The lab uses an initial interval of 1 s, a multiplier of 1.6 and a cap of 8 s to make several attempts visible. Successful establishment resets the interval.",
+  "design": "Backoff reduces sustained pressure on a failing service. Its cap also bounds how long a recovered service may wait for clients to try again.",
+  "match": [
+   "exponential backoff",
+   "reconnect backoff",
+   "channel backoff",
+   "in backoff"
+  ],
+  "related": [
+   "reconnect-jitter",
+   "channel-failure",
+   "channel-connecting"
+  ]
+ },
+ {
+  "id": "reconnect-jitter",
+  "term": "Reconnect jitter and thundering herd",
+  "short": "Random variation spreads connection attempts that otherwise land in the same moment.",
+  "detail": "Clients that lose the same pod together share a failure epoch. Identical backoff intervals can keep their later attempts aligned. The lab varies each interval by up to 20% when jitter is enabled.",
+  "design": "Size recovery capacity for peak attempts per short interval. Average attempts per second can hide synchronized DNS, TLS and accept-queue load.",
+  "match": [
+   "thundering herd",
+   "reconnect jitter",
+   "peak dials"
+  ],
+  "related": [
+   "backoff",
+   "dns-resolution",
+   "max-connection-age"
+  ]
+ },
+ {
+  "id": "wait-for-ready",
+  "term": "wait-for-ready",
+  "short": "An RPC option that queues a call through a temporary connectivity failure.",
+  "detail": "The call starts when a transport is ready or expires at its original deadline. It does not replay a running call that already failed on a broken transport.",
+  "design": "It can smooth brief outages for callers with slack. Bound the deadline and pending work to limit queuing and the surge when the service returns.",
+  "match": [
+   "wait-for-ready",
+   "wait for readiness",
+   "fail-fast calls"
+  ],
+  "related": [
+   "channel-failure",
+   "rpc-status",
+   "backoff"
+  ]
+ },
+ {
+  "id": "rpc-status",
+  "term": "UNAVAILABLE and DEADLINE_EXCEEDED",
+  "short": "One status reports a temporary inability to serve the RPC, and the other reports that its allotted time ran out.",
+  "detail": "A lost transport or fail-fast call can produce UNAVAILABLE. Waiting for a connection consumes the same RPC deadline as execution, and either phase can end in DEADLINE_EXCEEDED.",
+  "design": "Measure causes separately. For either status, a call dispatched upstream may have had side effects before the client saw the error.",
+  "match": [
+   "UNAVAILABLE",
+   "DEADLINE_EXCEEDED",
+   "RPC deadline",
+   "RPC deadlines"
+  ],
+  "related": [
+   "wait-for-ready",
+   "channel-failure",
+   "idempotent-retry"
+  ]
+ },
+ {
+  "id": "dns-resolution",
+  "term": "DNS re-resolution",
+  "short": "The client refreshes its address list before choosing a backend.",
+  "detail": "A new DNS answer cannot migrate an existing TCP socket. The lab resolves on each dial and prefers the newest live pod. Real resolvers can cache or throttle lookups and balancing policies pick addresses differently.",
+  "design": "If quiet new replicas receive no traffic, inspect channel lifetimes and resolver policy as well as discovery records.",
+  "match": [
+   "DNS re-resolution",
+   "resolve DNS",
+   "resolves DNS",
+   "DNS endpoints",
+   "DNS lookup",
+   "DNS lookups"
+  ],
+  "related": [
+   "grpc-channel",
+   "max-connection-age",
+   "goaway"
+  ]
+ },
+ {
+  "id": "max-connection-age",
+  "term": "MAX_CONNECTION_AGE and grace",
+  "short": "A server can drain a transport based on its age and bound how long old streams can continue.",
+  "detail": "At age expiry the server sends GOAWAY. MAX_CONNECTION_AGE_GRACE bounds the drain. The lab varies connection ages by ±10%, as some implementations do, to spread reconnects.",
+  "design": "Recycling can redistribute traffic after scaling. Align grace with request duration and design long streams to resume if their transport expires.",
+  "match": [
+   "MAX_CONNECTION_AGE",
+   "MAX_CONNECTION_AGE_GRACE",
+   "max connection age",
+   "age grace"
+  ],
+  "related": [
+   "goaway",
+   "dns-resolution",
+   "reconnect-jitter",
+   "channel-idle"
+  ]
+ },
+ {
+  "id": "socket-reuse",
+  "term": "HTTP/1.1 socket reuse",
+  "short": "A client uses an existing HTTP connection for another request to the same upstream.",
+  "detail": "After a response, an HTTP client pool can hold the connection idle. HTTP/1.1 persistence avoids a fresh TCP and possibly TLS handshake on the next request.",
+  "design": "Reuse saves latency and handshake load. Keep only sockets likely to be usable, and compare upstream resets on reused versus fresh connections.",
+  "match": [
+   "socket reuse",
+   "reused socket",
+   "fresh connection",
+   "HTTP/1.1 persistence"
+  ],
+  "related": [
+   "http-keep-alive",
+   "keep-alive-race",
+   "tcp-fin"
+  ]
+ },
+ {
+  "id": "http-keep-alive",
+  "term": "HTTP Keep-Alive timeout",
+  "short": "How long an endpoint retains an idle HTTP connection for reuse.",
+  "detail": "The upstream can close an idle connection, and the client pool can independently evict idle sockets. Some clients subtract a buffer from the server’s Keep-Alive timeout hint.",
+  "design": "Set the proxy’s pool timeout below the upstream’s earliest idle cutoff with margin for latency and scheduling. This controls socket reuse, unlike TCP or gRPC probes.",
+  "match": [
+   "Keep-Alive timeout",
+   "upstream idle timer",
+   "proxy idle timer",
+   "idle socket eviction"
+  ],
+  "related": [
+   "socket-reuse",
+   "keep-alive-race",
+   "tcp-keepalive"
+  ]
+ },
+ {
+  "id": "keep-alive-race",
+  "term": "Keep-alive race",
+  "short": "A new request competes with an upstream close while the client still has the socket in its pool.",
+  "detail": "A request may be checked out before the proxy observes FIN yet reach the server after it closes. Far earlier sends succeed and far later sends see the closed socket and dial again.",
+  "design": "Reproduce with idle-then-busy traffic at the timer boundary. Steady load often never exercises this race.",
+  "match": [
+   "keep-alive race",
+   "idle-close race",
+   "idle-then-busy"
+  ],
+  "related": [
+   "tcp-fin",
+   "econnreset",
+   "http-keep-alive"
+  ]
+ },
+ {
+  "id": "tcp-fin",
+  "term": "TCP FIN and RST",
+  "short": "FIN closes one direction of a TCP connection gracefully. RST aborts the connection.",
+  "detail": "The local process can learn about an upstream FIN after it has already selected the socket. A write racing the upstream teardown can lead to a reset or EOF depending on the TCP stack and close sequence.",
+  "design": "Capture packet order with socket reuse and request timestamps. FIN seen upstream and FIN processed by the pool are separate events.",
+  "match": [
+   "TCP FIN",
+   "TCP reset",
+   "sends FIN",
+   "sent FIN",
+   "processes FIN"
+  ],
+  "related": [
+   "econnreset",
+   "keep-alive-race",
+   "half-open"
+  ]
+ },
+ {
+  "id": "econnreset",
+  "term": "ECONNRESET and proxy 502",
+  "short": "The socket was reset and a proxy can report the upstream failure as 502 Bad Gateway.",
+  "detail": "The simulator maps an upstream reset before the response to a 502 if there is no successful retry. Real proxies can handle or classify failures differently.",
+  "design": "Separate downstream HTTP errors from upstream transport errors in telemetry. Correlate resets with reuse, idle age and the closing peer.",
+  "match": [
+   "ECONNRESET",
+   "502 Bad Gateway",
+   "upstream reset"
+  ],
+  "related": [
+   "tcp-fin",
+   "keep-alive-race",
+   "idempotent-retry"
+  ]
+ },
+ {
+  "id": "idempotent-retry",
+  "term": "Idempotent retry",
+  "short": "Repeating a request whose intended effect is the same when applied more than once.",
+  "detail": "The example retries GET once on a fresh connection and leaves POST unretried. Some writes support an idempotency key backed by server-side deduplication.",
+  "design": "A missing response cannot prove a write was never applied. Use a fresh socket, count the extra attempt in the latency budget and confirm replay safety before automatic retries.",
+  "match": [
+   "idempotent retry",
+   "idempotent requests",
+   "idempotency key",
+   "replay safety"
+  ],
+  "related": [
+   "econnreset",
+   "socket-reuse",
+   "rpc-status"
+  ]
+ }
+]

@@ -1,0 +1,635 @@
+[
+ {
+  "id": "replication",
+  "term": "Replication",
+  "short": "Keeping copies of the same data on several machines.",
+  "detail": "Copies give you fault tolerance (a machine can die), read scaling (spread reads over replicas) and locality (a copy near each user). The hard part is that copies change at different moments.",
+  "design": "Decide what you replicate for first: durability, read throughput or latency. Each pushes you toward a different topology and a different consistency model.",
+  "match": [
+   "replication",
+   "replicated",
+   "replicate",
+   "replicates"
+  ],
+  "related": [
+   "leader",
+   "follower",
+   "leaderless",
+   "multi-leader"
+  ]
+ },
+ {
+  "id": "leader",
+  "term": "Leader (primary)",
+  "short": "The one node that accepts writes and decides their order; everyone else copies it.",
+  "detail": "Single-leader replication (Postgres, MySQL, MongoDB) gives one total order of writes for free: the leader's WAL. Replicas replay that log.",
+  "design": "One leader makes writes simple and conflict-free, but it is a write bottleneck and a single point of failure until a failover promotes someone else.",
+  "match": [
+   "primary",
+   "leader",
+   "primaries"
+  ],
+  "related": [
+   "follower",
+   "failover",
+   "wal"
+  ]
+ },
+ {
+  "id": "follower",
+  "term": "Follower (replica)",
+  "short": "A copy that applies the leader's changes and can serve reads, usually a little behind.",
+  "detail": "Also called a replica, standby or secondary. It receives the WAL stream, writes it to disk and replays it. A hot standby can serve reads while it does.",
+  "design": "Reading from replicas scales reads, but every read can be stale. Know which reads can tolerate that and route the rest to the primary or use a version token.",
+  "match": [
+   "replica",
+   "replicas",
+   "follower",
+   "followers",
+   "standby"
+  ],
+  "related": [
+   "leader",
+   "replication-lag",
+   "async-replication"
+  ]
+ },
+ {
+  "id": "replication-lag",
+  "term": "Replication lag",
+  "short": "How far a replica is behind the primary, in time or in log records.",
+  "detail": "Usually milliseconds; seconds or minutes under write bursts, long-running queries on the replica, a slow disk or network trouble. A read from a lagging replica is a stale read.",
+  "design": "Alert on lag (Postgres `pg_stat_replication.replay_lag`, MySQL `Seconds_Behind_Source`) and take a replica out of the read pool when it falls too far behind.",
+  "match": [
+   "replication lag",
+   "lag",
+   "lagging",
+   "stale read",
+   "stale reads",
+   "stale",
+   "behind"
+  ],
+  "related": [
+   "follower",
+   "read-your-writes",
+   "monotonic-reads",
+   "lsn"
+  ]
+ },
+ {
+  "id": "wal",
+  "term": "WAL (write-ahead log)",
+  "short": "The append-only log of every change a database makes, written before the data files.",
+  "detail": "Crash recovery replays it. Replication ships it: a replica that replays the primary's WAL ends up with the same data. MySQL's equivalent is the binlog.",
+  "design": "Because replicas replay one log in order, \"how far along the log\" is a single number you can compare, wait for and alert on.",
+  "match": [
+   "WAL",
+   "write-ahead log",
+   "binlog",
+   "replay",
+   "replays",
+   "replayed"
+  ],
+  "related": [
+   "lsn",
+   "follower",
+   "durability"
+  ]
+ },
+ {
+  "id": "lsn",
+  "term": "LSN (log sequence number)",
+  "short": "A position in the WAL. A higher LSN means later in the log.",
+  "detail": "Postgres reports a replica's received, flushed and replayed LSNs separately. MySQL uses GTIDs for the same idea. On the stage each cell is one LSN.",
+  "design": "An LSN is the cheapest consistency tool you have: return it after a write, and any replica can tell whether it has caught up to it.",
+  "match": [
+   "LSN",
+   "LSNs",
+   "log sequence number",
+   "GTID"
+  ],
+  "related": [
+   "wal",
+   "version-token",
+   "replication-lag"
+  ]
+ },
+ {
+  "id": "read-your-writes",
+  "term": "Read-your-writes",
+  "short": "After you change something, your own reads show the change.",
+  "detail": "Also called read-after-write consistency. It is a promise to one user (or session) about their own writes; other users may still see older data.",
+  "design": "Users notice this one first (\"I saved it and it's gone\"). Route a user's reads to the primary right after they write, or carry a version token.",
+  "match": [
+   "read-your-writes",
+   "read your writes",
+   "read-after-write"
+  ],
+  "related": [
+   "monotonic-reads",
+   "version-token",
+   "replication-lag"
+  ]
+ },
+ {
+  "id": "monotonic-reads",
+  "term": "Monotonic reads",
+  "short": "Once you have seen a value, you never see an older one afterwards.",
+  "detail": "Broken when consecutive reads land on replicas at different points in the log: fresh, then stale. Data seems to travel back in time.",
+  "design": "Pin each user to one replica (sticky routing) or carry the highest LSN seen. Load balancers that pick a random replica per request break this by default.",
+  "match": [
+   "monotonic reads",
+   "monotonic-reads",
+   "monotonic",
+   "time went backwards",
+   "went backwards",
+   "goes backwards"
+  ],
+  "related": [
+   "read-your-writes",
+   "sticky-replica",
+   "version-token"
+  ]
+ },
+ {
+  "id": "causal-consistency",
+  "term": "Causal consistency",
+  "short": "If one write could have influenced another, everyone sees them in that order.",
+  "detail": "A reply is never visible before the comment it answers. Concurrent writes may still appear in different orders to different people. It is the strongest model that stays available during a partition.",
+  "design": "Get it with causality tokens across sessions (MongoDB causal sessions, `afterClusterTime`) or version vectors; it covers the anomalies users actually report without global coordination.",
+  "match": [
+   "causal consistency",
+   "causal",
+   "causally"
+  ],
+  "related": [
+   "version-vector",
+   "read-your-writes",
+   "linearizability"
+  ]
+ },
+ {
+  "id": "eventual-consistency",
+  "term": "Eventual consistency",
+  "short": "If writes stop, all replicas end up with the same data. No promise about when, or what you read meanwhile.",
+  "detail": "Any read may return an old value, a different replica may return a different one, and two reads can go backwards. Strong eventual consistency (CRDTs) adds: replicas that saw the same updates are equal.",
+  "design": "Fine for counts, feeds and caches. For anything a user just changed, add session guarantees on top, or they will see their own edits flicker.",
+  "match": [
+   "eventual consistency",
+   "eventually consistent",
+   "eventual",
+   "strong eventual"
+  ],
+  "related": [
+   "read-your-writes",
+   "crdt",
+   "cap-pacelc"
+  ]
+ },
+ {
+  "id": "sequential-consistency",
+  "term": "Sequential consistency",
+  "short": "All operations appear in one order that everyone agrees on and that respects each client's own order.",
+  "detail": "Unlike linearizability, that order doesn't have to match real time: a write that finished may still look as if it happened after a later read.",
+  "design": "Rarely offered by name; it shows up as \"everyone sees the same order of events\" in replicated logs and some caches.",
+  "match": [
+   "sequential consistency",
+   "sequentially consistent"
+  ],
+  "related": [
+   "linearizability",
+   "causal-consistency"
+  ]
+ },
+ {
+  "id": "linearizability",
+  "term": "Linearizability",
+  "short": "The system behaves as if there were one copy and every operation happened at one instant.",
+  "detail": "Once any read has returned a new value, every later read (by anyone) returns it or something newer. It needs coordination: consensus (Raft, Paxos) or reading from a single leader that knows it is still the leader.",
+  "design": "Needed for locks, leader election, uniqueness checks and account balances. It costs latency on every operation and availability during a partition, so use it only where those bugs would hurt.",
+  "match": [
+   "linearizable",
+   "linearizability",
+   "not linearizable"
+  ],
+  "related": [
+   "quorum",
+   "cap-pacelc",
+   "sequential-consistency"
+  ]
+ },
+ {
+  "id": "sync-replication",
+  "term": "Synchronous replication",
+  "short": "The primary tells the client \"committed\" only after the replicas have the write too.",
+  "detail": "In Postgres, `synchronous_commit` plus `synchronous_standby_names = 'FIRST 2 (…)'`. Commit latency becomes client round trip + local fsync + the round trip to the slowest replica it waits for.",
+  "design": "No acknowledged write is lost on failover, but every commit pays the round trip and one sick replica stops all writes. Almost nobody waits for every replica.",
+  "match": [
+   "synchronous replication",
+   "synchronous",
+   "sync replication",
+   "fully sync",
+   "commit latency"
+  ],
+  "related": [
+   "async-replication",
+   "semi-sync",
+   "durability",
+   "cap-pacelc"
+  ]
+ },
+ {
+  "id": "async-replication",
+  "term": "Asynchronous replication",
+  "short": "The primary says \"committed\" as soon as the write is on its own disk and ships it to replicas afterwards.",
+  "detail": "The default in Postgres and MySQL. Commits are fast and replicas can be far away, but whatever the replicas haven't received yet exists in one place only.",
+  "design": "The data you can lose on failover equals the replication lag at the moment of the crash. Fine for many workloads if you know that number and accept it.",
+  "match": [
+   "asynchronous replication",
+   "asynchronous",
+   "async replication",
+   "async"
+  ],
+  "related": [
+   "sync-replication",
+   "replication-lag",
+   "failover"
+  ]
+ },
+ {
+  "id": "semi-sync",
+  "term": "Semi-synchronous / quorum commit",
+  "short": "Wait for some replicas, not all: here, any 1 of 2 must have the write before the client hears \"committed\".",
+  "detail": "Postgres `synchronous_standby_names = 'ANY 1 (a, b)'`, MySQL semi-sync replication. MySQL falls back to async after `rpl_semi_sync_source_timeout`, quietly dropping the guarantee.",
+  "design": "The usual compromise: two copies of every acknowledged write, latency of the nearest replica, and one replica can be down. Failover must then pick a replica that has every acknowledged write.",
+  "match": [
+   "semi-sync",
+   "semi-synchronous",
+   "quorum commit",
+   "ANY 1"
+  ],
+  "related": [
+   "sync-replication",
+   "async-replication",
+   "failover"
+  ]
+ },
+ {
+  "id": "durability",
+  "term": "Durability",
+  "short": "Once a write is acknowledged, it isn't lost, even if machines crash.",
+  "detail": "An fsync makes a write survive a crash of that machine; only replication makes it survive losing the machine. \"Acknowledged\" means only what the commit actually waited for.",
+  "design": "Ask \"how many machines must die to lose an acknowledged write?\" Async: one. Semi-sync: two. Sync to all: all of them.",
+  "match": [
+   "durability",
+   "durable",
+   "fsync"
+  ],
+  "related": [
+   "sync-replication",
+   "wal",
+   "failover"
+  ]
+ },
+ {
+  "id": "failover",
+  "term": "Failover",
+  "short": "Promoting a replica to primary when the primary dies.",
+  "detail": "Detect the failure, pick the most up-to-date replica, promote it, repoint clients and the other replicas. The old primary must rejoin as a replica and rewind writes nobody else got (`pg_rewind`).",
+  "design": "Automatic failover trades downtime for possible data loss and split brain. Promote only a replica with every acknowledged write, and fence the old primary so it can't keep accepting writes.",
+  "match": [
+   "failover",
+   "fail over",
+   "fails over",
+   "promoted",
+   "promote",
+   "pg_rewind",
+   "rewinds",
+   "rewind"
+  ],
+  "related": [
+   "leader",
+   "async-replication",
+   "semi-sync"
+  ]
+ },
+ {
+  "id": "quorum",
+  "term": "Quorum",
+  "short": "The minimum number of replicas that must answer for an operation to count.",
+  "detail": "With N copies, a write waits for W acks and a read for R replies. Majorities (N/2 + 1) are the classic choice because any two majorities share a member.",
+  "design": "Quorums let you lose replicas without stopping, and tune each query between speed and freshness (Cassandra consistency levels ONE, QUORUM, ALL, LOCAL_QUORUM).",
+  "match": [
+   "quorum",
+   "quorums",
+   "strict quorum"
+  ],
+  "related": [
+   "nwr",
+   "leaderless",
+   "sloppy-quorum"
+  ]
+ },
+ {
+  "id": "nwr",
+  "term": "N, W and R",
+  "short": "N copies of each key; a write needs W acks; a read asks R replicas.",
+  "detail": "If R + W > N, every read set overlaps every write set in at least one replica, so a read reaches someone with the latest acknowledged write. W = 1, R = 1 is fast and often stale.",
+  "design": "W + R > N is the knob: W = N makes writes fragile, R = N makes reads fragile, W = R = majority balances both. Lower them for latency only where stale reads are acceptable.",
+  "match": [
+   "R + W > N",
+   "R + W",
+   "N, W and R",
+   "W and R"
+  ],
+  "related": [
+   "quorum",
+   "leaderless",
+   "read-repair"
+  ]
+ },
+ {
+  "id": "leaderless",
+  "term": "Leaderless replication",
+  "short": "Any replica accepts writes; clients (or a coordinator) talk to several replicas at once.",
+  "detail": "Dynamo-style: Cassandra, Riak, ScyllaDB, DynamoDB internally. No failover is needed, because there is no leader to lose. Conflicts are settled by timestamps or version vectors.",
+  "design": "Great availability and tail latency; the price is weaker consistency and repair machinery (read repair, hints, anti-entropy) you must understand and operate.",
+  "match": [
+   "leaderless",
+   "Dynamo-style",
+   "Dynamo",
+   "Cassandra",
+   "coordinator"
+  ],
+  "related": [
+   "quorum",
+   "nwr",
+   "hinted-handoff"
+  ]
+ },
+ {
+  "id": "sloppy-quorum",
+  "term": "Sloppy quorum",
+  "short": "When home replicas are down, count acks from other nodes instead, so writes keep succeeding.",
+  "detail": "The stand-in node keeps the write as a hint. W acks are reached, but not on the replicas a later read will ask, so R + W > N no longer guarantees overlap.",
+  "design": "Choose it for write availability (a shopping cart that must always accept items) and accept that reads can miss recent writes until handoff completes.",
+  "match": [
+   "sloppy quorum",
+   "sloppy",
+   "fallback"
+  ],
+  "related": [
+   "hinted-handoff",
+   "quorum",
+   "cap-pacelc"
+  ]
+ },
+ {
+  "id": "hinted-handoff",
+  "term": "Hinted handoff",
+  "short": "A stand-in node holds a write for a down replica and delivers it when that replica returns.",
+  "detail": "Cassandra stores hints for up to `max_hint_window` (3 h by default); after that the replica must be fixed by anti-entropy repair. Hints are lost if the stand-in dies too.",
+  "design": "Hints shorten the time a returning node is stale, but they are best effort. Schedule regular repairs anyway.",
+  "match": [
+   "hinted handoff",
+   "hint",
+   "hints",
+   "handoff"
+  ],
+  "related": [
+   "sloppy-quorum",
+   "anti-entropy"
+  ]
+ },
+ {
+  "id": "read-repair",
+  "term": "Read repair",
+  "short": "When replicas answer a read with different versions, the coordinator writes the newest back to the stale ones.",
+  "detail": "It only fixes keys that get read, and only replicas that were asked. Blocking read repair (wait for the fix before answering) is what gives Cassandra monotonic quorum reads.",
+  "design": "Frequently read data heals itself; rarely read data can stay stale for a long time without anti-entropy.",
+  "match": [
+   "read repair",
+   "read-repair",
+   "repaired",
+   "repair"
+  ],
+  "related": [
+   "anti-entropy",
+   "quorum",
+   "nwr"
+  ]
+ },
+ {
+  "id": "anti-entropy",
+  "term": "Anti-entropy",
+  "short": "A background process that compares replicas and copies over whatever differs.",
+  "detail": "Replicas exchange Merkle tree hashes so only differing ranges are transferred. Cassandra runs it as `nodetool repair`; Dynamo and Riak run it continuously.",
+  "design": "Without it, a replica that missed writes and is never read stays wrong. Run repairs more often than your tombstone grace period, or deleted data can come back.",
+  "match": [
+   "anti-entropy",
+   "nodetool repair"
+  ],
+  "related": [
+   "merkle-tree",
+   "read-repair",
+   "hinted-handoff"
+  ]
+ },
+ {
+  "id": "merkle-tree",
+  "term": "Merkle tree",
+  "short": "A tree of hashes: each leaf hashes a range of keys, each parent hashes its children.",
+  "detail": "Equal roots mean equal data. If roots differ, compare children and descend only into the subtrees that differ, so finding one bad key among billions takes a few hash exchanges.",
+  "design": "The same trick powers Git, ZFS, certificate transparency and blockchains: compare big datasets by exchanging little.",
+  "match": [
+   "Merkle tree",
+   "Merkle trees",
+   "Merkle root",
+   "Merkle",
+   "digest"
+  ],
+  "related": [
+   "anti-entropy"
+  ]
+ },
+ {
+  "id": "last-write-wins",
+  "term": "Last-write-wins (LWW)",
+  "short": "Resolve a conflict by keeping the write with the highest timestamp and discarding the other.",
+  "detail": "Cassandra resolves every cell this way. Concurrent writes always lose one of them, silently, and with clock skew even a write made after seeing the other can lose.",
+  "design": "Use LWW only when losing a concurrent update is acceptable (a cache, a \"last seen\" time), or when each key is written by one writer and never updated concurrently.",
+  "match": [
+   "last-write-wins",
+   "last write wins",
+   "LWW"
+  ],
+  "related": [
+   "clock-skew",
+   "conflict-resolution",
+   "version-vector"
+  ]
+ },
+ {
+  "id": "clock-skew",
+  "term": "Clock skew",
+  "short": "Different machines' clocks disagree about the current time.",
+  "detail": "NTP keeps it to milliseconds when healthy; a bad time source, a paused VM or a leap second can make it seconds. Timestamps from two machines can't reliably order events closer together than the skew.",
+  "design": "Never order writes across machines by wall-clock time alone. Use logical clocks (Lamport, version vectors), hybrid logical clocks, or bounded-uncertainty time like Spanner's TrueTime.",
+  "match": [
+   "clock skew",
+   "skew",
+   "skewed",
+   "NTP"
+  ],
+  "related": [
+   "last-write-wins",
+   "version-vector"
+  ]
+ },
+ {
+  "id": "version-vector",
+  "term": "Version vector",
+  "short": "One counter per replica, attached to each value, saying which writes it already includes.",
+  "detail": "If vector A is ≤ B in every slot, A happened before B and B can replace it. If neither is ≤ the other, the writes were concurrent: keep both. Riak calls them dotted version vectors.",
+  "design": "They detect concurrency exactly, without trusting clocks. The price: your application must merge the siblings they produce.",
+  "match": [
+   "version vector",
+   "version vectors",
+   "vector clock",
+   "vector clocks"
+  ],
+  "related": [
+   "sibling",
+   "causal-consistency",
+   "conflict-resolution"
+  ]
+ },
+ {
+  "id": "sibling",
+  "term": "Sibling",
+  "short": "One of several concurrent versions of the same key, kept side by side until someone merges them.",
+  "detail": "A read returns all siblings; the application merges them and writes back with the combined version vector, which supersedes them all. Merging carts by union brings deleted items back.",
+  "design": "Siblings move conflict resolution into your code, where business rules live. Write the merge function deliberately; a naive union or \"pick one\" just reinvents data loss.",
+  "match": [
+   "sibling",
+   "siblings"
+  ],
+  "related": [
+   "version-vector",
+   "conflict-resolution",
+   "crdt"
+  ]
+ },
+ {
+  "id": "crdt",
+  "term": "CRDT",
+  "short": "A conflict-free replicated data type: a data structure whose concurrent updates always merge to the same result.",
+  "detail": "Counters keep one count per replica and add them up; an observed-remove set tags every add and removes only the tags it has seen, so a concurrent re-add survives. Riak, Redis Enterprise, Automerge and Yjs use them.",
+  "design": "Reach for a CRDT when the data fits one (counters, sets, maps, text) and you want multi-region writes with no merge code and no lost updates.",
+  "match": [
+   "CRDT",
+   "CRDTs",
+   "OR-set",
+   "observed-remove set",
+   "tombstone",
+   "tombstones"
+  ],
+  "related": [
+   "eventual-consistency",
+   "sibling",
+   "multi-leader"
+  ]
+ },
+ {
+  "id": "multi-leader",
+  "term": "Multi-leader replication",
+  "short": "Several nodes (often one per region) accept writes and replicate to each other.",
+  "detail": "Writes are fast and local and each region survives on its own when the link is cut. Two regions can change the same record at the same time, so conflicts are certain, not rare.",
+  "design": "Avoid conflicts first: give each record a home region and send its writes there. Only accept true multi-leader writes for data with a sound merge rule.",
+  "match": [
+   "multi-leader",
+   "multi leader",
+   "active-active",
+   "multi-region"
+  ],
+  "related": [
+   "conflict-resolution",
+   "last-write-wins",
+   "crdt"
+  ]
+ },
+ {
+  "id": "conflict-resolution",
+  "term": "Conflict resolution",
+  "short": "Deciding what the value is when two replicas accepted different writes to the same thing.",
+  "detail": "Options: avoid conflicts (single home per record), last-write-wins (lose one), keep siblings for the app (version vectors), or use a data type that merges itself (CRDTs).",
+  "design": "Pick it per data type, from the business meaning: carts merge, counters add, balances must never conflict (use a single leader or consensus for those).",
+  "match": [
+   "conflict resolution",
+   "conflict",
+   "conflicts",
+   "concurrent writes",
+   "concurrent"
+  ],
+  "related": [
+   "last-write-wins",
+   "version-vector",
+   "crdt"
+  ]
+ },
+ {
+  "id": "cap-pacelc",
+  "term": "CAP and PACELC",
+  "short": "During a network partition you choose consistency or availability; otherwise you choose latency or consistency.",
+  "detail": "CAP covers only the partition case. PACELC adds the everyday trade-off: if Partitioned, Availability vs Consistency; Else, Latency vs Consistency. Sync vs async replication is exactly the \"else\" choice.",
+  "design": "Classify each store you use: Postgres with async replicas is PC/EL-ish, Cassandra at ONE is PA/EL, Spanner is PC/EC. Then decide per feature which side you need.",
+  "match": [
+   "CAP",
+   "PACELC",
+   "partition",
+   "partitioned",
+   "network partition"
+  ],
+  "related": [
+   "linearizability",
+   "sloppy-quorum",
+   "sync-replication"
+  ]
+ },
+ {
+  "id": "version-token",
+  "term": "Version token (minimum LSN)",
+  "short": "A position the client got from its last write or read and sends with the next read: \"don't answer with anything older\".",
+  "detail": "A replica behind the token waits until it has replayed that far, or the read goes elsewhere. Postgres: compare `pg_last_wal_replay_lsn()`; MySQL: `WAIT_FOR_EXECUTED_GTID_SET`; MongoDB: `afterClusterTime`.",
+  "design": "Gives read-your-writes and monotonic reads without sending reads to the primary. Pass the token between services (in a header or cookie) to get it across a whole request path.",
+  "match": [
+   "version token",
+   "min lsn",
+   "minimum LSN",
+   "causality token",
+   "token"
+  ],
+  "related": [
+   "lsn",
+   "read-your-writes",
+   "monotonic-reads"
+  ]
+ },
+ {
+  "id": "sticky-replica",
+  "term": "Sticky replica",
+  "short": "Always send a given user's reads to the same replica, by hashing their user id.",
+  "detail": "A single replica only moves forward, so the user never sees time go backwards. It doesn't help read-your-writes: that replica may not have the user's latest write yet.",
+  "design": "Cheap monotonic reads. When the pinned replica dies the user moves to another and can still go backwards once; combine with a version token for a full fix.",
+  "match": [
+   "sticky replica",
+   "sticky replicas",
+   "sticky",
+   "pinned"
+  ],
+  "related": [
+   "monotonic-reads",
+   "version-token"
+  ]
+ }
+]

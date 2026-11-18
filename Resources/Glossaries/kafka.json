@@ -1,0 +1,813 @@
+[
+ {
+  "id": "topic",
+  "term": "Topic",
+  "short": "A named stream of records, like `orders`, split into one or more partitions.",
+  "detail": "A topic is a name for a set of partition logs. Producers write to the topic and the partitioner picks the partition; consumers subscribe to the topic and get partitions assigned. Partition count, replication factor and retention are set per topic.",
+  "design": "Model a topic around one kind of event with one schema and one retention policy. The partition count you pick at creation caps consumer parallelism and is painful to change later, because keys move.",
+  "match": [
+   "topic",
+   "topics"
+  ],
+  "related": [
+   "partition",
+   "retention",
+   "consumer-group"
+  ]
+ },
+ {
+  "id": "partition",
+  "term": "Partition",
+  "short": "One ordered, append-only log inside a topic. It is the unit of ordering, of parallelism and of replication.",
+  "detail": "Each partition has its own offsets starting at 0, lives on a leader broker with follower copies, and is read by exactly one consumer per group. Order is guaranteed within a partition, never across partitions.",
+  "design": "Size partitions for peak consumer parallelism plus headroom: you can add partitions but never remove them, and adding remaps keys. Very high counts cost broker memory, file handles and failover time, so don't default to thousands.",
+  "match": [
+   "partition",
+   "partitions"
+  ],
+  "related": [
+   "offset",
+   "record-key",
+   "assignment",
+   "leader",
+   "add-partitions"
+  ]
+ },
+ {
+  "id": "offset",
+  "term": "Offset",
+  "short": "A record's position in its partition: 0, 1, 2… assigned by the leader on append.",
+  "detail": "Offsets are per partition, so offset 5 on P0 and offset 5 on P1 are unrelated records. They are never reused, with one exception: an unclean leader election can hand the same offsets to different records. Consumers track progress as an offset, so the broker keeps no per-message delivery state.",
+  "design": "Because a reader's progress is one number per partition, replay and new readers are cheap. Downstream, (topic, partition, offset) makes a natural idempotency key.",
+  "match": [
+   "offset",
+   "offsets"
+  ],
+  "related": [
+   "partition",
+   "committed-offset",
+   "position",
+   "log-end-offset"
+  ]
+ },
+ {
+  "id": "log",
+  "term": "Append-only log",
+  "short": "Records are only ever added at the end and never changed in place. Reading a record does not remove it.",
+  "detail": "A partition is a series of segment files on disk and every write is a sequential append, which is why Kafka is fast on ordinary disks. Records leave only when retention deletes whole old segments (or compaction drops superseded keys).",
+  "design": "A log decouples writers from readers in time: many groups read the same data at their own pace, and history can be replayed after a bug fix. That is the core difference from a queue like RabbitMQ, where an acked message is gone.",
+  "match": [
+   "append-only log",
+   "append-only",
+   "commit log",
+   "append",
+   "appends",
+   "appended"
+  ],
+  "related": [
+   "segment",
+   "retention",
+   "offset"
+  ]
+ },
+ {
+  "id": "record-key",
+  "term": "Record key",
+  "short": "An optional value on each record (here `amy`, `ben`, `cleo`) that decides which partition it goes to.",
+  "detail": "Records with the same key hash to the same partition as long as the partition count stays the same, so they are stored and read in the order they were produced. A null key means \"no ordering needed\", and the sticky partitioner spreads those records.",
+  "design": "Pick the key as the entity whose events must stay in order: order id, account id, device id. The key also decides load spread, so an entity with skewed traffic becomes a hot partition.",
+  "match": [
+   "record key",
+   "key",
+   "keys",
+   "keyed"
+  ],
+  "related": [
+   "partitioner",
+   "ordering",
+   "hot-key",
+   "sticky-partitioner"
+  ]
+ },
+ {
+  "id": "partitioner",
+  "term": "Default partitioner (murmur2)",
+  "short": "The producer-side function that maps a keyed record to a partition: `murmur2(key) % partitions`.",
+  "detail": "The Java client hashes the key bytes with murmur2, clears the sign bit and takes the remainder by the partition count. Other clients may hash differently (librdkafka defaults to a CRC32-based partitioner), so the same key can land on different partitions.",
+  "design": "Producers in different languages writing the same keys must use the same partitioner, or one key ends up on two partitions and loses its order. The modulus is also why changing the partition count moves keys.",
+  "match": [
+   "partitioner",
+   "default partitioner",
+   "murmur2",
+   "hash",
+   "hashes",
+   "hashed"
+  ],
+  "related": [
+   "record-key",
+   "sticky-partitioner",
+   "add-partitions"
+  ]
+ },
+ {
+  "id": "sticky-partitioner",
+  "term": "Sticky partitioner (null keys)",
+  "short": "For records without a key, the producer fills one batch for one partition, then switches to another.",
+  "detail": "Since Kafka 2.4 (KIP-480, refined by KIP-794 in 3.3), null-key records stick to one partition until about `batch.size` bytes have gone there, instead of round-robin per record. Fewer, bigger batches mean fewer requests and better compression, and over time the spread is even.",
+  "design": "Use null keys when order doesn't matter and you want throughput. There is no ordering at all between null-key records, so nothing downstream may rely on their arrival order.",
+  "match": [
+   "sticky partitioner",
+   "KIP-794",
+   "null key",
+   "null keys",
+   "null-key",
+   "batch.size",
+   "sticky batches"
+  ],
+  "related": [
+   "partitioner",
+   "record-key",
+   "ordering"
+  ]
+ },
+ {
+  "id": "hot-key",
+  "term": "Hot key (hot partition)",
+  "short": "One key carries a large share of the traffic, so its partition, and the one consumer reading it, become the bottleneck.",
+  "detail": "Every record of a key goes to one partition, and only one consumer per group reads a partition. Adding partitions or consumers does nothing for that key.",
+  "design": "Watch throughput and lag per partition, not only totals. Fix skew at the key: add a suffix (salting) to spread one entity over several partitions and merge downstream, or split the entity, accepting that it loses total order.",
+  "match": [
+   "hot key",
+   "hot keys",
+   "hot partition"
+  ],
+  "related": [
+   "record-key",
+   "partition",
+   "lag"
+  ]
+ },
+ {
+  "id": "add-partitions",
+  "term": "Adding partitions",
+  "short": "A topic's partition count can go up but never down, and going up moves keys to other partitions.",
+  "detail": "The partitioner computes `hash % N`, so a new N sends many keys elsewhere. Records already written stay put, so a moved key has older records on one partition and newer ones on another, and consumers can process them out of order. Every group also rebalances.",
+  "design": "Over-provision partitions at creation for keyed topics. If you must grow, do it when a short ordering glitch is acceptable (pause producers and let consumers drain first), or create a new topic and migrate.",
+  "match": [
+   "adding partitions",
+   "adding a partition",
+   "add a partition",
+   "kafka-topics --alter",
+   "moved key",
+   "remaps keys",
+   "keys move"
+  ],
+  "related": [
+   "partitioner",
+   "ordering",
+   "rebalance"
+  ]
+ },
+ {
+  "id": "ordering",
+  "term": "Ordering (per partition)",
+  "short": "Kafka guarantees order only within one partition. Across partitions there is no order at all.",
+  "detail": "A consumer reads each partition in offset order but interleaves partitions freely. Same key, same partition, same order: that holds while the partition count is unchanged, and across producer retries only with the idempotent producer.",
+  "design": "If business logic needs order, it needs a key that captures the scope of that order. Global order means one partition and therefore one consumer, which is usually the wrong trade.",
+  "match": [
+   "out of order",
+   "ordering",
+   "stay in order",
+   "keeps its order",
+   "unit of ordering"
+  ],
+  "related": [
+   "partition",
+   "record-key",
+   "add-partitions"
+  ]
+ },
+ {
+  "id": "consumer-group",
+  "term": "Consumer group",
+  "short": "A set of consumers sharing one `group.id`. Together they read the topic once: each partition goes to exactly one member.",
+  "detail": "Inside a group, partitions are divided among the members, so it behaves like a work queue. Groups are independent of each other: each has its own committed offsets and its own lag, so every group sees every record (pub/sub).",
+  "design": "Use one group per application or purpose (billing, analytics). A group's useful parallelism is capped by the partition count; members beyond it sit idle as hot standbys.",
+  "match": [
+   "consumer group",
+   "consumer groups",
+   "new group"
+  ],
+  "related": [
+   "assignment",
+   "rebalance",
+   "committed-offset",
+   "group-coordinator"
+  ]
+ },
+ {
+  "id": "group-coordinator",
+  "term": "Group coordinator",
+  "short": "The broker that manages one consumer group: who the members are, rebalances, and the committed offsets.",
+  "detail": "Members send `JoinGroup` and `SyncGroup` during a rebalance, heartbeat to it, and commit offsets to it (stored in the internal `__consumer_offsets` topic). `LeaveGroup` tells it a member is leaving cleanly. In the classic protocol one member computes the assignment; with KIP-848 (Kafka 4) the coordinator does.",
+  "design": "A clean shutdown sends LeaveGroup and rebalances at once; a crash makes the group wait out the session timeout. Close consumers properly on deploys and scale-downs.",
+  "match": [
+   "coordinator",
+   "group coordinator",
+   "LeaveGroup",
+   "JoinGroup",
+   "SyncGroup",
+   "__consumer_offsets"
+  ],
+  "related": [
+   "consumer-group",
+   "session-timeout",
+   "rebalance",
+   "committed-offset"
+  ]
+ },
+ {
+  "id": "assignment",
+  "term": "Partition assignment",
+  "short": "Which member of a group owns which partitions. Each partition has exactly one owner per group.",
+  "detail": "An assignor computes it at every rebalance: range assignment hands out contiguous blocks, sticky assignment keeps members on what they already own. A partition is never split between two members of one group, so with more members than partitions some get nothing.",
+  "design": "Single ownership is what gives you per-key ordering with parallel consumers. Plan capacity per partition: an idle member can't help a slow partition.",
+  "match": [
+   "assignment",
+   "assignor",
+   "assigned",
+   "sit idle",
+   "sits idle"
+  ],
+  "related": [
+   "consumer-group",
+   "rebalance",
+   "rebalance-protocol"
+  ]
+ },
+ {
+  "id": "rebalance",
+  "term": "Rebalance",
+  "short": "The group re-dividing partitions among its members. Triggered when a member joins, leaves or times out, or partitions are added.",
+  "detail": "Members rejoin through the coordinator, a new assignment is computed and handed out, and the generation goes up. A partition that changes owner pauses until the new owner starts from the last committed offset, so uncommitted work is done again.",
+  "design": "Rebalances cost throughput and cause duplicates. Reduce them with cooperative assignors, static membership for rolling restarts, and batches that finish well within `max.poll.interval.ms`; alert on the rebalance rate.",
+  "match": [
+   "rebalance",
+   "rebalances",
+   "rebalancing",
+   "rebalanced"
+  ],
+  "related": [
+   "rebalance-protocol",
+   "generation",
+   "session-timeout",
+   "assignment"
+  ]
+ },
+ {
+  "id": "rebalance-protocol",
+  "term": "Eager vs cooperative rebalancing",
+  "short": "Eager revokes every partition from every member on each rebalance. Cooperative only moves the partitions that change owner.",
+  "detail": "Eager (e.g. `RangeAssignor`) is stop-the-world: every member finishes its batch, gives everything back and waits for the new assignment. Cooperative (`CooperativeStickyAssignor`, or the KIP-848 consumer protocol in Kafka 4) revokes only what moves, and everything else keeps flowing.",
+  "design": "Use cooperative-sticky or KIP-848 for large or autoscaled groups: eager pauses grow with group size and make every scale event a full stop.",
+  "match": [
+   "eager",
+   "eager protocol",
+   "eager rebalancing",
+   "cooperative",
+   "cooperative protocol",
+   "cooperative rebalancing",
+   "cooperative-sticky",
+   "CooperativeStickyAssignor",
+   "RangeAssignor",
+   "KIP-848",
+   "incremental rebalancing"
+  ],
+  "related": [
+   "rebalance",
+   "assignment"
+  ]
+ },
+ {
+  "id": "generation",
+  "term": "Generation",
+  "short": "A counter the coordinator bumps on every completed rebalance, shown on each group as \"generation N\".",
+  "detail": "Commits and heartbeats carry the member's generation, and requests from an older generation are rejected. A member that was kicked out (a \"zombie\" that stalled too long) therefore can't commit offsets for partitions it no longer owns.",
+  "design": "This is fencing by epoch, the same idea as leader epochs: any system that hands out ownership needs a number that lets it reject the previous owner. Expect `CommitFailedException` after a long pause and treat that batch as uncommitted.",
+  "match": [
+   "generation"
+  ],
+  "related": [
+   "rebalance",
+   "leader-epoch",
+   "group-coordinator"
+  ]
+ },
+ {
+  "id": "session-timeout",
+  "term": "Heartbeats and session timeout",
+  "short": "Members send heartbeats to prove they are alive. If none arrive within the session timeout, the member is declared dead.",
+  "detail": "Consumers heartbeat to the group coordinator; after `session.timeout.ms` (45 s by default) of silence it removes the member and rebalances. Brokers heartbeat to the controller the same way (`broker.session.timeout.ms`, 9 s by default). `max.poll.interval.ms` separately catches a consumer that heartbeats but is stuck between polls.",
+  "design": "Short timeouts detect crashes fast but kick members out during GC pauses or slow batches; long ones leave partitions unread that long after a crash. Static membership (`group.instance.id`) lets a restarted pod reclaim its partitions without a rebalance.",
+  "match": [
+   "session.timeout.ms",
+   "session timeout",
+   "session times out",
+   "session timed out",
+   "timed out",
+   "heartbeat",
+   "heartbeats",
+   "heartbeating",
+   "broker.session.timeout.ms",
+   "group.instance.id",
+   "static membership"
+  ],
+  "related": [
+   "group-coordinator",
+   "rebalance",
+   "controller"
+  ]
+ },
+ {
+  "id": "fetch",
+  "term": "Fetch and poll()",
+  "short": "Kafka readers pull: they ask a partition leader for records from a given offset, instead of the broker pushing to them.",
+  "detail": "A consumer calls `poll()`, which sends fetch requests and returns a batch. Followers copy the leader's log with the very same fetch request. `consumer.pause()` stops fetching while the consumer keeps heartbeating.",
+  "design": "Pull gives natural backpressure: a slow consumer falls behind (lag) instead of being flooded. Bound the work per `poll()` (`max.poll.records`) so a batch always finishes within `max.poll.interval.ms`.",
+  "match": [
+   "fetch",
+   "fetches",
+   "fetching",
+   "fetched",
+   "poll()",
+   "poll",
+   "max.poll.interval.ms",
+   "consumer.pause()",
+   "pull",
+   "pulls",
+   "long-polling"
+  ],
+  "related": [
+   "position",
+   "lag",
+   "leader"
+  ]
+ },
+ {
+  "id": "committed-offset",
+  "term": "Committed offset",
+  "short": "The offset a group has saved as \"processed up to here\" for a partition. A new owner starts there after a crash or rebalance.",
+  "detail": "It is the next offset to read, stored by the coordinator in `__consumer_offsets`. It only moves when the consumer commits (auto-commit, `commitSync()` or `commitAsync()`), so it usually trails what was actually processed. On the stage it is the tick on each group's lane.",
+  "design": "Where you commit relative to your side effects is your delivery guarantee: after them for at-least-once, before them for at-most-once. For effectively-once, store the offset in the same transaction as the result.",
+  "match": [
+   "committed offset",
+   "committed offsets",
+   "commit",
+   "commits",
+   "commitSync()",
+   "commitAsync()",
+   "last commit",
+   "committing"
+  ],
+  "related": [
+   "position",
+   "auto-commit",
+   "at-least-once",
+   "at-most-once",
+   "lag"
+  ]
+ },
+ {
+  "id": "position",
+  "term": "Position",
+  "short": "The next offset a consumer will fetch. It lives only in the consumer's memory and runs ahead of the committed offset.",
+  "detail": "Each `poll()` moves the position past what it returned. If the consumer crashes the position is lost, and the next owner starts at the committed offset, so whatever lies between the two is processed again (or, if the commit ran ahead, skipped).",
+  "design": "The gap between position and committed offset is exactly what a crash replays. Commit often enough that redoing that gap is cheap.",
+  "match": [
+   "position",
+   "positions"
+  ],
+  "related": [
+   "committed-offset",
+   "fetch",
+   "lag"
+  ]
+ },
+ {
+  "id": "lag",
+  "term": "Lag",
+  "short": "How far a reader is behind the end of the log. For a consumer group: log end offset minus committed offset, per partition.",
+  "detail": "Consumer lag grows when producers outpace consumers, during rebalances, and while a partition has no live owner. Followers lag too: the leader tracks how long since each one last caught up and drops it from the ISR after `replica.lag.time.max.ms`.",
+  "design": "Consumer lag is the key health metric of a Kafka pipeline: alert per partition and in time (seconds behind), not only in records. Lag that outlives retention is data loss, because the records are deleted before the group reads them.",
+  "match": [
+   "lag",
+   "consumer lag"
+  ],
+  "related": [
+   "log-end-offset",
+   "committed-offset",
+   "retention",
+   "isr"
+  ]
+ },
+ {
+  "id": "auto-commit",
+  "term": "Auto-commit",
+  "short": "The consumer commits its position on a timer from inside `poll()`, without your code calling commit.",
+  "detail": "`enable.auto.commit=true` (the default) commits every `auto.commit.interval.ms` (5 s). The commit runs in a later `poll()`, after your code has had the previous batch, so it is at-least-once as long as you finish processing before polling again.",
+  "design": "Fine for simple loops that process synchronously. If you hand records to other threads or buffer them, auto-commit can commit records that were never processed: switch to manual commits.",
+  "match": [
+   "auto-commit",
+   "auto-commits",
+   "auto-committed",
+   "enable.auto.commit",
+   "enable.auto.commit=true",
+   "auto.commit.interval.ms"
+  ],
+  "related": [
+   "committed-offset",
+   "at-least-once",
+   "fetch"
+  ]
+ },
+ {
+  "id": "at-least-once",
+  "term": "At-least-once",
+  "short": "Every record is processed, but some may be processed more than once.",
+  "detail": "You get it by committing after processing: a crash between the work and the commit makes the next owner start from the older committed offset and do that work again.",
+  "design": "The sane default. Pair it with idempotent processing (upserts, dedupe on topic-partition-offset or a business id) so a replay is harmless.",
+  "match": [
+   "at-least-once",
+   "commit after processing",
+   "commits after processing",
+   "commit after"
+  ],
+  "related": [
+   "at-most-once",
+   "duplicates",
+   "committed-offset"
+  ]
+ },
+ {
+  "id": "at-most-once",
+  "term": "At-most-once",
+  "short": "No record is processed twice, but some may never be processed.",
+  "detail": "You get it by committing before processing: a crash mid-batch leaves the committed offset past records nobody handled. They are still in the log, but the group won't read them unless its offsets are reset.",
+  "design": "Only for data where loss is cheaper than duplicates (sampled metrics, some notifications). Usually at-least-once with idempotent processing is the better deal.",
+  "match": [
+   "at-most-once",
+   "commit before processing",
+   "commit-before-process",
+   "commit before"
+  ],
+  "related": [
+   "at-least-once",
+   "committed-offset",
+   "offset-reset"
+  ]
+ },
+ {
+  "id": "duplicates",
+  "term": "Duplicates and idempotency",
+  "short": "The same record processed (or written) more than once, and the habit that makes it harmless: idempotent processing.",
+  "detail": "Consumers reprocess what was done after the last commit when a crash or rebalance moves a partition. Producers can write a record twice when a retry follows a lost answer, unless the idempotent producer drops the copy. Exactly-once in Kafka needs transactions plus `read_committed` consumers, and covers Kafka-to-Kafka flows only.",
+  "design": "Assume every consumer sees duplicates. Make side effects idempotent: upserts keyed by a business id, a processed-ids table, or the offset stored atomically with the result.",
+  "match": [
+   "duplicates",
+   "duplicate",
+   "processed again",
+   "a second time",
+   "reprocessed",
+   "idempotent",
+   "idempotency",
+   "exactly-once",
+   "read_committed",
+   "transactions"
+  ],
+  "related": [
+   "at-least-once",
+   "idempotent-producer",
+   "committed-offset"
+  ]
+ },
+ {
+  "id": "auto-offset-reset",
+  "term": "auto.offset.reset",
+  "short": "Where a group starts on a partition when it has no valid committed offset: `earliest` (the start of the log) or `latest` (only new records).",
+  "detail": "It applies to a brand-new group, and when the committed offset points at records retention already deleted: the fetch fails with `OffsetOutOfRange` and the policy picks a new start. `latest` is the default.",
+  "design": "Set it on purpose per consumer: `latest` silently skips everything produced before the group first ran, `earliest` can start a huge backfill. A reset after `OffsetOutOfRange` means records were lost to that group, so alert on it.",
+  "match": [
+   "auto.offset.reset",
+   "auto.offset.reset=earliest",
+   "auto.offset.reset=latest",
+   "OffsetOutOfRange",
+   "no committed offset",
+   "no committed offsets"
+  ],
+  "related": [
+   "committed-offset",
+   "retention",
+   "offset-reset"
+  ]
+ },
+ {
+  "id": "offset-reset",
+  "term": "Offset reset (replay)",
+  "short": "Moving a group's committed offsets on purpose, for example back to the earliest, so it processes history again.",
+  "detail": "`kafka-consumer-groups --reset-offsets --to-earliest` (or `--to-datetime`, `--shift-by`) only works on an inactive group, so its members stop first. Other groups are unaffected because each keeps its own offsets.",
+  "design": "Replay is how you recover from a consumer bug or build a new projection, but only within retention and only if processing is idempotent. Write the runbook before you need it.",
+  "match": [
+   "--reset-offsets",
+   "reset-offsets",
+   "offset reset",
+   "reset to the earliest offsets",
+   "to the earliest offsets",
+   "reset to earliest",
+   "offsets are reset",
+   "rewind",
+   "replay",
+   "reprocessing"
+  ],
+  "related": [
+   "committed-offset",
+   "auto-offset-reset",
+   "retention"
+  ]
+ },
+ {
+  "id": "retention",
+  "term": "Retention and the log start offset",
+  "short": "How long a partition keeps records, by time (`retention.ms`, 7 days by default) or size (`retention.bytes`), whether anyone read them or not.",
+  "detail": "Retention deletes whole closed segments, never single records and never the active segment. The first offset still stored is the log start offset; it only moves up, and deleted offsets are never handed out again.",
+  "design": "Retention is your replay window and your consumer-outage budget: if a group can be down for a weekend, retention must cover the weekend plus catch-up. Compacted topics keep the latest record per key instead.",
+  "match": [
+   "retention",
+   "retention.ms",
+   "retention.bytes",
+   "log start offset",
+   "log start"
+  ],
+  "related": [
+   "segment",
+   "auto-offset-reset",
+   "lag",
+   "log"
+  ]
+ },
+ {
+  "id": "segment",
+  "term": "Log segment",
+  "short": "A partition is stored as a series of files called segments. New records go into the active segment; full ones are closed.",
+  "detail": "A segment rolls when it reaches `segment.bytes` (1 GiB by default) or `segment.ms` of age. Retention and compaction only touch closed segments. Here each segment holds 5 records (the dashed lines on the logs).",
+  "design": "Retention is only as precise as the segment size: a quiet topic with big segments keeps data far longer than `retention.ms` says. Lower `segment.ms` on topics with strict deletion rules (GDPR).",
+  "match": [
+   "segment",
+   "segments",
+   "active segment",
+   "closed segment",
+   "closed segments"
+  ],
+  "related": [
+   "retention",
+   "log"
+  ]
+ },
+ {
+  "id": "log-end-offset",
+  "term": "Log end offset (LEO)",
+  "short": "The offset the next record will get: one past the last record in a replica's log.",
+  "detail": "Every replica has its own LEO. The leader's is the newest write; a follower's trails until it fetches. The high watermark is the smallest LEO among the in-sync replicas.",
+  "design": "The gap between the leader's LEO and the high watermark is data written but not yet safe. If it stays large, a slow follower is holding back acks=all writes and consumers.",
+  "match": [
+   "log end offset",
+   "log end",
+   "LEO"
+  ],
+  "related": [
+   "high-watermark",
+   "lag",
+   "offset"
+  ]
+ },
+ {
+  "id": "replica",
+  "term": "Broker and replica",
+  "short": "A broker is one Kafka server. Each partition is copied to several brokers, and each copy is a replica.",
+  "detail": "The replication factor (3 here, the usual production choice) sets how many copies exist. One replica is the leader and handles writes (and by default reads); the others are followers that copy it.",
+  "design": "Replication factor 3 with replicas spread across racks or availability zones (`broker.rack`) survives losing a zone. With factor 2 you can't have both durability and availability through a single failure.",
+  "match": [
+   "replica",
+   "replicas",
+   "broker",
+   "brokers",
+   "replication factor",
+   "replicated",
+   "replication"
+  ],
+  "related": [
+   "leader",
+   "isr",
+   "controller"
+  ]
+ },
+ {
+  "id": "leader",
+  "term": "Leader and followers",
+  "short": "Each partition has one leader replica that takes all writes and reads. Followers copy its log by fetching from it.",
+  "detail": "Followers send fetch requests just like consumers and append what they get. When the leader dies, the controller promotes a follower, normally one from the ISR, which becomes the new source of truth.",
+  "design": "All traffic for a partition hits its leader, so leaders must be balanced across brokers (preferred leader election does this). A follower only helps failover if it is in sync.",
+  "match": [
+   "leader",
+   "leaders",
+   "follower",
+   "followers",
+   "leads"
+  ],
+  "related": [
+   "replica",
+   "isr",
+   "controller",
+   "leader-epoch"
+  ]
+ },
+ {
+  "id": "controller",
+  "term": "Controller and leader election",
+  "short": "The cluster's brain (a KRaft quorum, formerly ZooKeeper) that tracks which brokers are alive and elects partition leaders.",
+  "detail": "Brokers heartbeat to the controller. When one goes silent past `broker.session.timeout.ms`, the controller fences it, removes it from every ISR and elects a new leader from the remaining ISR, bumping the leader epoch. Until then the partition has no working leader.",
+  "design": "Failover takes detection timeout plus election plus clients refreshing metadata: seconds, not zero. Producers buffer and retry through it, so size `delivery.timeout.ms` and buffers for it.",
+  "match": [
+   "controller",
+   "KRaft",
+   "fenced",
+   "fences",
+   "fencing",
+   "leader election",
+   "election",
+   "elections",
+   "elected",
+   "elects"
+  ],
+  "related": [
+   "leader",
+   "isr",
+   "leader-epoch",
+   "unclean-leader-election",
+   "session-timeout"
+  ]
+ },
+ {
+  "id": "isr",
+  "term": "In-sync replicas (ISR)",
+  "short": "The replicas that are caught up with the leader. Only they count for acks=all, and only they can become leader cleanly.",
+  "detail": "A follower stays in the ISR while it keeps up. If it hasn't caught up for `replica.lag.time.max.ms` (30 s by default) the leader drops it, and it rejoins once it reaches the high watermark. A dead broker leaves the ISR when the controller fences it.",
+  "design": "A shrinking ISR is an early warning: alert on under-replicated partitions. Durability is only as good as the ISR at the moment of the write, which is what `min.insync.replicas` guards.",
+  "match": [
+   "ISR",
+   "in-sync replica",
+   "in-sync replicas",
+   "in sync",
+   "in-sync",
+   "out of sync",
+   "out-of-sync",
+   "replica.lag.time.max.ms"
+  ],
+  "related": [
+   "min-insync-replicas",
+   "high-watermark",
+   "acks",
+   "leader"
+  ]
+ },
+ {
+  "id": "high-watermark",
+  "term": "High watermark (HW)",
+  "short": "The offset up to which every in-sync replica has the data. Records below it are committed, and consumers only read below it.",
+  "detail": "The leader moves the HW forward as followers report their LEO in fetch requests. A record above the HW exists on only some replicas and can vanish in a failover; below it, it survives any clean leader change.",
+  "design": "This is why consumers never see data that later disappears, and why one slow ISR member delays consumers as well as acks=all producers. Unclean election is the one way the HW goes backwards.",
+  "match": [
+   "high watermark",
+   "HW",
+   "committed record",
+   "committed records",
+   "committed data"
+  ],
+  "related": [
+   "isr",
+   "log-end-offset",
+   "acks",
+   "unclean-leader-election"
+  ]
+ },
+ {
+  "id": "acks",
+  "term": "Producer acks",
+  "short": "How many replicas must have a record before the producer hears \"ok\": `0` (none), `1` (the leader) or `all` (every in-sync replica).",
+  "detail": "acks=0 never waits for an answer. acks=1 answers once the leader has written the record, so a leader crash before the followers copy it loses an acknowledged write. acks=all answers once the high watermark passes the record, with `min.insync.replicas` as a floor; it is the default since Kafka 3.0.",
+  "design": "Use acks=all with min.insync.replicas=2 and replication factor 3 for anything you can't lose; the cost is a few ms of replication latency. acks=1 or 0 only for data you would shrug off losing.",
+  "match": [
+   "acks",
+   "acks=0",
+   "acks=1",
+   "acks=all",
+   "fire and forget",
+   "acknowledged",
+   "acknowledgement"
+  ],
+  "related": [
+   "min-insync-replicas",
+   "isr",
+   "high-watermark",
+   "idempotent-producer"
+  ]
+ },
+ {
+  "id": "min-insync-replicas",
+  "term": "min.insync.replicas",
+  "short": "The smallest ISR that may accept an acks=all write. Below it, the leader refuses writes with `NOT_ENOUGH_REPLICAS`.",
+  "detail": "It only affects acks=all producers. If the ISR shrinks after a record was appended but before it was replicated, the producer gets `NOT_ENOUGH_REPLICAS_AFTER_APPEND` although the record is in the leader's log.",
+  "design": "Replication factor 3 with min ISR 2 tolerates one broker down without losing acknowledged writes or refusing new ones. Min ISR equal to the replication factor stops writes on any single outage; min ISR 1 makes acks=all no safer than acks=1 once the ISR shrinks.",
+  "match": [
+   "min.insync.replicas",
+   "min.insync.replicas=1",
+   "min.insync.replicas=2",
+   "min.insync.replicas=3",
+   "min ISR",
+   "NOT_ENOUGH_REPLICAS",
+   "NOT_ENOUGH_REPLICAS_AFTER_APPEND"
+  ],
+  "related": [
+   "isr",
+   "acks",
+   "replica"
+  ]
+ },
+ {
+  "id": "unclean-leader-election",
+  "term": "Unclean leader election",
+  "short": "Letting an out-of-sync replica become leader when no in-sync one is alive. The partition comes back, but committed records are lost.",
+  "detail": "With it off (the default) the partition stays offline, with no writes and no reads, until an ISR member returns. With `unclean.leader.election.enable=true` a lagging replica takes over, the high watermark can go backwards and the same offsets are reused for different records.",
+  "design": "A per-topic choice between availability and durability. Keep it off for anything financial or event-sourced; consider it only where being up beats being right (metrics, logs).",
+  "match": [
+   "unclean leader election",
+   "unclean election",
+   "unclean",
+   "unclean.leader.election.enable",
+   "unclean.leader.election.enable=true",
+   "unclean.leader.election.enable=false",
+   "offline"
+  ],
+  "related": [
+   "isr",
+   "high-watermark",
+   "controller"
+  ]
+ },
+ {
+  "id": "leader-epoch",
+  "term": "Leader epoch and truncation",
+  "short": "A number bumped on every leader election and stamped on each record (the colours here). Replicas use it to find where their log diverged.",
+  "detail": "A returning replica asks the leader where its last epoch ended (`OffsetsForLeaderEpoch`), truncates everything after that point and fetches the leader's version. This replaced high-watermark truncation (KIP-101, KIP-279), which could lose or diverge data. Requests carrying an older epoch are rejected, which fences a deposed leader.",
+  "design": "Truncation only cuts records that never reached the whole ISR, so with acks=all nothing acknowledged is lost; with acks=1 it is exactly how acknowledged writes disappear.",
+  "match": [
+   "leader epoch",
+   "leader epochs",
+   "epoch",
+   "OffsetsForLeaderEpoch",
+   "truncate",
+   "truncates",
+   "truncated",
+   "truncation",
+   "KIP-101"
+  ],
+  "related": [
+   "controller",
+   "high-watermark",
+   "generation",
+   "acks"
+  ]
+ },
+ {
+  "id": "idempotent-producer",
+  "term": "Producer retries and idempotence",
+  "short": "The producer buffers records and retries failed sends; idempotence stops those retries from writing duplicates.",
+  "detail": "Retries go on until `delivery.timeout.ms` (2 min by default). With `enable.idempotence=true` (the default since Kafka 3.0) each record carries a producer id and sequence number, so the leader drops a retry it already has and keeps per-partition order.",
+  "design": "Leave idempotence on and retries high, and handle the final failure in your send callback: after `delivery.timeout.ms` the record is dropped and only your code knows.",
+  "match": [
+   "idempotent producer",
+   "producer is idempotent",
+   "enable.idempotence",
+   "retries",
+   "retry",
+   "retrying",
+   "delivery.timeout.ms",
+   "buffered",
+   "buffers"
+  ],
+  "related": [
+   "acks",
+   "duplicates",
+   "ordering"
+  ]
+ }
+]

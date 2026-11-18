@@ -1,0 +1,781 @@
+[
+ {
+  "id": "goroutine",
+  "term": "Goroutine (G)",
+  "short": "A function running concurrently, managed by the Go runtime instead of the OS. Each G is a small stack plus saved registers.",
+  "detail": "`go f()` calls `newproc`, which allocates a G with a 2 KB stack (it grows by copying when needed) and puts it in the current P’s `runnext`. No thread is created: the scheduler multiplexes many Gs onto a few threads.",
+  "design": "Cheap enough for one per request or connection, but not free: each one holds its stack and everything it references. Bound fan-out (worker pools, `errgroup.SetLimit`, semaphores) and give every goroutine a way to exit (context cancellation).",
+  "match": [
+   "goroutine",
+   "goroutines",
+   "newproc",
+   "go statement"
+  ],
+  "related": [
+   "m",
+   "p",
+   "runnext",
+   "g-status",
+   "goroutine-leak"
+  ]
+ },
+ {
+  "id": "m",
+  "term": "M (machine, OS thread)",
+  "short": "An operating-system thread. Go code runs on Ms, but an M may only run Go code while it holds a P.",
+  "detail": "Ms are created on demand (`newm`) and parked when idle rather than destroyed. An M blocked in a syscall or cgo call keeps its G but not its P, so the number of Ms can be well above GOMAXPROCS.",
+  "design": "Thread count is a resource to watch: every blocking syscall or cgo call in flight pins one, the default limit is 10,000 (`debug.SetMaxThreads`), and threads are rarely given back, so a spike leaves memory behind. The `threadcreate` profile shows where they came from.",
+  "match": [
+   "OS thread",
+   "OS threads",
+   "thread",
+   "threads"
+  ],
+  "related": [
+   "p",
+   "idle-m",
+   "blocking-syscall",
+   "spinning-m"
+  ]
+ },
+ {
+  "id": "p",
+  "term": "P (processor)",
+  "short": "A scheduling context: the right to run Go code. There are exactly GOMAXPROCS of them.",
+  "detail": "Each P owns a local run queue of 256 Gs, a `runnext` slot, a memory allocator cache and timers. An M must hold a P to run Gs; when its G blocks in a syscall, the P can be taken away and given to another M.",
+  "design": "Ps, not threads, bound how much Go code runs in parallel. Per-P state is what keeps the scheduler and allocator mostly lock-free, and why more Ps than real CPUs only adds contention.",
+  "match": [
+   "Ps",
+   "processor",
+   "processors"
+  ],
+  "related": [
+   "gomaxprocs",
+   "m",
+   "local-runq",
+   "runnext",
+   "p-status"
+  ]
+ },
+ {
+  "id": "gomaxprocs",
+  "term": "GOMAXPROCS",
+  "short": "The number of Ps, so the most goroutines that can be running Go code at the same instant.",
+  "detail": "It defaults to the number of CPUs; since Go 1.25 it also respects the container’s CPU limit and follows it when it changes. Setting it at runtime (`runtime.GOMAXPROCS(n)`) stops the world and resizes the P list.",
+  "design": "In containers on Go before 1.25 it defaulted to the host’s CPU count, which caused CPU throttling and tail-latency spikes under a CPU quota: set it to the quota (or use `automaxprocs`). It limits parallel Go code, not goroutines and not threads.",
+  "match": [
+   "GOMAXPROCS",
+   "runtime.GOMAXPROCS"
+  ],
+  "related": [
+   "p",
+   "procresize",
+   "m"
+  ]
+ },
+ {
+  "id": "local-runq",
+  "term": "Local run queue",
+  "short": "Each P’s own queue of runnable goroutines: a fixed ring of 256 slots.",
+  "detail": "Only the owning P adds to it (at the tail) and takes from it (at the head), without a lock; other Ps steal from it with atomic operations. When it is full, `runqputslow` moves half of it plus the new G to the global run queue in one batch.",
+  "design": "Per-P queues are why scheduling cost doesn’t grow with core count. The price is imbalance between Ps, which work stealing corrects; `GODEBUG=schedtrace=1000` prints every P’s queue length if you suspect it.",
+  "match": [
+   "local run queue",
+   "local run queues",
+   "local queue",
+   "local queues",
+   "runq",
+   "runqput",
+   "runqputslow"
+  ],
+  "related": [
+   "runnext",
+   "global-runq",
+   "work-stealing",
+   "p"
+  ]
+ },
+ {
+  "id": "runnext",
+  "term": "runnext",
+  "short": "A one-G slot on each P for the goroutine that should run next, ahead of the local queue.",
+  "detail": "A new G from `go f()`, or one woken by the running G (`goready`, for example after a channel send), goes into `runnext` and pushes the previous occupant to the tail of the local queue. It inherits the remaining time slice instead of starting a new one.",
+  "design": "It keeps producer and consumer on one P with warm caches, which cuts latency in request/response patterns. Because it shares the time slice, two goroutines ping-ponging through `runnext` can’t starve the rest of the queue.",
+  "match": [
+   "runnext"
+  ],
+  "related": [
+   "local-runq",
+   "time-slice",
+   "gopark",
+   "goroutine"
+  ]
+ },
+ {
+  "id": "global-runq",
+  "term": "Global run queue",
+  "short": "One queue shared by all Ps, protected by the scheduler lock (`sched.runq`).",
+  "detail": "Preempted goroutines, `Gosched` callers, Gs coming back from a syscall with no P free, and overflow from full local queues land here. A P with nothing local takes a batch with `globrunqget`: len/GOMAXPROCS + 1, so the work spreads over the Ps.",
+  "design": "Because it needs a lock, the runtime touches it as little as possible, and the every-61st-tick check makes sure it still drains under load. A long global queue in schedtrace (`runqueue=`) means more runnable work than Ps.",
+  "match": [
+   "global run queue",
+   "global queue",
+   "sched.runq",
+   "globrunqget",
+   "globrunqput"
+  ],
+  "related": [
+   "local-runq",
+   "schedtick",
+   "preemption",
+   "gosched"
+  ]
+ },
+ {
+  "id": "schedtick",
+  "term": "schedtick and the 1-in-61 check",
+  "short": "A per-P counter of scheduling rounds. On every 61st, the P checks the global run queue before its own.",
+  "detail": "Without it, two goroutines that keep waking each other could keep a P busy from its local queue forever while Gs in the global queue never run. 61 is just a small prime: often enough for fairness, rare enough to keep the global lock cold.",
+  "design": "A general scheduler rule in miniature: a fast path (local, lock-free) needs a periodic fairness check against the slow path, or the slow path starves.",
+  "match": [
+   "schedtick",
+   "multiple of 61",
+   "every 61st",
+   "1 in 61"
+  ],
+  "related": [
+   "global-runq",
+   "find-runnable"
+  ]
+ },
+ {
+  "id": "find-runnable",
+  "term": "findRunnable",
+  "short": "What an M runs to find its next goroutine, trying the cheapest sources first.",
+  "detail": "In order: the global queue on every 61st tick, then `runnext`, the local queue, a batch from the global queue, a non-blocking network poll, and finally stealing from other Ps. Only when all of that finds nothing does the M release its P and park.",
+  "design": "The order explains what you see in traces: local work wins for locality, global work and network events are picked up when a P runs dry, and idle Ps go looking for work instead of waiting to be given it.",
+  "match": [
+   "findRunnable",
+   "schedule()"
+  ],
+  "related": [
+   "schedtick",
+   "work-stealing",
+   "netpoller",
+   "spinning-m"
+  ]
+ },
+ {
+  "id": "work-stealing",
+  "term": "Work stealing",
+  "short": "An idle P takes half of another P’s local run queue, so work spreads over all CPUs.",
+  "detail": "The thief visits the other Ps in random order and grabs half of the first non-empty queue, from its head. On its last attempt it may also take a busy P’s `runnext`, after a 3 µs pause in case the owner was about to run it.",
+  "design": "Load balancing without a central dispatcher: no coordination until someone runs dry. It also means goroutines move between threads and CPUs, so never rely on thread identity; use `runtime.LockOSThread` when a C library or OS feature needs it.",
+  "match": [
+   "work stealing",
+   "steal",
+   "steals",
+   "stealing",
+   "stole",
+   "stolen"
+  ],
+  "related": [
+   "spinning-m",
+   "local-runq",
+   "find-runnable",
+   "wakep"
+  ]
+ },
+ {
+  "id": "spinning-m",
+  "term": "Spinning M",
+  "short": "A thread holding a P that has run out of work and is actively looking for more (queues, netpoller, stealing) before it goes to sleep.",
+  "detail": "Spinning burns a little CPU so new work is picked up in microseconds instead of waiting for a sleeping thread to wake. The runtime caps it: `wakep` starts a spinner only if none is spinning, and at most about half the busy Ps may spin.",
+  "design": "Shows up in CPU profiles as `runtime.findRunnable` and `stealWork` in programs with many short bursts of goroutines. It trades CPU for latency, and a very high GOMAXPROCS on a bursty workload makes it more visible.",
+  "match": [
+   "spinning",
+   "spinning M",
+   "spinning Ms",
+   "spinning thread",
+   "spun",
+   "spins"
+  ],
+  "related": [
+   "wakep",
+   "work-stealing",
+   "m",
+   "idle-m"
+  ]
+ },
+ {
+  "id": "wakep",
+  "term": "wakep",
+  "short": "Wakes an idle P with a spinning thread when new work appears, so it can come and take some.",
+  "detail": "Called when a goroutine becomes runnable (`go f()`, `goready`) and when a spinner finds work. It does nothing if a thread is already spinning: that one will find the work and wake the next, which avoids a thundering herd of threads waking for one goroutine.",
+  "design": "The runtime ramps parallelism up one thread at a time as work appears instead of waking every core at once, so a burst of goroutines fans out over the Ps within microseconds, not instantly.",
+  "match": [
+   "wakep",
+   "wakep()",
+   "thundering herd"
+  ],
+  "related": [
+   "spinning-m",
+   "work-stealing",
+   "idle-m"
+  ]
+ },
+ {
+  "id": "sysmon",
+  "term": "sysmon",
+  "short": "A runtime thread with no P that wakes up periodically to watch over the scheduler.",
+  "detail": "It sleeps 20 µs at first, backing off to 10 ms when idle. Each tick it preempts goroutines that have run for 10 ms, retakes Ps stuck in syscalls and hands them off, and polls the network if nobody has for 10 ms. It also forces a GC if none has run for two minutes.",
+  "design": "Because it needs no P, it keeps working when every P is busy or stuck, which is what makes preemption and syscall handoff possible. When nothing runs it sleeps too, so an idle Go program costs nothing.",
+  "match": [
+   "sysmon"
+  ],
+  "related": [
+   "preemption",
+   "handoffp",
+   "netpoller",
+   "time-slice"
+  ]
+ },
+ {
+  "id": "time-slice",
+  "term": "Time slice",
+  "short": "How long a goroutine may run before the scheduler preempts it: 10 ms (`forcePreemptNS`).",
+  "detail": "sysmon checks every running G; one that has run 10 ms without yielding is preempted and goes to the global run queue. A G that started from `runnext` shares the slice of the G before it.",
+  "design": "A runnable goroutine can wait roughly 10 ms for every CPU-bound goroutine ahead of it, so a few CPU hogs add tail latency to everything on their Ps. In latency-sensitive services, run heavy CPU work in a bounded pool smaller than GOMAXPROCS.",
+  "match": [
+   "time slice",
+   "time slices",
+   "forcePreemptNS",
+   "10 ms slices",
+   "slice bar"
+  ],
+  "related": [
+   "preemption",
+   "sysmon",
+   "runnext"
+  ]
+ },
+ {
+  "id": "preemption",
+  "term": "Preemption (cooperative and async)",
+  "short": "Stopping a running goroutine so others get the CPU, without it asking to stop.",
+  "detail": "Cooperative: sysmon sets the G’s preempt flag (`preemptone`) and the G notices in its next function prologue. Async (Go 1.14+): `preemptM` sends the thread a `SIGURG` and the signal handler stops the G at almost any instruction. Either way it goes to the back of the global run queue.",
+  "design": "Async preemption means a loop without function calls can no longer freeze a P or hold up a GC stop-the-world for seconds. It also makes interrupted syscalls (`EINTR`) more common, so code that calls C or raw syscalls must retry them.",
+  "match": [
+   "preemption",
+   "preempt",
+   "preempted",
+   "preempts",
+   "preemptone",
+   "preempt flag",
+   "preemptM",
+   "SIGURG",
+   "async preemption",
+   "asynchronous preemption",
+   "cooperative preemption",
+   "preemption points",
+   "safe point"
+  ],
+  "related": [
+   "time-slice",
+   "asyncpreemptoff",
+   "sysmon",
+   "gosched"
+  ]
+ },
+ {
+  "id": "asyncpreemptoff",
+  "term": "Tight loops and asyncpreemptoff",
+  "short": "A loop with no function calls never reaches a preemption check; with `GODEBUG=asyncpreemptoff=1` nothing can stop it.",
+  "detail": "Cooperative preemption relies on the check in function prologues. `for i := 0; i < n; i++ {}` never reaches one, so before Go 1.14, or with async preemption off, it keeps its P until it finishes while every other G on that P waits.",
+  "design": "Turn async preemption off only to debug signal problems (surprise `EINTR`s, cgo libraries that mishandle signals). If one goroutine monopolises a P, look for a hot loop without calls.",
+  "match": [
+   "asyncpreemptoff",
+   "asyncpreemptoff=1",
+   "GODEBUG=asyncpreemptoff=1",
+   "tight loop",
+   "tight loops",
+   "no function calls"
+  ],
+  "related": [
+   "preemption",
+   "time-slice"
+  ]
+ },
+ {
+  "id": "gosched",
+  "term": "runtime.Gosched()",
+  "short": "A goroutine voluntarily gives up its P: it goes to the global run queue and the P runs something else.",
+  "detail": "The same path as a preemption (`goschedImpl` → `globrunqput`), but requested by the goroutine itself. The G stays runnable and runs again soon.",
+  "design": "Rarely needed in real code, since preemption already guarantees fairness. A `Gosched` in a loop usually hides a busy-wait that should be a channel, a `sync.Cond` or a proper blocking call.",
+  "match": [
+   "Gosched",
+   "Gosched()",
+   "runtime.Gosched",
+   "runtime.Gosched()",
+   "goschedImpl"
+  ],
+  "related": [
+   "preemption",
+   "global-runq"
+  ]
+ },
+ {
+  "id": "blocking-syscall",
+  "term": "Blocking syscall",
+  "short": "A call into the kernel, such as a file read or a cgo call, during which the thread can do nothing else.",
+  "detail": "Unlike sockets, regular files and cgo calls can’t use the netpoller, so the goroutine’s M is stuck in the kernel with it. The runtime compensates by letting another M take the P (a handoff), so other goroutines keep running.",
+  "design": "Every concurrent blocking call pins a thread: 1,000 goroutines reading a slow disk or calling into C means about 1,000 threads. Bound the concurrency of file I/O and cgo yourself; the runtime won’t.",
+  "match": [
+   "blocking syscall",
+   "blocking syscalls",
+   "syscall",
+   "syscalls",
+   "blocking call",
+   "cgo",
+   "cgo call",
+   "cgo calls",
+   "in the kernel"
+  ],
+  "related": [
+   "entersyscall",
+   "handoffp",
+   "m",
+   "netpoller"
+  ]
+ },
+ {
+  "id": "entersyscall",
+  "term": "entersyscall and exitsyscall",
+  "short": "The runtime hooks around every syscall: before it the P is marked `_Psyscall`, after it the goroutine tries to get a P back.",
+  "detail": "`entersyscall` leaves the P loosely attached, so a quick call simply carries on (`exitsyscallfast`). If sysmon took the P meanwhile, `exitsyscall` grabs any idle P; if there is none (`exitsyscall0`), the G goes to the global run queue and the thread parks.",
+  "design": "Short syscalls cost tens of nanoseconds and never lose their P. Long ones cost a thread and a handoff, and the returning goroutine may wait in the global queue: blocking I/O adds scheduling latency on top of the I/O itself.",
+  "match": [
+   "entersyscall",
+   "exitsyscall",
+   "exitsyscallfast",
+   "exitsyscall0",
+   "exitsyscallfast_pidle",
+   "entersyscallblock"
+  ],
+  "related": [
+   "blocking-syscall",
+   "handoffp",
+   "p-status"
+  ]
+ },
+ {
+  "id": "handoffp",
+  "term": "retake and handoffp",
+  "short": "sysmon takes a P away from a thread stuck in a syscall and hands it to another thread, so queued goroutines keep running.",
+  "detail": "`retake` fires once a P has been in `_Psyscall` for at least one sysmon tick and it has work queued (or no other P is idle or spinning, or 10 ms have passed). `handoffp` then wakes an idle M or creates a new one for it.",
+  "design": "This is why a slow syscall doesn’t freeze a Go program, and why the thread count climbs above GOMAXPROCS under blocking I/O. A high handoff rate means goroutines spend real time in syscalls: look at the threadcreate profile and at what is calling into the kernel.",
+  "match": [
+   "handoffp",
+   "retake",
+   "retakes",
+   "retaken",
+   "retook",
+   "handoff",
+   "handoffs",
+   "hands it to a new thread"
+  ],
+  "related": [
+   "sysmon",
+   "blocking-syscall",
+   "entersyscall",
+   "idle-m"
+  ]
+ },
+ {
+  "id": "netpoller",
+  "term": "Netpoller (epoll, kqueue)",
+  "short": "The runtime’s use of the OS event API (epoll on Linux, kqueue on macOS and BSD) that lets goroutines wait on sockets without holding a thread.",
+  "detail": "Sockets are non-blocking. A `conn.Read` with no data registers the fd and parks the goroutine; later a P that runs dry (or sysmon, after 10 ms) calls `netpoll`, gets the ready fds and makes their goroutines runnable.",
+  "design": "This is why goroutine-per-connection scales to 100,000 connections on a handful of threads: waiting on the network costs a parked goroutine, not a thread. Regular file I/O doesn’t get this and behaves like a blocking syscall.",
+  "match": [
+   "netpoller",
+   "netpoll",
+   "netpoll(0)",
+   "network poller",
+   "epoll",
+   "kqueue",
+   "injectglist"
+  ],
+  "related": [
+   "gopark",
+   "blocking-syscall",
+   "find-runnable"
+  ]
+ },
+ {
+  "id": "gopark",
+  "term": "gopark and goready (parked goroutines)",
+  "short": "`gopark` takes a goroutine off its thread to wait (for a channel, a socket, a lock); `goready` makes it runnable again.",
+  "detail": "A parked G is in `_Gwaiting` with a wait reason (“chan receive”, “IO wait”), and its thread immediately runs another G. The waker calls `goready`, which puts the G in the waker’s `runnext`.",
+  "design": "Parked goroutines cost memory, not CPU or threads, so blocking is cheap and idiomatic in Go. The risk is a goroutine parked on something nobody will ever signal: it is never collected, and that is a leak.",
+  "match": [
+   "gopark",
+   "goready",
+   "parked",
+   "parks in",
+   "parks on the netpoller",
+   "parks the G"
+  ],
+  "related": [
+   "g-status",
+   "netpoller",
+   "sudog",
+   "goroutine-leak",
+   "runnext"
+  ]
+ },
+ {
+  "id": "g-status",
+  "term": "Goroutine states (_Grunnable, _Grunning…)",
+  "short": "Where a goroutine is in its life: runnable (waiting for a P), running, in a syscall, waiting (parked) or dead.",
+  "detail": "`_Grunnable` sits in a run queue or `runnext`, `_Grunning` is on an M, `_Gsyscall` is in a syscall, `_Gwaiting` is parked with a wait reason, `_Gdead` has finished (its G struct is reused by later `go` statements).",
+  "design": "Goroutine dumps (`/debug/pprof/goroutine?debug=2`, or SIGQUIT) show these as `[runnable]`, `[chan receive]`, `[IO wait]`, `[syscall]`. Thousands runnable means CPU saturation; thousands waiting on the same thing usually means a leak or a stuck dependency.",
+  "match": [
+   "runnable",
+   "_Grunnable",
+   "_Grunning",
+   "_Gwaiting",
+   "_Gsyscall",
+   "_Gdead"
+  ],
+  "related": [
+   "goroutine",
+   "gopark",
+   "p-status"
+  ]
+ },
+ {
+  "id": "p-status",
+  "term": "P states (_Prunning, _Pidle, _Psyscall)",
+  "short": "What a P is doing: running Go code on an M, idle on the free list, or attached to an M that is in a syscall.",
+  "detail": "`_Psyscall` is the in-between state that makes syscall handoff cheap: the P stays with its M in case the call is short, and sysmon retakes it if it isn’t.",
+  "design": "`GODEBUG=schedtrace=1000` prints `idleprocs`, `threads`, `spinningthreads` and per-P queue lengths every second: a quick way to tell whether a latency problem is CPU saturation, blocked syscalls or idle Ps.",
+  "match": [
+   "_Prunning",
+   "_Pidle",
+   "_Psyscall",
+   "schedtrace"
+  ],
+  "related": [
+   "p",
+   "entersyscall",
+   "handoffp"
+  ]
+ },
+ {
+  "id": "procresize",
+  "term": "procresize (changing GOMAXPROCS)",
+  "short": "The runtime routine that adds or removes Ps when GOMAXPROCS changes, with the world stopped.",
+  "detail": "Growing adds idle Ps that pick up work through `wakep` and stealing. Shrinking destroys the extra Ps: their queued and running goroutines move to the global run queue and their threads park.",
+  "design": "It is a stop-the-world event, so keep `runtime.GOMAXPROCS(n)` out of hot paths. Since Go 1.25 the runtime calls it on its own when the container’s CPU limit changes.",
+  "match": [
+   "procresize",
+   "stop the world",
+   "stop-the-world",
+   "start the world"
+  ],
+  "related": [
+   "gomaxprocs",
+   "p",
+   "global-runq"
+  ]
+ },
+ {
+  "id": "idle-m",
+  "term": "Idle Ms and newm",
+  "short": "Threads with nothing to do park on an idle list (`stopm`) and are reused; `newm` creates an OS thread only when none is idle.",
+  "detail": "Creating a thread is a `clone` syscall and costs microseconds plus memory for its stack, so the runtime keeps threads once made. A spinning M that finds nothing releases its P and parks; `startm` reuses an idle M before creating one.",
+  "design": "Thread count rarely goes back down: a burst of blocking syscalls leaves its peak behind. If the count keeps growing, look for unbounded blocking I/O or cgo calls rather than tuning the scheduler.",
+  "match": [
+   "newm",
+   "stopm",
+   "startm",
+   "idle M",
+   "idle Ms",
+   "idle thread",
+   "idle threads",
+   "sched.midle",
+   "parks on the idle list",
+   "parks itself",
+   "threads park",
+   "debug.SetMaxThreads"
+  ],
+  "related": [
+   "m",
+   "spinning-m",
+   "handoffp",
+   "wakep"
+  ]
+ },
+ {
+  "id": "hchan",
+  "term": "hchan (a channel)",
+  "short": "The runtime struct behind a channel: a lock, an optional ring buffer and its counters, a closed flag, and two queues of waiting goroutines.",
+  "detail": "`make(chan T, n)` calls `makechan`, which allocates the `hchan` and, if n > 0, the buffer. Every send, receive and close takes `hchan.lock`, so a channel is a mutex-protected queue with goroutine parking built in.",
+  "design": "Channels are for coordination and moderate-rate handoff. At millions of operations a second on one channel the lock dominates: shard across channels, send batches, or use other structures on hot paths.",
+  "match": [
+   "hchan",
+   "runtime.hchan",
+   "*runtime.hchan",
+   "makechan"
+  ],
+  "related": [
+   "ring-buffer",
+   "qcount",
+   "wait-queues",
+   "sudog",
+   "close"
+  ]
+ },
+ {
+  "id": "unbuffered",
+  "term": "Unbuffered channel",
+  "short": "`make(chan T)`: no buffer, so a send completes only when a receiver takes the value (a rendezvous).",
+  "detail": "Whichever side arrives first parks in `sendq` or `recvq`; the second copies the value straight to or from the first’s stack and wakes it. The memory model guarantees the receive happens before the send completes.",
+  "design": "Use it when the sender must know the value was taken: handing over ownership, synchronizing two goroutines, signalling. Backpressure comes free: a slow receiver slows the sender.",
+  "match": [
+   "unbuffered",
+   "unbuffered channel",
+   "rendezvous",
+   "make(chan int)",
+   "ch := make(chan int)"
+  ],
+  "related": [
+   "buffered",
+   "direct-handoff",
+   "wait-queues"
+  ]
+ },
+ {
+  "id": "buffered",
+  "term": "Buffered channel",
+  "short": "`make(chan T, n)`: room for n values, so sends only wait when the buffer is full and receives when it is empty.",
+  "detail": "Values sit in a ring buffer in FIFO order. A send still hands its value directly to a receiver if one is already parked, skipping the buffer.",
+  "design": "Size a buffer for a known burst, or use it as a semaphore (cap N = at most N in flight), not to make a slow consumer fast: a bigger buffer only delays backpressure and adds latency. “Just make the buffer bigger” usually hides a capacity problem.",
+  "match": [
+   "buffered channel",
+   "buffered channels",
+   "buffered",
+   "make(chan int, n)"
+  ],
+  "related": [
+   "unbuffered",
+   "ring-buffer",
+   "qcount",
+   "direct-handoff"
+  ]
+ },
+ {
+  "id": "qcount",
+  "term": "qcount and dataqsiz",
+  "short": "`qcount` is how many values are in the buffer now (`len(ch)`); `dataqsiz` is its capacity (`cap(ch)`).",
+  "detail": "A send into the buffer increments `qcount` and a receive from it decrements it; `dataqsiz` is fixed by `make`. On an unbuffered channel both are always 0.",
+  "design": "`len(ch)` is fine for metrics (queue depth as a saturation signal) but racy as a decision: by the time you act on it, it has changed. Use `select` with `default` for a try-send or try-receive instead.",
+  "match": [
+   "qcount",
+   "dataqsiz",
+   "len(ch)",
+   "cap(ch)"
+  ],
+  "related": [
+   "ring-buffer",
+   "buffered",
+   "select-default"
+  ]
+ },
+ {
+  "id": "ring-buffer",
+  "term": "Ring buffer (buf)",
+  "short": "The fixed array of `dataqsiz` slots that holds buffered values, used as a circular FIFO queue.",
+  "detail": "`makechan` allocates it once, together with the `hchan`. Sends write at `sendx`, receives read at `recvx`, and both wrap around, so nothing is allocated per send.",
+  "design": "FIFO means values come out in send order, even when parked senders are involved. Memory is capacity × element size up front, so a huge buffer of large structs is a large allocation: send pointers or keep buffers small.",
+  "match": [
+   "ring buffer",
+   "buf"
+  ],
+  "related": [
+   "sendx-recvx",
+   "qcount",
+   "buffered"
+  ]
+ },
+ {
+  "id": "sendx-recvx",
+  "term": "sendx and recvx",
+  "short": "The two indexes into the ring buffer: `sendx` is where the next send writes, `recvx` where the next receive reads.",
+  "detail": "Each moves forward one slot and wraps to 0 at the end. When the buffer is full and a sender is parked, a receive takes `buf[recvx]`, moves the parked value into that same slot and advances both, so the buffer stays full and in order.",
+  "design": "Channel operations are constant-time and never shift data: their cost is the lock and one element copy, plus parking if they block. That is the budget to reason with when a channel sits on a hot path.",
+  "match": [
+   "sendx",
+   "recvx"
+  ],
+  "related": [
+   "ring-buffer",
+   "qcount"
+  ]
+ },
+ {
+  "id": "wait-queues",
+  "term": "recvq and sendq",
+  "short": "The two FIFO queues of goroutines parked on a channel: receivers waiting for a value, senders waiting for room or a receiver.",
+  "detail": "Each entry is a sudog. A send checks `recvq` first and a receive checks `sendq` first, so a waiting goroutine is always served before the buffer is used. Waiters are woken in arrival order.",
+  "design": "You can’t see these queues from Go code, but goroutine dumps show their members as `[chan send]` and `[chan receive]`. A growing number there is the sign of a stuck consumer or producer.",
+  "match": [
+   "recvq",
+   "sendq",
+   "wait queue",
+   "wait queues"
+  ],
+  "related": [
+   "sudog",
+   "gopark",
+   "direct-handoff"
+  ]
+ },
+ {
+  "id": "sudog",
+  "term": "sudog",
+  "short": "The runtime’s record of one goroutine waiting on one channel: which G, and a pointer to the value to send or the variable to receive into.",
+  "detail": "A sender parks with its value referenced by the sudog; a receiver parks with a pointer to its destination, so the other side can copy directly. A `select` over N channels enqueues N sudogs and removes the others when one fires.",
+  "design": "This is why a blocked goroutine costs so little: a small struct in a queue, plus its stack. It is also why a big `select` in a hot loop costs more than it looks: it enqueues on and dequeues from every channel each time it blocks.",
+  "match": [
+   "sudog",
+   "sudogs"
+  ],
+  "related": [
+   "wait-queues",
+   "gopark",
+   "direct-handoff"
+  ]
+ },
+ {
+  "id": "direct-handoff",
+  "term": "Direct handoff",
+  "short": "When a goroutine is already parked on the other side, the value is copied straight between the two goroutines’ stacks, skipping the buffer.",
+  "detail": "A send that finds a receiver in `recvq` writes into the receiver’s variable (`sendDirect`) and calls `goready` on it; a receive that finds a sender in `sendq` on an unbuffered channel copies from the sender’s sudog. One copy instead of two.",
+  "design": "It makes an unbuffered channel a true rendezvous, and makes a buffered channel with waiting receivers behave like an unbuffered one. A buffer only adds throughput when producer and consumer are not already waiting on each other.",
+  "match": [
+   "direct handoff",
+   "direct handoffs",
+   "sendDirect",
+   "straight onto",
+   "straight from",
+   "straight into",
+   "handed straight"
+  ],
+  "related": [
+   "unbuffered",
+   "sudog",
+   "wait-queues"
+  ]
+ },
+ {
+  "id": "close",
+  "term": "close(ch)",
+  "short": "Marks a channel closed and wakes everyone parked on it: receivers get the zero value with `ok == false`, senders panic.",
+  "detail": "Values already in the buffer are still delivered first; after that every receive returns at once with `0, false`, which is how `for v := range ch` ends. Closing a nil or already-closed channel panics.",
+  "design": "Close is a broadcast, so `close(done)` (and `ctx.Done()`) is the idiom for cancelling many goroutines at once. Only the sending side closes, once all senders are done; with several senders, close from a goroutine that waits on a `sync.WaitGroup`.",
+  "match": [
+   "close(ch)",
+   "closechan",
+   "closed channel",
+   "zero value",
+   "ok == false",
+   "ok = false",
+   "for v := range ch"
+  ],
+  "related": [
+   "panic",
+   "wait-queues",
+   "hchan"
+  ]
+ },
+ {
+  "id": "panic",
+  "term": "Channel panics",
+  "short": "Sending on a closed channel, closing a closed channel and closing a nil channel all panic, and an unrecovered panic kills the whole program.",
+  "detail": "A sender parked in `sendq` when the channel is closed wakes up and panics too. The check happens under the channel lock, and `select` with `default` panics on a closed channel as well: there is no safe racy send.",
+  "design": "Make ownership explicit: one owner creates, sends on and closes a channel; everyone else only receives. Never close from the receiving side to “stop the producer”; signal with a separate done channel or a context.",
+  "match": [
+   "panic",
+   "panics",
+   "panicked",
+   "send on closed channel",
+   "close of closed channel"
+  ],
+  "related": [
+   "close",
+   "select-default"
+  ]
+ },
+ {
+  "id": "select-default",
+  "term": "select with default",
+  "short": "A `select` with a `default` case never blocks: if no case can proceed right now, `default` runs.",
+  "detail": "With one channel case it compiles to `selectnbsend` or `selectnbrecv`, a non-blocking attempt. Without `default`, a `select` enqueues a sudog on every case’s channel, parks once, and runs whichever case fires first.",
+  "design": "The basis of try-send, load shedding (“drop it if the queue is full”) and non-blocking status checks. Don’t spin on it: a `select` with `default` inside `for {}` is a busy wait that burns a whole core.",
+  "match": [
+   "select",
+   "select with default",
+   "default case",
+   "selectnbsend",
+   "selectnbrecv",
+   "non-blocking send"
+  ],
+  "related": [
+   "qcount",
+   "panic",
+   "sudog"
+  ]
+ },
+ {
+  "id": "deadlock",
+  "term": "Deadlock detection",
+  "short": "“fatal error: all goroutines are asleep - deadlock!”: the runtime aborts when no goroutine can ever run again.",
+  "detail": "`checkdead` runs when a thread goes idle. If no M is running Go code and nothing can wake a goroutine (no timers pending, no thread waiting on the network), it crashes the program and prints every goroutine’s wait reason.",
+  "design": "It only catches a total deadlock. If anything is still running, in a syscall or waiting on a timer or socket, the stuck goroutines just stay stuck: in a server that is a partial deadlock, found with goroutine dumps and timeouts, not by this check.",
+  "match": [
+   "deadlock",
+   "deadlocks",
+   "all goroutines are asleep",
+   "fatal error: all goroutines are asleep - deadlock!",
+   "checkdead"
+  ],
+  "related": [
+   "goroutine-leak",
+   "gopark",
+   "wait-queues"
+  ]
+ },
+ {
+  "id": "goroutine-leak",
+  "term": "Goroutine leak",
+  "short": "A goroutine blocked forever on something nobody will signal. It never exits and is never garbage-collected.",
+  "detail": "Typical causes: sending on a channel nobody reads any more after a timeout, receiving from a channel nobody closes, a missing context cancellation. Each leaked goroutine keeps its stack and everything it references alive.",
+  "design": "Leaks look like slowly growing memory and goroutine count. Export `runtime.NumGoroutine()` as a metric, read `/debug/pprof/goroutine` grouped by stack, run `goleak` in tests, and give every goroutine an exit path (a buffered result channel or `ctx.Done()`).",
+  "match": [
+   "leak",
+   "leaks",
+   "leaked",
+   "goroutine leak",
+   "goleak",
+   "goroutine profile"
+  ],
+  "related": [
+   "gopark",
+   "deadlock",
+   "goroutine",
+   "close"
+  ]
+ }
+]

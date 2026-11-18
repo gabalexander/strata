@@ -1,0 +1,673 @@
+[
+ {
+  "id": "client",
+  "term": "Client",
+  "short": "The caller that starts an operation and waits for its result.",
+  "detail": "One original operation can produce several attempts if the client retries. The client deadline covers all those attempts.",
+  "design": "Count client operations separately from server attempts so retry success does not hide added load.",
+  "match": [
+   "client-side retries",
+   "client retry layer"
+  ],
+  "related": [
+   "deadline",
+   "request-rate",
+   "retry"
+  ]
+ },
+ {
+  "id": "request-rate",
+  "term": "Offered request rate",
+  "short": "The number of new client operations offered per second, before retries.",
+  "detail": "The load generator here keeps sending at its configured rate even while earlier requests wait. Manual sends and bursts add to that load.",
+  "design": "Test offered load independently of response time. A generator that waits for responses can conceal overload by slowing itself down.",
+  "match": [
+   "offered load",
+   "offered request rate",
+   "load generator"
+  ],
+  "related": [
+   "client",
+   "throughput",
+   "goodput"
+  ]
+ },
+ {
+  "id": "endpoint",
+  "term": "Endpoint",
+  "short": "An operation served on a particular route, such as `/b` or `/c`.",
+  "detail": "Each route here calls a different dependency. The routes can share workers or reserve separate pools.",
+  "design": "Measure reliability per operation. Healthy aggregate metrics can hide failure on a lower-volume route.",
+  "match": [
+   "/b",
+   "/c",
+   "endpoint mix"
+  ],
+  "related": [
+   "dependency",
+   "bulkhead",
+   "worker-pool"
+  ]
+ },
+ {
+  "id": "dependency",
+  "term": "Dependency",
+  "short": "A downstream service whose response is needed to complete a request.",
+  "detail": "B can take 50 ms or 2 s, return 503s, or hang. C consistently takes 50 ms.",
+  "design": "Map shared resources across the dependency graph to see where a failure may spread beyond direct callers.",
+  "match": [
+   "downstream dependency",
+   "dependency B",
+   "dependency C"
+  ],
+  "related": [
+   "endpoint",
+   "cascading-failure",
+   "health-check"
+  ]
+ },
+ {
+  "id": "worker-pool",
+  "term": "Worker pool",
+  "short": "The slots A uses to process concurrent requests.",
+  "detail": "A slot remains occupied while waiting for a dependency. In this model it also stays occupied during a retry delay inside A.",
+  "design": "Size the pool for the time a request holds its slot, including I/O waits. An async implementation still needs limits on in-flight work.",
+  "match": [
+   "worker pool",
+   "worker slots",
+   "shared pool"
+  ],
+  "related": [
+   "pool-exhaustion",
+   "request-queue",
+   "bulkhead"
+  ]
+ },
+ {
+  "id": "request-queue",
+  "term": "Request queue",
+  "short": "Accepted requests wait here until a worker is available.",
+  "detail": "Requests dispatch in arrival order within each pool. Queue depth counts waiting requests and excludes those in worker slots.",
+  "design": "Set queue bounds from acceptable waiting time and service capacity. A larger buffer can make more responses arrive too late to be useful.",
+  "match": [
+   "request queue",
+   "queue depth",
+   "queue cap"
+  ],
+  "related": [
+   "worker-pool",
+   "load-shedding",
+   "p99"
+  ]
+ },
+ {
+  "id": "timeout",
+  "term": "Timeout",
+  "short": "A duration after which a caller stops waiting for a response.",
+  "detail": "A starts its invocation timeout when the request reaches it, so queueing and retries at A spend the same time. A reports a failure and releases the slot when that timer expires.",
+  "design": "Bound waits wherever they hold scarce resources. Choose limits using healthy tail latency and the response time the client can use.",
+  "match": [
+   "invocation timeout",
+   "A’s timeout",
+   "attempt timeout",
+   "fails fast",
+   "fail fast"
+  ],
+  "related": [
+   "deadline",
+   "timeout-budget",
+   "pool-exhaustion"
+  ]
+ },
+ {
+  "id": "deadline",
+  "term": "Deadline",
+  "short": "The point in time after which the caller can no longer use a response.",
+  "detail": "A relative timeout produces a deadline when it starts. The client here keeps the same deadline across all retries. An already-running invocation can outlive its client.",
+  "design": "Use the remaining deadline to decide whether there is time for another attempt. Propagate cancellation where downstream work can actually stop.",
+  "match": [
+   "client deadline",
+   "deadline expires",
+   "remaining deadline"
+  ],
+  "related": [
+   "client",
+   "timeout",
+   "timeout-budget"
+  ]
+ },
+ {
+  "id": "timeout-budget",
+  "term": "Timeout budget",
+  "short": "The time available for queueing, work, and returning a response before the client deadline.",
+  "detail": "Leave room for transit and response handling. Several downstream calls or retries may need to share one invocation budget.",
+  "design": "Give the inner operation a shorter limit than the outer one so the outer caller has time to act on the result.",
+  "match": [
+   "timeout budget",
+   "invocation budget",
+   "client budget"
+  ],
+  "related": [
+   "deadline",
+   "timeout",
+   "retry"
+  ]
+ },
+ {
+  "id": "pool-exhaustion",
+  "term": "Pool exhaustion",
+  "short": "All eligible worker slots are occupied, so new requests have to wait or be rejected.",
+  "detail": "Slow dependencies can exhaust a pool at low CPU use because each wait holds a slot longer. Caller abandonment does not automatically release the slot.",
+  "design": "Watch active slots and queue age alongside CPU to identify which resource is preventing progress.",
+  "match": [
+   "pool exhaustion",
+   "worker saturation",
+   "all slots occupied"
+  ],
+  "related": [
+   "worker-pool",
+   "cascading-failure",
+   "timeout"
+  ]
+ },
+ {
+  "id": "cascading-failure",
+  "term": "Cascading failure",
+  "short": "A failure spreads when one part of the system consumes resources that another part needs.",
+  "detail": "Slow calls to B take all of A’s slots. Calls to healthy C now wait in A, even though C itself could serve them.",
+  "design": "Look for shared queues, executors, sockets, and storage when deciding where to put isolation boundaries.",
+  "match": [
+   "cascading failure",
+   "failure cascades",
+   "exhaustion cascades"
+  ],
+  "related": [
+   "pool-exhaustion",
+   "bulkhead",
+   "dependency"
+  ]
+ },
+ {
+  "id": "retry",
+  "term": "Retry",
+  "short": "A new attempt at an operation after an earlier attempt failed or ran out of time.",
+  "detail": "Three attempts includes the original attempt plus up to two retries. This lab retries eligible B failures only while there is time left.",
+  "design": "Retry transient failures only when the operation is safe to replay and another attempt has a plausible chance of helping.",
+  "match": [
+   "retry attempt",
+   "retry attempts",
+   "immediate retry",
+   "immediate retries"
+  ],
+  "related": [
+   "idempotent",
+   "retry-budget",
+   "retry-amplification"
+  ]
+ },
+ {
+  "id": "retry-amplification",
+  "term": "Retry amplification",
+  "short": "Retries produce more dependency calls than the original client workload.",
+  "detail": "If the client tries A up to three times and A tries B up to three times per invocation, one original operation can make nine B calls.",
+  "design": "Assign retry ownership deliberately. Compare downstream attempts to original requests and inspect the worst case along the full call path.",
+  "match": [
+   "retry amplification",
+   "retry layers",
+   "layered retries"
+  ],
+  "related": [
+   "retry",
+   "retry-storm",
+   "retry-budget"
+  ]
+ },
+ {
+  "id": "exponential-backoff",
+  "term": "Exponential backoff",
+  "short": "A retry delay that grows by a fixed multiplier after each failure.",
+  "detail": "The fixed delays here are 100 ms then 200 ms at each retry layer. Requests that fail together can still retry together.",
+  "design": "Place a cap on delay and respect the remaining deadline. Use jitter when many callers can see the same failure.",
+  "match": [
+   "exponential backoff",
+   "fixed backoff",
+   "backoff delays"
+  ],
+  "related": [
+   "jitter",
+   "retry",
+   "deadline"
+  ]
+ },
+ {
+  "id": "jitter",
+  "term": "Jitter",
+  "short": "Random variation in retry timing that spreads requests out.",
+  "detail": "Full jitter draws a fresh uniform delay between zero and the current backoff cap. The cap doubles after another failure.",
+  "design": "Use jitter to reduce peaks after correlated failure. Pair it with a retry budget to limit total extra work.",
+  "match": [
+   "jitter",
+   "jittered retries"
+  ],
+  "related": [
+   "exponential-backoff",
+   "retry-storm",
+   "retry-budget"
+  ]
+ },
+ {
+  "id": "retry-storm",
+  "term": "Retry storm",
+  "short": "A surge of repeat attempts that overwhelms a dependency or makes an outage worse.",
+  "detail": "Fast failures leave more time for retries to be issued. Correlated failures send many callers back to the same dependency at once.",
+  "design": "Measure first attempts and retries separately at both short and long intervals to expose sharp bursts hidden by averages.",
+  "match": [
+   "retry storm",
+   "synchronized spikes",
+   "retry spikes"
+  ],
+  "related": [
+   "retry-amplification",
+   "jitter",
+   "metastable-failure"
+  ]
+ },
+ {
+  "id": "metastable-failure",
+  "term": "Metastable failure",
+  "short": "A failure that sustains itself after its initial trigger disappears.",
+  "detail": "In this lab, excess attempts make B return fast 503s. Those errors produce retries that can keep B over its recovery limit after the injected fault ends.",
+  "design": "Plan how to interrupt the feedback loop during an incident. Recovery may need temporarily lower traffic than steady-state operation.",
+  "match": [
+   "metastable failure",
+   "self-sustaining overload",
+   "feedback loop"
+  ],
+  "related": [
+   "retry-storm",
+   "overload",
+   "retry-budget"
+  ]
+ },
+ {
+  "id": "retry-budget",
+  "term": "Retry budget",
+  "short": "A cap on repeat attempts relative to original work.",
+  "detail": "Here, ten first B attempts earn one extra attempt shared across layers. The budget starts empty when enabled and can bank at most two retries.",
+  "design": "Tie retries to normal volume, bound burst credit, and make the scope explicit. Independent budgets at several layers may still amplify load.",
+  "match": [
+   "retry budget",
+   "retry credit"
+  ],
+  "related": [
+   "retry",
+   "retry-amplification",
+   "goodput"
+  ]
+ },
+ {
+  "id": "idempotent",
+  "term": "Idempotent operation",
+  "short": "Repeating the same operation has the same intended effect as applying it once.",
+  "detail": "A stable idempotency key can make a write safe to retry if the server durably links the key to the effect and result. A response can fail after the write committed.",
+  "design": "Define replay semantics before adding automatic retries. Keep deduplication records for at least the supported retry horizon.",
+  "match": [
+   "idempotent operation",
+   "non-idempotent operation",
+   "idempotency key",
+   "safe to replay"
+  ],
+  "related": [
+   "retry",
+   "deadline",
+   "endpoint"
+  ]
+ },
+ {
+  "id": "circuit-breaker",
+  "term": "Circuit breaker",
+  "short": "An admission policy that stops calling a failing dependency and tests it before resuming.",
+  "detail": "The circuit starts closed. Enough recent failures open it, and after a cool-down it moves half-open to check actual calls.",
+  "design": "Scope the breaker to the dependency or operation with a shared failure mode. C stays independent when B’s breaker opens.",
+  "match": [
+   "circuit breaker",
+   "opens the circuit",
+   "closes the circuit"
+  ],
+  "related": [
+   "closed",
+   "open",
+   "half-open",
+   "fallback"
+  ]
+ },
+ {
+  "id": "closed",
+  "term": "Closed circuit",
+  "short": "Normal requests are allowed through the circuit to B.",
+  "detail": "Completed B calls contribute to a rolling failure rate. The model needs six observations before it can trip.",
+  "design": "Minimum sample counts help a breaker avoid overreacting to sparse traffic. A low-volume service may need a longer window.",
+  "match": [
+   "closed circuit",
+   "circuit closes"
+  ],
+  "related": [
+   "circuit-breaker",
+   "rolling-window",
+   "failure-threshold"
+  ]
+ },
+ {
+  "id": "open",
+  "term": "Open circuit",
+  "short": "Requests bypass B while the breaker waits out its cool-down.",
+  "detail": "A returns either an immediate error or a fallback. In this model, calls already in flight finish under their original time limits.",
+  "design": "Distinguish circuit bypasses from dependency failures in telemetry. An open breaker drastically changes the population reaching B.",
+  "match": [
+   "open circuit",
+   "circuit is open",
+   "circuit bypasses"
+  ],
+  "related": [
+   "circuit-breaker",
+   "cool-down",
+   "fallback"
+  ]
+ },
+ {
+  "id": "half-open",
+  "term": "Half-open circuit",
+  "short": "The breaker lets a small number of real requests test whether B has recovered.",
+  "detail": "This lab allows a single trial in flight. Two consecutive trial successes close the circuit and a failed trial reopens it.",
+  "design": "Bound probe concurrency to avoid swamping a recovering service. Use probes that reflect real work and observe their success separately.",
+  "match": [
+   "half-open",
+   "trial requests",
+   "trial request"
+  ],
+  "related": [
+   "circuit-breaker",
+   "cool-down",
+   "health-check"
+  ]
+ },
+ {
+  "id": "rolling-window",
+  "term": "Rolling window",
+  "short": "A recent interval that advances with the current time.",
+  "detail": "When a B result arrives in the closed state, only results newer than the window cutoff count. A wider window retains more history.",
+  "design": "Use enough history for a reliable decision while keeping the window short enough to detect faults at the required speed.",
+  "match": [
+   "rolling window",
+   "failure window"
+  ],
+  "related": [
+   "circuit-breaker",
+   "failure-threshold",
+   "closed"
+  ]
+ },
+ {
+  "id": "failure-threshold",
+  "term": "Failure threshold",
+  "short": "The failure percentage that opens a closed circuit once it has enough observations.",
+  "detail": "503s and B timeouts count as failures. Local queue expiry, fallback responses, and calls bypassed by the breaker are excluded.",
+  "design": "Separate faults the dependency can influence from local admission and validation errors. A noisy signal can trip a healthy dependency.",
+  "match": [
+   "failure threshold",
+   "trip threshold"
+  ],
+  "related": [
+   "circuit-breaker",
+   "rolling-window",
+   "error-rate"
+  ]
+ },
+ {
+  "id": "cool-down",
+  "term": "Cool-down",
+  "short": "How long the circuit stays open before it allows a trial.",
+  "detail": "Every trip starts a fresh cool-down. Elapsed time permits a trial and leaves recovery to the trial result.",
+  "design": "Choose a duration that gives the dependency room to recover while limiting how long healthy capacity can go unused.",
+  "match": [
+   "cool-down",
+   "cooldown"
+  ],
+  "related": [
+   "open",
+   "half-open",
+   "circuit-breaker"
+  ]
+ },
+ {
+  "id": "fallback",
+  "term": "Fallback",
+  "short": "A reduced response A can return when it bypasses B.",
+  "detail": "The lab models a local cached fallback with no dependency call. It counts as a response but is excluded from full successes and goodput.",
+  "design": "Define what stale or partial data is safe to serve and expose fallback usage. An expensive fallback can become the next overloaded dependency.",
+  "match": [
+   "cached fallback",
+   "fallback responses",
+   "fallback response"
+  ],
+  "related": [
+   "open",
+   "graceful-degradation",
+   "goodput"
+  ]
+ },
+ {
+  "id": "bulkhead",
+  "term": "Bulkhead",
+  "short": "A separate resource allocation that limits where a failure can spread.",
+  "detail": "Here, each route gets its own waiting lane and half of A’s slots. Idle C slots cannot be borrowed by B.",
+  "design": "Reserve capacity for critical operations and check for shared bottlenecks beneath the split, including CPU and connection limits.",
+  "match": [
+   "bulkhead",
+   "bulkheads",
+   "split pools"
+  ],
+  "related": [
+   "worker-pool",
+   "cascading-failure",
+   "load-shedding"
+  ]
+ },
+ {
+  "id": "load-shedding",
+  "term": "Load shedding",
+  "short": "Rejecting new work early when there is too much already waiting or running.",
+  "detail": "The model returns an early 503 if no eligible worker is idle and the waiting queue is at its cap. A shed request never starts a dependency call.",
+  "design": "Set admission limits from latency and useful completions. Make upstream callers treat rejection as a capacity signal to avoid feeding a retry storm.",
+  "match": [
+   "load shedding",
+   "early 503",
+   "shed requests"
+  ],
+  "related": [
+   "request-queue",
+   "overload",
+   "goodput"
+  ]
+ },
+ {
+  "id": "goodput",
+  "term": "Goodput",
+  "short": "The rate of useful results delivered to clients.",
+  "detail": "For this lab, a full response arriving within 250 ms counts. Late successes, degraded responses, and failures are excluded.",
+  "design": "Define useful in terms of the user objective and inspect goodput under overload. A high volume of quick errors can inflate throughput.",
+  "match": [
+   "goodput",
+   "useful results"
+  ],
+  "related": [
+   "throughput",
+   "p99",
+   "graceful-degradation"
+  ]
+ },
+ {
+  "id": "throughput",
+  "term": "Throughput",
+  "short": "The rate of operations completing per unit of time.",
+  "detail": "This chart counts terminal client outcomes per second, including errors, fallback responses, and deadline expiry. It counts an original once regardless of its attempts.",
+  "design": "Label what the rate measures. Client outcomes, successful work, and dependency attempts are different populations.",
+  "match": [
+   "throughput",
+   "terminal client outcomes"
+  ],
+  "related": [
+   "goodput",
+   "request-rate",
+   "error-rate"
+  ]
+ },
+ {
+  "id": "p50",
+  "term": "p50 latency",
+  "short": "The latency at or below which half of the measured requests finished.",
+  "detail": "This is a nearest-rank median on full responses in each one-second sample. The chart shows a gap if there were no full responses.",
+  "design": "Use the median for typical performance and pair it with a tail percentile and outcome rates to spot the slow or missing minority.",
+  "match": [
+   "p50 latency",
+   "p50"
+  ],
+  "related": [
+   "p99",
+   "error-rate",
+   "throughput"
+  ]
+ },
+ {
+  "id": "p99",
+  "term": "p99 latency",
+  "short": "The latency at or below which 99% of the measured requests finished.",
+  "detail": "This chart uses only full responses in each one-second sample. At low sample counts nearest-rank p99 is close to the maximum.",
+  "design": "Evaluate tail latency alongside availability. Fast rejection and dropped requests can make the measured latency look better while the service gets worse.",
+  "match": [
+   "p99 latency",
+   "p99",
+   "tail latency"
+  ],
+  "related": [
+   "p50",
+   "error-rate",
+   "goodput"
+  ]
+ },
+ {
+  "id": "error-rate",
+  "term": "Client error rate",
+  "short": "The fraction of completed client operations that ended in error.",
+  "detail": "Errors include shedding, definitive dependency failure, and timeout. Fallback responses count separately as degraded outcomes.",
+  "design": "Report error and fallback rates beside latency and goodput. A latency percentile cannot account for outcomes absent from its sample.",
+  "match": [
+   "client error rate",
+   "error rate"
+  ],
+  "related": [
+   "throughput",
+   "fallback",
+   "goodput"
+  ]
+ },
+ {
+  "id": "adaptive-concurrency",
+  "term": "Adaptive concurrency",
+  "short": "An admission limit that changes as measured service capacity changes.",
+  "detail": "Some controllers infer saturation from rising latency and lower the number of concurrent requests they admit. This lab uses fixed limits.",
+  "design": "Treat the controller as its own feedback loop. Set bounds, measure per route where needed, and test that a change in request mix does not cause instability.",
+  "match": [
+   "adaptive concurrency",
+   "adaptive concurrency limit"
+  ],
+  "related": [
+   "aimd",
+   "load-shedding",
+   "worker-pool"
+  ]
+ },
+ {
+  "id": "aimd",
+  "term": "Additive increase, multiplicative decrease (AIMD)",
+  "short": "A controller raises a limit gradually and reduces it proportionally when it detects congestion.",
+  "detail": "An example adds one slot when conditions are healthy and removes half on a congestion signal. The signal and update interval affect stability.",
+  "design": "Use a credible congestion measurement and leave time to observe each adjustment. Many independent controllers can otherwise oscillate together.",
+  "match": [
+   "AIMD",
+   "additive increase",
+   "multiplicative decrease"
+  ],
+  "related": [
+   "adaptive-concurrency",
+   "overload",
+   "jitter"
+  ]
+ },
+ {
+  "id": "graceful-degradation",
+  "term": "Graceful degradation",
+  "short": "Preserving useful behavior while reducing what the system promises during a fault.",
+  "detail": "A can keep C available while B fails, or return a clearly marked cached fallback for B. A reduced response can have its own user-facing target.",
+  "design": "Decide which features and data can degrade before an incident. Give the reduced mode independent capacity and measurements.",
+  "match": [
+   "graceful degradation",
+   "degraded outcomes"
+  ],
+  "related": [
+   "fallback",
+   "bulkhead",
+   "goodput"
+  ]
+ },
+ {
+  "id": "health-check",
+  "term": "Health check",
+  "short": "A probe of whether a component is running or able to serve work.",
+  "detail": "A process can pass a liveness probe while real queries fail. The breaker here tests real B requests in half-open state.",
+  "design": "Pick a probe that answers the decision at hand. Changing routing based on shallow success can send traffic back before critical work is ready.",
+  "match": [
+   "health check",
+   "liveness probe"
+  ],
+  "related": [
+   "half-open",
+   "dependency",
+   "circuit-breaker"
+  ]
+ },
+ {
+  "id": "http-503",
+  "term": "HTTP 503",
+  "short": "A response saying the server is temporarily unable to handle the request.",
+  "detail": "Here B may reply 503 under a fault or overload, and A uses 503 when it sheds work. An upstream client may see the same status for different causes.",
+  "design": "Document how overload responses should be handled. Retry-After or equivalent hints help only if callers honor them within their budgets.",
+  "match": [
+   "HTTP 503",
+   "503",
+   "503s"
+  ],
+  "related": [
+   "load-shedding",
+   "retry",
+   "overload"
+  ]
+ },
+ {
+  "id": "overload",
+  "term": "Overload",
+  "short": "More work arrives than the service can handle at its target quality.",
+  "detail": "This retry scenario models B overload as more than 12 starts over 250 ms and recovery at four or fewer. The gap between those thresholds represents reduced capacity during recovery.",
+  "design": "Find the limiting resource and test recovery under traffic as well as initial saturation. Stop adding work once useful throughput falls.",
+  "match": [
+   "attempt capacity",
+   "recovery limit",
+   "dependency overload"
+  ],
+  "related": [
+   "metastable-failure",
+   "load-shedding",
+   "pool-exhaustion"
+  ]
+ }
+]

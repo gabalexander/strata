@@ -1,0 +1,731 @@
+[
+ {
+  "id": "syscall",
+  "term": "System call",
+  "short": "A controlled request from user code for the kernel to do something on its behalf.",
+  "detail": "The syscall instruction enters a privileged kernel handler. The kernel validates the request, performs or schedules the operation, and returns a result or error. A fast round trip can be on the order of 100 ns or more on some systems.",
+  "design": "Count calls per request and measure their actual cost. Fixed entry overhead matters for tiny operations, while blocking I/O usually dominates the elapsed time of a slow syscall.",
+  "match": [
+   "syscall",
+   "syscalls",
+   "system call",
+   "getpid()",
+   "read()",
+   "write()"
+  ],
+  "related": [
+   "mode-switch",
+   "context-switch",
+   "batching"
+  ]
+ },
+ {
+  "id": "mode-switch",
+  "term": "User mode and kernel mode",
+  "short": "Two CPU privilege levels separate application instructions from protected kernel code.",
+  "detail": "A syscall enters kernel mode, and returning to the caller restores user mode. The original task may stay scheduled across both mode switches.",
+  "design": "When diagnosing CPU time or latency, distinguish kernel work billed to a running task from time it spent off-CPU waiting.",
+  "match": [
+   "user mode",
+   "kernel mode",
+   "mode switch",
+   "mode switches",
+   "privilege boundary"
+  ],
+  "related": [
+   "syscall",
+   "context-switch",
+   "vdso"
+  ]
+ },
+ {
+  "id": "context-switch",
+  "term": "Context switch",
+  "short": "The CPU stops running one task and begins running another.",
+  "detail": "The scheduler saves the outgoing execution state and restores the incoming one. Blocking, preemption, and explicit yielding can all trigger scheduling. An address-space change can add translation and cache costs.",
+  "design": "Investigate run-queue delay, blocking, or contention if a service spends much of its time off-CPU. Reducing syscall count alone does not guarantee fewer context switches.",
+  "match": [
+   "context switch",
+   "context switches",
+   "context-switch counter"
+  ],
+  "related": [
+   "task",
+   "mode-switch",
+   "threads"
+  ]
+ },
+ {
+  "id": "vdso",
+  "term": "vDSO",
+  "short": "A small shared object that the kernel maps into user space to answer certain calls quickly.",
+  "detail": "On supported architectures, libc can implement some clock_gettime() calls using kernel-maintained mapped data. Unsupported clocks or paths may fall back to a syscall.",
+  "design": "Frequent timestamp reads can be cheap on the fast path. Verify the path if clock choice, portability, or the lack of a trace line surprises you.",
+  "match": [
+   "vDSO",
+   "clock_gettime()"
+  ],
+  "related": [
+   "mode-switch",
+   "syscall",
+   "strace"
+  ]
+ },
+ {
+  "id": "strace",
+  "term": "strace",
+  "short": "A tracing tool that can show a program’s syscalls, return values and received signals.",
+  "detail": "A trace can show a syscall as unfinished when it blocks while other traced activity continues. Pure userspace operations such as vDSO fast paths produce no syscall entry.",
+  "design": "Use targeted traces to spot retry storms, descriptor leaks, or unexpected blocking. Tracing itself can perturb timings and is a poor baseline for nanosecond measurement.",
+  "match": [
+   "strace",
+   "strace-style",
+   "syscall trace"
+  ],
+  "related": [
+   "syscall",
+   "vdso",
+   "signals"
+  ]
+ },
+ {
+  "id": "batching",
+  "term": "Syscall batching",
+  "short": "One kernel submission carries work that would otherwise require several entries.",
+  "detail": "writev() sends multiple buffers without copying all fragments into a contiguous application buffer first. io_uring uses shared submission and completion rings, so several operations can share submission overhead.",
+  "design": "Batch bounded amounts of work. Compare CPU and throughput gains against the delay to collect the batch, and handle short writes and partial completion.",
+  "match": [
+   "syscall batching",
+   "writev()",
+   "io_uring"
+  ],
+  "related": [
+   "syscall",
+   "block-layer",
+   "eagain"
+  ]
+ },
+ {
+  "id": "task",
+  "term": "Linux task and task_struct",
+  "short": "A task is a schedulable thread that the Linux kernel represents with a task_struct.",
+  "detail": "Tasks can reference shared process resources, such as an address space and fd table. A process ID normally refers to the thread group ID, while a thread has its own task ID.",
+  "design": "Count the resource that hits a limit. A service with one process can still consume many scheduler and cgroup task slots.",
+  "match": [
+   "task_struct",
+   "schedulable task",
+   "thread group ID"
+  ],
+  "related": [
+   "threads",
+   "context-switch",
+   "cgroups"
+  ]
+ },
+ {
+  "id": "fork",
+  "term": "fork() and execve()",
+  "short": "Fork creates a child process. Exec replaces the calling process’s program.",
+  "detail": "The child receives copied descriptor slots that refer to the same open file descriptions. Successful exec preserves the PID, closes FD_CLOEXEC descriptors, resets caught signal dispositions, and removes the other threads.",
+  "design": "Set close-on-exec when opening sensitive resources. Use exec in a container entrypoint script when the app should take the wrapper’s place and receive signals directly.",
+  "match": [
+   "fork()",
+   "exec()",
+   "execve()",
+   "close-on-exec",
+   "FD_CLOEXEC",
+   "O_CLOEXEC"
+  ],
+  "related": [
+   "fd-table",
+   "ofd",
+   "zombie",
+   "docker-stop"
+  ]
+ },
+ {
+  "id": "zombie",
+  "term": "Zombie and wait()",
+  "short": "An exited child retains a small status record until its parent collects it.",
+  "detail": "The child has released its address space and descriptors. A parent can use wait() or waitpid() to collect the status. WNOHANG asks waitpid() to return without blocking.",
+  "design": "A supervisor should reap all available children when it wakes. A growing zombie count points to missing reaping rather than memory or fd leakage by the exited children.",
+  "match": [
+   "zombie",
+   "zombies",
+   "wait()",
+   "waitpid()",
+   "WNOHANG"
+  ],
+  "related": [
+   "fork",
+   "signals",
+   "pid-one"
+  ]
+ },
+ {
+  "id": "threads",
+  "term": "Threads and thread-per-connection",
+  "short": "Threads run independently while sharing process resources such as address space and the fd table.",
+  "detail": "One socket per blocking thread gives each connection a call stack and an independent execution path. A blocked thread sleeps until work arrives. Each thread still consumes stack and kernel bookkeeping.",
+  "design": "Blocking threads are simple for bounded concurrency. For many mostly idle sockets, compare their resource cost with readiness-driven I/O and explicit per-connection state.",
+  "match": [
+   "thread-per-connection",
+   "thread-per-socket",
+   "thread per socket",
+   "blocking thread"
+  ],
+  "related": [
+   "task",
+   "fd-table",
+   "epoll"
+  ]
+ },
+ {
+  "id": "fd-table",
+  "term": "File descriptor table",
+  "short": "A process maps small integers to open kernel objects through its fd table.",
+  "detail": "Files, pipes and sockets all use descriptor slots. The slot holds descriptor flags such as close-on-exec and refers to an open file description. Threads share the table.",
+  "design": "Assign ownership of descriptors and close them on all paths. Reused descriptor numbers mean a stale integer can silently identify an unrelated resource.",
+  "match": [
+   "file descriptor table",
+   "fd table",
+   "descriptor slot",
+   "descriptor slots",
+   "socket()"
+  ],
+  "related": [
+   "ofd",
+   "inode",
+   "emfile"
+  ]
+ },
+ {
+  "id": "ofd",
+  "term": "Open file description",
+  "short": "A kernel open instance stores file offset and file status flags.",
+  "detail": "Descriptors inherited across fork or copied with dup can point to the same description. Two independent opens of one inode use separate descriptions. The description lasts while a reference remains.",
+  "design": "Use positional I/O such as pread() when concurrent callers need independent offsets. Sharing a description makes sequential file position a shared state variable.",
+  "match": [
+   "open file description",
+   "open file descriptions",
+   "file offset",
+   "file offsets"
+  ],
+  "related": [
+   "fd-table",
+   "inode",
+   "fork"
+  ]
+ },
+ {
+  "id": "inode",
+  "term": "Inode",
+  "short": "An inode represents a filesystem object and its metadata. A directory maps names to inode references.",
+  "detail": "Multiple directory entries can refer to one inode. Replacing a pathname changes what future opens find, while existing descriptors can still refer to the old object.",
+  "design": "Readers that keep a descriptor open across a rename can keep seeing the old file. Design explicit reopen or versioning behavior if they need fresh contents.",
+  "match": [
+   "inode",
+   "inodes",
+   "inode metadata",
+   "directory entry"
+  ],
+  "related": [
+   "ofd",
+   "safe-update",
+   "fsync"
+  ]
+ },
+ {
+  "id": "emfile",
+  "term": "EMFILE and ulimit -n",
+  "short": "EMFILE reports that a process cannot allocate another descriptor under its soft fd limit.",
+  "detail": "RLIMIT_NOFILE limits the range of new fd numbers. ulimit -n configures the shell’s resource limit, which its children inherit. Lowering the soft limit preserves descriptors already open.",
+  "design": "Budget for accepted sockets, listeners, files, pipes and internal descriptors together. Raising the limit can buy headroom while a leak remains.",
+  "match": [
+   "EMFILE",
+   "ulimit -n",
+   "RLIMIT_NOFILE",
+   "fd soft limit"
+  ],
+  "related": [
+   "fd-table",
+   "ofd",
+   "accept-queue"
+  ]
+ },
+ {
+  "id": "pid-one",
+  "term": "PID 1 and orphan adoption",
+  "short": "The first process in a PID namespace has special responsibilities for signals and orphaned children.",
+  "detail": "With no closer child subreaper, PID 1 adopts orphaned tasks. Namespace init is shielded from ordinary default terminating signals such as SIGTERM. If it exits, Linux kills the remaining members of that PID namespace.",
+  "design": "Install a stop handler and reap children if the application runs as PID 1. A small init such as tini can forward signals and reap orphaned descendants.",
+  "match": [
+   "PID 1",
+   "orphan adoption",
+   "subreaper",
+   "tini"
+  ],
+  "related": [
+   "signals",
+   "zombie",
+   "docker-stop",
+   "pid-namespace"
+  ]
+ },
+ {
+  "id": "signals",
+  "term": "SIGTERM, SIGKILL and SIGCHLD",
+  "short": "Signals notify a process of events such as a shutdown request or a child exit.",
+  "detail": "SIGTERM can be handled to drain work. SIGKILL cannot be caught, blocked or ignored. SIGCHLD reports child state changes, including exit, and standard signals can coalesce.",
+  "design": "Budget time for SIGTERM cleanup and test the forced-kill path. Persistent state should tolerate SIGKILL cutting off code that would normally flush or release work.",
+  "match": [
+   "SIGTERM",
+   "SIGKILL",
+   "SIGCHLD",
+   "kill -TERM",
+   "kill -KILL"
+  ],
+  "related": [
+   "pid-one",
+   "zombie",
+   "docker-stop",
+   "fsync"
+  ]
+ },
+ {
+  "id": "docker-stop",
+  "term": "docker stop",
+  "short": "Docker requests that the container’s main process exit, then forces termination if the deadline passes.",
+  "detail": "Docker normally sends SIGTERM, waits 10 seconds by default for Linux containers, and sends SIGKILL if still running. A non-forwarding shell wrapper can prevent the app from getting the first signal.",
+  "design": "Exercise the deployed entrypoint when testing shutdown. Coordinate the stop timeout with request drain and cleanup, and use exec or a forwarding init when a wrapper would intercept the signal.",
+  "match": [
+   "docker stop",
+   "stop timeout",
+   "shell wrapper",
+   "entrypoint"
+  ],
+  "related": [
+   "pid-one",
+   "signals",
+   "fork"
+  ]
+ },
+ {
+  "id": "page-cache",
+  "term": "Page cache",
+  "short": "Linux caches file data in RAM for fast reads and buffered writes.",
+  "detail": "A buffered write updates the cache and marks pages dirty. Readers can see the new data before the filesystem sends it to storage. Pressure and synchronous options can make writes wait.",
+  "design": "Interpret write latency as the cost of the path you asked for. Fast acceptance can hide a slower storage device and growing background debt.",
+  "match": [
+   "page cache",
+   "buffered write",
+   "buffered writes",
+   "buffered I/O"
+  ],
+  "related": [
+   "dirty-pages",
+   "writeback",
+   "direct-io",
+   "fsync"
+  ]
+ },
+ {
+  "id": "dirty-pages",
+  "term": "Dirty pages",
+  "short": "A dirty page contains file changes that still need writeback.",
+  "detail": "Submitting the page moves it into writeback. A device completion can still leave the data in a volatile storage cache until a durability operation flushes it.",
+  "design": "Monitor dirty and writeback pages together when storage falls behind. Decide how much accepted-but-uncommitted data the recovery protocol can afford.",
+  "match": [
+   "dirty page",
+   "dirty pages",
+   "dirty data",
+   "volatile device cache"
+  ],
+  "related": [
+   "page-cache",
+   "dirty-ratio",
+   "writeback",
+   "fsync"
+  ]
+ },
+ {
+  "id": "writeback",
+  "term": "Writeback and dirty expiration",
+  "short": "Writeback moves changed data from the page cache toward storage.",
+  "detail": "dirty_expire_centisecs makes older dirty data eligible at a flusher wakeup. Thresholds and sync requests can also trigger writeback, so expiration does not define a deadline for durable data.",
+  "design": "Watch device latency and backlog alongside the rate of returned writes. A longer dirty window can improve coalescing and make later flushes heavier.",
+  "match": [
+   "writeback",
+   "flusher",
+   "dirty_expire",
+   "dirty_expire_centisecs",
+   "dirty expiration"
+  ],
+  "related": [
+   "dirty-pages",
+   "dirty-ratio",
+   "block-layer"
+  ]
+ },
+ {
+  "id": "dirty-ratio",
+  "term": "dirty_ratio and write throttling",
+  "short": "Dirty pressure can slow down processes that are adding data to the page cache.",
+  "detail": "dirty_ratio is expressed relative to available and reclaimable memory. Linux dynamically balances dirtying against writeback and can slow writers before dirty memory grows without bound.",
+  "design": "Expect fast buffered writes to develop a latency tail under sustained load. Measure the device’s drain rate and enforce admission before many writers stall together.",
+  "match": [
+   "dirty_ratio",
+   "dirty pressure",
+   "dirty threshold",
+   "dirty throttles"
+  ],
+  "related": [
+   "writeback",
+   "page-cache",
+   "block-layer"
+  ]
+ },
+ {
+  "id": "fsync",
+  "term": "fsync()",
+  "short": "fsync waits for a file’s changed data and metadata to reach stable storage.",
+  "detail": "It waits for necessary writeback and device-cache flushing when the stack honors flushes. It can report deferred errors. A parent directory entry has a separate sync boundary.",
+  "design": "Place durability acknowledgments after a successful sync. Group commits when latency budgets permit and account for shared queue delays when sizing storage.",
+  "match": [
+   "fsync",
+   "fsync()",
+   "file sync",
+   "directory fsync",
+   "durability flush"
+  ],
+  "related": [
+   "fdatasync",
+   "safe-update",
+   "block-layer",
+   "dirty-pages"
+  ]
+ },
+ {
+  "id": "fdatasync",
+  "term": "fdatasync()",
+  "short": "fdatasync persists file data and just the metadata required to read it correctly.",
+  "detail": "A changed file length is required metadata. A modification timestamp usually is not. The savings depend on the filesystem and storage behavior.",
+  "design": "Consider fdatasync for append-heavy journals that care about content and length. Verify the name separately when creating or replacing a file.",
+  "match": [
+   "fdatasync",
+   "fdatasync()"
+  ],
+  "related": [
+   "fsync",
+   "inode",
+   "safe-update"
+  ]
+ },
+ {
+  "id": "safe-update",
+  "term": "Durable file replacement",
+  "short": "Sync a temporary file, rename it over the target, then sync the parent directory.",
+  "detail": "Create the temp file on the same filesystem. A successful rename changes the live lookup atomically. File fsync persists the contents, and directory fsync persists the name-to-inode change.",
+  "design": "Check errors at every step. Test recovery at each boundary so a returned success really means the new name and data survive the modeled failure.",
+  "match": [
+   "durable file replacement",
+   "temporary file",
+   "directory sync",
+   "parent directory",
+   "unsynced rename"
+  ],
+  "related": [
+   "fsync",
+   "fdatasync",
+   "inode"
+  ]
+ },
+ {
+  "id": "direct-io",
+  "term": "O_DIRECT",
+  "short": "Direct I/O bypasses the ordinary file-data page cache on supported filesystems.",
+  "detail": "Alignment and support depend on the filesystem, file and kernel. An ordinary successful direct write can still leave volatile device data or unsynced metadata.",
+  "design": "A database that owns its memory cache may use direct I/O to avoid double caching. Select the durability policy independently and avoid overlapping buffered and direct writes.",
+  "match": [
+   "O_DIRECT",
+   "direct I/O",
+   "direct write"
+  ],
+  "related": [
+   "page-cache",
+   "fsync",
+   "block-layer"
+  ]
+ },
+ {
+  "id": "block-layer",
+  "term": "Block layer",
+  "short": "The kernel’s block layer dispatches storage requests to a device.",
+  "detail": "Requests can be queued, merged, scheduled and submitted through multiple hardware queues on real systems. Queue time adds to service time when a write or sync waits for completion.",
+  "design": "Measure device utilization, queue depth and tail latency together. Buffered writes can report success while this layer accumulates work that later fsync calls have to wait behind.",
+  "match": [
+   "block layer",
+   "block layer queue",
+   "block queue",
+   "block request"
+  ],
+  "related": [
+   "writeback",
+   "fsync",
+   "direct-io"
+  ]
+ },
+ {
+  "id": "nic",
+  "term": "NIC, interrupts and softirq",
+  "short": "The network card receives frames, and the kernel schedules work to process them.",
+  "detail": "A hard interrupt commonly schedules NAPI polling. Packet processing often runs in NET_RX softirq context, and the driver can poll batches of frames during busy periods.",
+  "design": "A host can lose packets or spend CPU in softirq before the application sees a byte. Inspect driver counters and CPU placement when app metrics alone miss network saturation.",
+  "match": [
+   "NIC",
+   "hard interrupt",
+   "softirq",
+   "NET_RX",
+   "NAPI"
+  ],
+  "related": [
+   "skb",
+   "socket-buffers",
+   "tcp-backpressure"
+  ]
+ },
+ {
+  "id": "skb",
+  "term": "sk_buff",
+  "short": "Linux uses sk_buff structures to carry packet metadata and refer to packet data.",
+  "detail": "The structure can reference linear data or fragments and carries information used by the network stack. TCP handles sequencing and delivery to the receiving socket.",
+  "design": "At high packet rates, per-packet CPU and metadata costs can matter as much as bandwidth. Packet aggregation and batching can shift those costs.",
+  "match": [
+   "sk_buff",
+   "TCP processing",
+   "packet metadata"
+  ],
+  "related": [
+   "nic",
+   "socket-buffers",
+   "syn-queue"
+  ]
+ },
+ {
+  "id": "syn-queue",
+  "term": "SYN queue",
+  "short": "A TCP listener keeps state for handshakes that have yet to complete.",
+  "detail": "Linux separately controls the amount of incomplete request state. SYN cookies can encode state in the reply and avoid retaining the normal request entry under pressure.",
+  "design": "Separate handshake pressure from application admission. Raising the accept backlog and tuning the SYN path address different bottlenecks.",
+  "match": [
+   "SYN queue",
+   "SYN backlog",
+   "SYN cookies",
+   "tcp_max_syn_backlog"
+  ],
+  "related": [
+   "accept-queue",
+   "skb",
+   "tcp-backpressure"
+  ]
+ },
+ {
+  "id": "accept-queue",
+  "term": "Accept queue and somaxconn",
+  "short": "Established connections wait for the app to accept them, within the effective listen backlog.",
+  "detail": "Linux caps the requested listen backlog by somaxconn. If accept falls behind, handshake completion can be delayed or dropped, with retries or resets depending on kernel settings and timing.",
+  "design": "Size the backlog for short bursts. Monitor overflow and accept rate because a larger queue adds waiting capacity while sustained overload still needs admission and more service capacity.",
+  "match": [
+   "accept queue",
+   "somaxconn",
+   "listen backlog",
+   "listen() backlog",
+   "accept()"
+  ],
+  "related": [
+   "syn-queue",
+   "socket-buffers",
+   "emfile"
+  ]
+ },
+ {
+  "id": "socket-buffers",
+  "term": "Socket buffers",
+  "short": "Kernel memory holds data queued for sending or waiting for the application to read.",
+  "detail": "A successful write to a TCP socket means the kernel accepted bytes, which can still be unsent or unacknowledged. TCP delivers a byte stream, with reads and writes allowed to complete partially.",
+  "design": "Bound application buffers as well as socket buffers. Large queues can hide a slow peer until request latency and memory consumption grow.",
+  "match": [
+   "socket buffer",
+   "socket buffers",
+   "send buffer",
+   "receive buffer",
+   "connected fd"
+  ],
+  "related": [
+   "tcp-backpressure",
+   "epoll",
+   "eagain"
+  ]
+ },
+ {
+  "id": "tcp-backpressure",
+  "term": "TCP backpressure",
+  "short": "A slow reader can eventually stop the writer from queuing more data.",
+  "detail": "The reader’s receive buffer fills, the advertised window shrinks, and unsent data can fill the peer’s send buffer. A blocking writer sleeps when it cannot queue bytes. A non-blocking one can return EAGAIN.",
+  "design": "Propagate backpressure through upstream queues with bounded buffering, deadlines or load shedding. Otherwise a network bottleneck becomes memory buildup in the application.",
+  "match": [
+   "TCP backpressure",
+   "receive window",
+   "zero receive window",
+   "zero window"
+  ],
+  "related": [
+   "socket-buffers",
+   "eagain",
+   "epoll"
+  ]
+ },
+ {
+  "id": "epoll",
+  "term": "epoll and readiness",
+  "short": "epoll gives a single thread events for many registered file descriptors.",
+  "detail": "epoll_wait returns ready descriptors. Edge-triggered loops typically drain each non-blocking descriptor until EAGAIN. Level-triggered epoll can keep reporting an fd while it remains ready.",
+  "design": "Readiness tells you when to try an operation, which can still race or complete partially. Give each connection a work budget and avoid doing blocking work in the event loop.",
+  "match": [
+   "epoll",
+   "epoll_wait",
+   "readable fd",
+   "writable readiness",
+   "readiness event",
+   "edge-triggered"
+  ],
+  "related": [
+   "eagain",
+   "socket-buffers",
+   "threads"
+  ]
+ },
+ {
+  "id": "eagain",
+  "term": "EAGAIN",
+  "short": "The request cannot proceed at this moment under the current conditions.",
+  "detail": "A non-blocking socket can return EAGAIN or EWOULDBLOCK when it would otherwise sleep. A fork can return EAGAIN when creating another task would exceed a resource limit.",
+  "design": "Choose retries based on the cause. Wait for readiness on sockets or capacity on task creation. Busy retries burn CPU while the underlying limit remains.",
+  "match": [
+   "EAGAIN",
+   "EWOULDBLOCK"
+  ],
+  "related": [
+   "epoll",
+   "tcp-backpressure",
+   "cgroups"
+  ]
+ },
+ {
+  "id": "namespaces",
+  "term": "Linux namespaces",
+  "short": "Namespaces give processes different views of kernel-managed resources.",
+  "detail": "A task can share one kind of namespace while using private namespaces for other resources. PID, network, mount and UTS namespaces change different parts of the view.",
+  "design": "Choose what to share deliberately. Private views do not enforce budgets or provide an independent kernel. Combine them with cgroups and security controls for the isolation you need.",
+  "match": [
+   "Linux namespaces",
+   "namespace isolation",
+   "shared kernel"
+  ],
+  "related": [
+   "pid-namespace",
+   "net-namespace",
+   "mnt-namespace",
+   "uts-namespace",
+   "cgroups"
+  ]
+ },
+ {
+  "id": "pid-namespace",
+  "term": "PID namespace",
+  "short": "The same task has a PID in its own namespace and in every ancestor PID namespace that can see it.",
+  "detail": "Tasks in a child PID namespace cannot see ancestor-only tasks. An observer must use the PID valid in its own view. A matching procfs mount is needed for tools like ps to show the intended process list.",
+  "design": "Include both PID and namespace context in investigations. A PID copied from a container log can refer to a different task when used on the host.",
+  "match": [
+   "PID namespace",
+   "host PID",
+   "container PID"
+  ],
+  "related": [
+   "namespaces",
+   "pid-one",
+   "task"
+  ]
+ },
+ {
+  "id": "net-namespace",
+  "term": "Network namespace",
+  "short": "A network namespace has its own interfaces, routes and port bindings.",
+  "detail": "A virtual Ethernet pair can connect a private namespace to the host. Sharing the host’s network namespace uses the host’s routing and port space without changing PID or mount isolation.",
+  "design": "Plan service discovery and port conflicts around the network namespace boundary. Network isolation and network policy are separate choices.",
+  "match": [
+   "network namespace",
+   "host network namespace",
+   "port bindings",
+   "network stack"
+  ],
+  "related": [
+   "namespaces",
+   "socket-buffers",
+   "mnt-namespace"
+  ]
+ },
+ {
+  "id": "mnt-namespace",
+  "term": "Mount namespace",
+  "short": "A mount namespace gives processes their own view of the filesystem mount tree.",
+  "detail": "A runtime can mount a container root filesystem and selectively bind host paths. Configured propagation can carry mount events between namespaces.",
+  "design": "Check which mounts back persistent data and which host paths are exposed. An isolated mount view does not make a shared volume private.",
+  "match": [
+   "mount namespace",
+   "root filesystem",
+   "bind mounts"
+  ],
+  "related": [
+   "namespaces",
+   "inode",
+   "uts-namespace"
+  ]
+ },
+ {
+  "id": "uts-namespace",
+  "term": "UTS namespace",
+  "short": "A UTS namespace isolates the hostname and NIS domain name.",
+  "detail": "Processes in one UTS namespace can see a different hostname from processes on the host. The kernel remains shared.",
+  "design": "Treat container hostnames as labels for observability. Correlate them with host and workload identifiers when diagnosing shared-kernel problems.",
+  "match": [
+   "UTS namespace",
+   "NIS domain name",
+   "container hostname"
+  ],
+  "related": [
+   "namespaces",
+   "pid-namespace",
+   "net-namespace"
+  ]
+ },
+ {
+  "id": "cgroups",
+  "term": "cgroups and pids.max",
+  "short": "Control groups account for and limit resources consumed by a group of tasks.",
+  "detail": "Controllers can apply CPU, memory, I/O and task policies. The pids controller counts tasks, including threads, and rejects creation that would exceed pids.max. Lowering the limit can leave pids.current temporarily above it.",
+  "design": "Budget process and thread creation separately from memory and CPU. Changes to PID visibility leave cgroup enforcement in place, and a parent group can impose a tighter limit.",
+  "match": [
+   "cgroup",
+   "cgroups",
+   "pids.current",
+   "pids.max",
+   "cgroup v2"
+  ],
+  "related": [
+   "namespaces",
+   "task",
+   "eagain"
+  ]
+ }
+]

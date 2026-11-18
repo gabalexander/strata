@@ -1,0 +1,582 @@
+[
+ {
+  "id": "arrival-rate",
+  "term": "Arrival rate (λ)",
+  "short": "How many requests arrive per second, on average.",
+  "detail": "λ is an average over time. The instantaneous rate is lumpy: with random arrivals, several often land within a few milliseconds of each other and then nothing comes for a while.",
+  "design": "Plan with peak λ (the busiest minute of the busiest day), not the daily average. A service sized for the average is overloaded every peak.",
+  "match": [
+   "arrival rate",
+   "λ",
+   "offered load"
+  ],
+  "related": [
+   "service-rate",
+   "utilization",
+   "poisson"
+  ]
+ },
+ {
+  "id": "service-rate",
+  "term": "Service rate (μ)",
+  "short": "How many requests one server can finish per second when it never waits: 1 / (mean service time).",
+  "detail": "A server that takes 100 ms per request on average has μ = 10/s. Making the work faster raises μ; adding servers multiplies capacity to c × μ.",
+  "design": "Measure μ under realistic load with a saturation test, not from the happy-path benchmark: locks, GC and cache misses lower it.",
+  "match": [
+   "service rate",
+   "μ",
+   "service time"
+  ],
+  "related": [
+   "arrival-rate",
+   "utilization",
+   "capacity-planning"
+  ]
+ },
+ {
+  "id": "utilization",
+  "term": "Utilization (ρ)",
+  "short": "The fraction of time the server is busy: ρ = λ / μ (or λ / (c × μ) with c servers).",
+  "detail": "At ρ = 0.9 the server is idle 10% of the time. Queueing delay grows like ρ / (1 − ρ), so each step towards 100% costs more than the last: 80% → 90% doubles the wait, 90% → 95% doubles it again.",
+  "design": "High utilization looks efficient on a dashboard and feels slow to users. For latency-sensitive services, aim for 50–70% at peak and treat 80%+ as a capacity alarm.",
+  "match": [
+   "utilization",
+   "ρ",
+   "busy fraction"
+  ],
+  "related": [
+   "headroom",
+   "mm1",
+   "littles-law"
+  ]
+ },
+ {
+  "id": "queueing-delay",
+  "term": "Queueing delay (wait)",
+  "short": "Time a request spends waiting in line before any work starts on it.",
+  "detail": "It is zero when a server is free on arrival and dominates latency near saturation. At ρ = 0.9 in M/M/1 the average request waits 9× as long as its own service takes.",
+  "design": "When latency rises with load but the per-request work (CPU time, query time) is flat, the extra time is queueing: add capacity or cut variance, not micro-optimisations.",
+  "match": [
+   "queueing delay",
+   "queueing",
+   "wait in queue",
+   "mean wait"
+  ],
+  "related": [
+   "response-time",
+   "utilization",
+   "kingman"
+  ]
+ },
+ {
+  "id": "response-time",
+  "term": "Response time (W)",
+  "short": "Total time a request spends in the system: queueing delay plus service time.",
+  "detail": "This is the latency a client measures (minus the network). In M/M/1 its mean is W = 1 / (μ − λ): with μ = 10/s and λ = 9/s, W = 1 s for 100 ms of work.",
+  "design": "Set SLOs on response time percentiles, and remember that the gap between μ and λ, not μ alone, sets the mean.",
+  "match": [
+   "response time",
+   "time in system",
+   "latency"
+  ],
+  "related": [
+   "queueing-delay",
+   "littles-law",
+   "percentile"
+  ]
+ },
+ {
+  "id": "littles-law",
+  "term": "Little's law (L = λW)",
+  "short": "Average number in the system = arrival rate × average time each one spends there.",
+  "detail": "It holds for any stable system regardless of arrival pattern, service distribution or queue order. L is measured here by integrating the count over time, independently of λ and W, and the two sides still agree.",
+  "design": "Turn any two into the third: 200 req/s at 50 ms means ~10 in flight, so a pool of 10 connections is the bare minimum. Use it to size thread pools, connection pools and concurrency limits.",
+  "match": [
+   "little's law",
+   "L = λW",
+   "L = λ × W"
+  ],
+  "related": [
+   "response-time",
+   "arrival-rate",
+   "aimd"
+  ]
+ },
+ {
+  "id": "mm1",
+  "term": "M/M/1",
+  "short": "The simplest queue: random (Poisson) arrivals, random (exponential) service times, one server, FIFO.",
+  "detail": "Kendall notation: arrivals / service / servers. M means memoryless (Poisson/exponential). Mean time in system W = 1 / (μ − λ), and the time is itself exponential, so p99 = ln(100) / (μ − λ) ≈ 4.6 × the mean.",
+  "design": "A good first model for any single bottleneck (one DB primary, one partition, one lock). If it says W blows up at your peak, no amount of tuning will save that design.",
+  "match": [
+   "M/M/1"
+  ],
+  "related": [
+   "mmc",
+   "poisson",
+   "exponential",
+   "utilization"
+  ]
+ },
+ {
+  "id": "mmc",
+  "term": "M/M/c and Erlang C",
+  "short": "One shared queue feeding c identical servers. Erlang C is the chance an arrival has to wait at all.",
+  "detail": "Mean wait = C(c, λ/μ) / (cμ − λ). With variable service (M/G/c) a good approximation multiplies that by (1 + CV²) / 2.",
+  "design": "Model a worker pool, a thread pool or a call centre this way. At the same per-server utilization, more servers sharing one queue wait far less.",
+  "match": [
+   "M/M/c",
+   "M/G/c",
+   "Erlang C"
+  ],
+  "related": [
+   "pooling",
+   "mm1",
+   "kingman"
+  ]
+ },
+ {
+  "id": "poisson",
+  "term": "Poisson arrivals",
+  "short": "Requests that arrive independently at random, at a constant average rate.",
+  "detail": "Gaps between arrivals are exponential: short gaps are common, so arrivals clump. Many independent users each acting on their own produce close to Poisson traffic.",
+  "design": "Real traffic is often burstier than Poisson (retries, cron jobs, fan-out, batch clients), which makes queueing worse than these curves. Treat M/M/1 as optimistic.",
+  "match": [
+   "Poisson",
+   "at random"
+  ],
+  "related": [
+   "arrival-rate",
+   "exponential",
+   "cv"
+  ]
+ },
+ {
+  "id": "exponential",
+  "term": "Exponential service time",
+  "short": "Service times where most requests are quick and a few take several times the mean; the standard deviation equals the mean.",
+  "detail": "It is memoryless: a request that has run 200 ms is as likely to finish in the next 10 ms as a fresh one. Its coefficient of variation is exactly 1.",
+  "design": "A neutral middle ground for modelling. Real services are usually more variable (cache misses, GC, lock waits), so plan for worse.",
+  "match": [
+   "exponential"
+  ],
+  "related": [
+   "cv",
+   "mm1",
+   "heavy-tail"
+  ]
+ },
+ {
+  "id": "cv",
+  "term": "Variance and coefficient of variation",
+  "short": "How spread out service times are. CV = standard deviation / mean; CV² is the squared version used in queueing formulas.",
+  "detail": "Constant service has CV = 0, exponential CV = 1, and a mix of mostly fast with occasional very slow requests can reach CV ≈ 3 (CV² ≈ 9.5) at the same mean.",
+  "design": "Two services with the same average latency can need very different capacity. Reducing variance (timeouts on slow paths, splitting big requests, isolating heavy tenants) shortens queues without adding servers.",
+  "match": [
+   "coefficient of variation",
+   "CV²",
+   "CV",
+   "variance",
+   "variability"
+  ],
+  "related": [
+   "kingman",
+   "heavy-tail",
+   "exponential"
+  ]
+ },
+ {
+  "id": "kingman",
+  "term": "Kingman's formula",
+  "short": "Queueing delay ≈ ρ / (1 − ρ) × (ca² + cs²) / 2 × mean service time.",
+  "detail": "Three factors multiply: how busy (ρ / (1 − ρ)), how variable (arrival and service CV²), how long the work is. For one server with Poisson arrivals it is exact (Pollaczek–Khinchine).",
+  "design": "It tells you which lever to pull. Halving variance halves the wait just like adding capacity does, and near saturation the utilization factor swamps everything else.",
+  "match": [
+   "Kingman's formula",
+   "Kingman",
+   "Pollaczek–Khinchine"
+  ],
+  "related": [
+   "cv",
+   "utilization",
+   "queueing-delay"
+  ]
+ },
+ {
+  "id": "percentile",
+  "term": "Percentile",
+  "short": "The value below which a given share of samples fall: the p90 latency is faster than 90% of requests and slower than 10%.",
+  "detail": "Unlike the mean, percentiles show the shape of the distribution. They need many samples: a p99 from 200 requests rests on the 2 slowest.",
+  "design": "Never average percentiles across hosts or time windows; merge the histograms instead. Alert on percentiles, not means, because means hide the users who suffer.",
+  "match": [
+   "percentile",
+   "percentiles"
+  ],
+  "related": [
+   "p99",
+   "tail-latency"
+  ]
+ },
+ {
+  "id": "p99",
+  "term": "p50, p99, p999",
+  "short": "The median, the 1-in-100 slowest and the 1-in-1000 slowest request latencies.",
+  "detail": "p50 is the typical experience. p99 is what a user making 100 requests per page view sees on almost every page. p999 is where GC pauses, retries and failovers live.",
+  "design": "Pick the percentile from how requests compose: a page that makes 50 backend calls is governed by the backends' p99, not their p50.",
+  "match": [
+   "p99",
+   "p50",
+   "p999",
+   "p95",
+   "p90"
+  ],
+  "related": [
+   "percentile",
+   "tail-latency",
+   "tail-amplification"
+  ]
+ },
+ {
+  "id": "tail-latency",
+  "term": "Tail latency",
+  "short": "The slowest few percent of requests: the far right of the latency distribution.",
+  "detail": "Tails come from queueing bursts, variable work, GC, noisy neighbours and retries. They grow faster than the mean as load rises.",
+  "design": "Tails are what users remember and what fan-out multiplies. Design for them explicitly: hedging, timeouts, load shedding, and capacity planned on p99 rather than mean.",
+  "match": [
+   "tail latency",
+   "the tail",
+   "tail event"
+  ],
+  "related": [
+   "p99",
+   "tail-amplification",
+   "hedged-request"
+  ]
+ },
+ {
+  "id": "headroom",
+  "term": "Headroom and the knee",
+  "short": "Spare capacity kept on purpose. The knee is where latency starts to climb steeply, around 70–80% utilization.",
+  "detail": "Below the knee, extra load barely changes latency; past it, small increases in load cause large increases in wait, and bursts take a long time to drain.",
+  "design": "Keep enough headroom that peak traffic, one lost instance and a retry burst together still land below the knee. Headroom is what absorbs the things you did not plan for.",
+  "match": [
+   "headroom",
+   "knee",
+   "hockey stick",
+   "spare capacity"
+  ],
+  "related": [
+   "utilization",
+   "capacity-planning",
+   "overload"
+  ]
+ },
+ {
+  "id": "capacity-planning",
+  "term": "Capacity planning",
+  "short": "Deciding how much capacity to run so latency targets hold at expected peak load, with margin.",
+  "detail": "Work back from the SLO: the latency target and the queueing curve give a maximum utilization; peak λ divided by that utilization and by μ gives the number of servers.",
+  "design": "Plan for N+1 or N+2 (lose an instance or a zone at peak), with headroom left over. Revisit when the latency curve or the traffic shape changes, not just when traffic grows.",
+  "match": [
+   "capacity planning",
+   "plan capacity"
+  ],
+  "related": [
+   "headroom",
+   "utilization",
+   "service-rate"
+  ]
+ },
+ {
+  "id": "pooling",
+  "term": "Resource pooling (shared queue)",
+  "short": "Several servers drawing from one shared queue instead of each having its own.",
+  "detail": "With separate queues, one server can sit idle while another has a line. A shared queue makes that impossible, so the same servers at the same load wait far less, especially when service times vary.",
+  "design": "Prefer one queue in front of a worker pool, least-outstanding-requests or power-of-two-choices load balancing over random or round-robin, and avoid pinning work to a server unless you need affinity.",
+  "match": [
+   "pooling",
+   "shared queue",
+   "separate queues",
+   "idle while"
+  ],
+  "related": [
+   "mmc",
+   "cv",
+   "heavy-tail"
+  ]
+ },
+ {
+  "id": "heavy-tail",
+  "term": "Heavy-tailed service",
+  "short": "Service times where rare requests take many times the mean: here 1 in 20 takes ~1 s while the rest take ~53 ms.",
+  "detail": "The mean stays at 100 ms but the variance is ~10× that of exponential. In a FIFO queue every request behind a slow one waits for it (head-of-line blocking).",
+  "design": "Find and isolate the slow class (a separate pool, a timeout, splitting the work) so it cannot block the fast majority. That often beats adding servers.",
+  "match": [
+   "heavy tail",
+   "heavy-tailed",
+   "head-of-line blocking"
+  ],
+  "related": [
+   "cv",
+   "kingman",
+   "pooling"
+  ]
+ },
+ {
+  "id": "fan-out",
+  "term": "Fan-out",
+  "short": "One incoming request triggers N parallel calls to backends (shards, replicas, microservices) and waits for all of them.",
+  "detail": "The request finishes when the slowest call finishes, so its latency is the maximum of N samples, not their average.",
+  "design": "Fan-out is how search, feeds and scatter-gather queries scale, and it is why their leaves need much tighter tail latency than the root SLO.",
+  "match": [
+   "fan-out",
+   "fans out",
+   "fan out",
+   "scatter-gather"
+  ],
+  "related": [
+   "tail-amplification",
+   "hedged-request",
+   "p99"
+  ]
+ },
+ {
+  "id": "tail-amplification",
+  "term": "Tail amplification",
+  "short": "Fan-out turns rare slow leaves into common slow requests: the chance at least one of N leaves is in its slowest 1% is 1 − 0.99^N.",
+  "detail": "At N = 10 that is 10%, at N = 100 it is 63%. At N = 100 the median request is slower than a single leaf's p99.",
+  "design": "Budget leaf latency from the root: if 100 leaves each need p99.9 of 50 ms to give a root p90 of 50 ms, set the leaf SLO there. Or cut the tail with hedging, or cut N.",
+  "match": [
+   "tail amplification",
+   "1 − 0.99^N",
+   "at least one leaf"
+  ],
+  "related": [
+   "fan-out",
+   "p99",
+   "hedged-request"
+  ]
+ },
+ {
+  "id": "hedged-request",
+  "term": "Hedged request",
+  "short": "If a call has not answered by a delay (often its p95), send the same call to another replica and use whichever answers first.",
+  "detail": "Only the slow few percent get a second copy, so the extra load is small (~5% for a p95 hedge), but the chance both copies are slow is tiny. Dean and Barroso report p999 dropping from 1.8 s to 74 ms for 2% more requests.",
+  "design": "Use it for idempotent reads with independent replica latency. It does not help when the slowness is in the request itself, and it adds load exactly when the system is struggling, so cap the hedge rate.",
+  "match": [
+   "hedged request",
+   "hedged requests",
+   "hedging",
+   "hedge",
+   "backup request"
+  ],
+  "related": [
+   "tied-request",
+   "tail-amplification",
+   "fan-out"
+  ]
+ },
+ {
+  "id": "tied-request",
+  "term": "Tied request",
+  "short": "Send the call to two replicas at once, each told about the other; whichever starts it first cancels the other copy.",
+  "detail": "This targets queueing delay: the copy that reaches a free server first wins, and the cancellation means the work is usually done once.",
+  "design": "Better than hedging when slowness is mostly queueing at the replicas, and it needs servers that support cross-cancellation. Delay the second copy by about one network round trip so both rarely start.",
+  "match": [
+   "tied request",
+   "tied requests"
+  ],
+  "related": [
+   "hedged-request",
+   "queueing-delay"
+  ]
+ },
+ {
+  "id": "overload",
+  "term": "Overload",
+  "short": "More work arriving than the system can finish (λ > μ). No queue size fixes it; something has to be refused or dropped.",
+  "detail": "An unbounded queue grows without limit, and every request waits longer than the one before. Once the wait exceeds the client timeout, the queue is a delay line: it holds each request just long enough to be useless.",
+  "design": "Decide in advance what gives when demand exceeds capacity: reject early, drop expired work, degrade features. Systems that never refuse end up failing every request instead.",
+  "match": [
+   "overload",
+   "overloaded",
+   "delay line",
+   "λ > μ"
+  ],
+  "related": [
+   "load-shedding",
+   "bounded-queue",
+   "goodput",
+   "backpressure"
+  ]
+ },
+ {
+  "id": "backpressure",
+  "term": "Backpressure",
+  "short": "A slow component pushes back on its callers (blocks, rejects or slows them) instead of silently accumulating work.",
+  "detail": "Bounded queues, concurrency limits, TCP flow control and 503 responses are all backpressure: they make the overload visible to the caller.",
+  "design": "Propagate it end to end: a component that absorbs unbounded work hides overload until it falls over. Callers must handle the push-back (retry with backoff elsewhere, degrade, fail fast).",
+  "match": [
+   "backpressure",
+   "push back"
+  ],
+  "related": [
+   "bounded-queue",
+   "load-shedding",
+   "aimd"
+  ]
+ },
+ {
+  "id": "bounded-queue",
+  "term": "Bounded queue",
+  "short": "A queue with a maximum length; when it is full, new work is refused instead of added.",
+  "detail": "The bound caps the worst wait at about bound / μ. A bound of 5 with μ = 10/s means at most ~0.5 s of queueing.",
+  "design": "Size the bound so a full queue still fits inside the caller's deadline: bound ≤ μ × timeout. A bigger bound only stores requests that will time out.",
+  "match": [
+   "bounded queue",
+   "queue bound",
+   "queue limit",
+   "max queue length"
+  ],
+  "related": [
+   "load-shedding",
+   "backpressure",
+   "overload"
+  ]
+ },
+ {
+  "id": "load-shedding",
+  "term": "Load shedding (503)",
+  "short": "Deliberately refusing some requests (HTTP 503 or 429) so the ones you accept still succeed in time.",
+  "detail": "A fast rejection costs microseconds and tells the client immediately; serving a request that will time out costs full service time and helps nobody.",
+  "design": "Shed early and cheaply, at the edge if possible, and by priority (drop background and retry traffic before user traffic). Clients need backoff so rejections do not turn into a retry storm.",
+  "match": [
+   "load shedding",
+   "shedding",
+   "503",
+   "503s"
+  ],
+  "related": [
+   "bounded-queue",
+   "goodput",
+   "aimd"
+  ]
+ },
+ {
+  "id": "goodput",
+  "term": "Goodput",
+  "short": "Useful work per second: requests answered while the client is still waiting.",
+  "detail": "Throughput counts everything the server finishes; goodput only counts answers that arrived before the client gave up. Under overload with a long queue they diverge until goodput is 0.",
+  "design": "Graph goodput (or success within SLO) next to throughput. A server at 100% CPU with flat throughput can be producing nothing useful.",
+  "match": [
+   "goodput",
+   "useful answers"
+  ],
+  "related": [
+   "throughput",
+   "wasted-work",
+   "overload"
+  ]
+ },
+ {
+  "id": "throughput",
+  "term": "Throughput",
+  "short": "Requests the server completes per second, useful or not.",
+  "detail": "It cannot exceed capacity (c × μ). Under overload it stays at capacity, which is why throughput alone says nothing about whether users are being served.",
+  "design": "Throughput is a capacity metric; pair it with latency percentiles and goodput to judge health.",
+  "match": [
+   "throughput"
+  ],
+  "related": [
+   "goodput",
+   "service-rate"
+  ]
+ },
+ {
+  "id": "timeout",
+  "term": "Client timeout",
+  "short": "How long a caller waits before giving up on a request: 1 s here.",
+  "detail": "When it fires the client moves on, but the server usually does not know and keeps the request in its queue or keeps working on it.",
+  "design": "Every remote call needs a timeout, set from the caller's own deadline, not a round default. Pair it with deadline propagation so servers can stop working for callers that left.",
+  "match": [
+   "timeout",
+   "timeouts",
+   "timed out",
+   "gave up"
+  ],
+  "related": [
+   "deadline-propagation",
+   "wasted-work",
+   "goodput"
+  ]
+ },
+ {
+  "id": "deadline-propagation",
+  "term": "Deadline propagation",
+  "short": "Sending the caller's absolute deadline along with the request, so every hop knows how much time is left.",
+  "detail": "gRPC does this with `grpc-timeout`. A server can then refuse to start work that cannot finish in time, and pass a smaller deadline to its own backends.",
+  "design": "Check the remaining budget before expensive steps and drop requests that cannot make it. Under overload this turns wasted work back into useful work.",
+  "match": [
+   "deadline propagation",
+   "deadline check",
+   "deadline",
+   "remaining budget"
+  ],
+  "related": [
+   "timeout",
+   "wasted-work",
+   "load-shedding"
+  ]
+ },
+ {
+  "id": "wasted-work",
+  "term": "Wasted work",
+  "short": "Server time spent on requests whose client has already given up, so nobody reads the answer.",
+  "detail": "These are drawn faded with ✕: still in the queue or in service after their client timed out. Under overload with a long FIFO queue, nearly all work is wasted.",
+  "design": "Measure it (late completions, cancelled contexts) and kill it with deadlines, cancellation and bounded queues. It is pure lost capacity at the moment you need it most.",
+  "match": [
+   "wasted work",
+   "wasted",
+   "zombie"
+  ],
+  "related": [
+   "goodput",
+   "timeout",
+   "deadline-propagation"
+  ]
+ },
+ {
+  "id": "lifo",
+  "term": "FIFO and LIFO",
+  "short": "The order a queue serves requests in: FIFO takes the oldest first, LIFO the newest.",
+  "detail": "Under overload the newest request is the one whose client is still waiting, so LIFO restores goodput; the oldest sink to the back and time out there. Facebook's adaptive LIFO switches to it only when the queue is long.",
+  "design": "Unfair by design, so use it only in overload and pair it with a queue bound or deadline drops, otherwise the unlucky ones wait forever.",
+  "match": [
+   "LIFO",
+   "FIFO",
+   "newest first"
+  ],
+  "related": [
+   "overload",
+   "goodput",
+   "bounded-queue"
+  ]
+ },
+ {
+  "id": "aimd",
+  "term": "AIMD concurrency limit",
+  "short": "Additive increase, multiplicative decrease: slowly raise the allowed in-flight requests while things are fast, cut it sharply when they slow down.",
+  "detail": "The same rule TCP uses for its congestion window. It converges on roughly μ × target latency in flight (Little's law), and re-adapts when the server slows down.",
+  "design": "An adaptive limit (Netflix concurrency-limits, Envoy adaptive concurrency) finds the right bound without hand tuning. Requests over the limit fail fast, which is backpressure the caller can act on.",
+  "match": [
+   "AIMD",
+   "concurrency limit",
+   "adaptive limit"
+  ],
+  "related": [
+   "backpressure",
+   "littles-law",
+   "load-shedding"
+  ]
+ }
+]

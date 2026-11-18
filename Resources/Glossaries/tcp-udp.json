@@ -1,0 +1,676 @@
+[
+ {
+  "id": "tcp",
+  "term": "TCP",
+  "short": "A connection-oriented transport that delivers an ordered stream of bytes.",
+  "detail": "TCP uses sequence numbers, acknowledgments and retransmissions to repair loss. The two directions have independent byte sequences.",
+  "design": "A TCP ACK confirms receipt by the peer transport. Use an application acknowledgment when you need proof of processing or durability.",
+  "match": [
+   "TCP",
+   "TCP connection"
+  ],
+  "related": [
+   "byte-stream",
+   "ack",
+   "handshake",
+   "udp"
+  ]
+ },
+ {
+  "id": "udp",
+  "term": "UDP",
+  "short": "A connectionless transport that sends discrete datagrams.",
+  "detail": "UDP provides ports, a length and a checksum, with no built-in retransmission, ordering, flow control or congestion control.",
+  "design": "Choose UDP when late data has little value, or when an application protocol needs to control its own recovery. High-rate traffic still needs congestion control.",
+  "match": [
+   "UDP",
+   "UDP transport"
+  ],
+  "related": [
+   "datagram",
+   "tcp",
+   "quic"
+  ]
+ },
+ {
+  "id": "segment",
+  "term": "TCP segment",
+  "short": "A TCP header and optional bytes sent as one network unit.",
+  "detail": "A header carries flags, sequence and acknowledgment numbers, and the advertised receive window. A retransmission can contain the same byte range in a different segment.",
+  "design": "Socket writes, wire segments and app reads can have different boundaries. Diagnose framing bugs at the byte-stream layer.",
+  "match": [
+   "TCP segment",
+   "TCP segments"
+  ],
+  "related": [
+   "mss",
+   "sequence",
+   "byte-stream"
+  ]
+ },
+ {
+  "id": "datagram",
+  "term": "UDP datagram",
+  "short": "A separately addressed UDP message with a preserved boundary.",
+  "detail": "One socket receive gets at most one datagram. If the application buffer is too small, the datagram can be truncated.",
+  "design": "Size messages to fit the path MTU when possible. IP fragmentation makes a datagram depend on delivery of every fragment.",
+  "match": [
+   "UDP datagram",
+   "datagram",
+   "datagrams"
+  ],
+  "related": [
+   "udp",
+   "byte-stream",
+   "quic"
+  ]
+ },
+ {
+  "id": "byte-stream",
+  "term": "TCP byte stream and framing",
+  "short": "TCP preserves byte order while the application defines where each message starts and ends.",
+  "detail": "Two writes can arrive in one read, and one write can span multiple reads. Framing adds a convention such as a length prefix, delimiter or fixed size.",
+  "design": "Make parsers incremental and cap frame sizes. Test split headers and multiple frames in a single read.",
+  "match": [
+   "byte stream",
+   "framing",
+   "message boundaries"
+  ],
+  "related": [
+   "tcp",
+   "segment",
+   "datagram"
+  ]
+ },
+ {
+  "id": "handshake",
+  "term": "Three-way handshake",
+  "short": "SYN, SYN-ACK and ACK establish a TCP connection.",
+  "detail": "Both peers learn each other’s ISN and can negotiate options such as MSS and SACK support. The server reaches ESTABLISHED on receipt of the third segment.",
+  "design": "Budget a round trip before a client can send ordinary data. Warm connections help latency-sensitive paths, especially across regions.",
+  "match": [
+   "three-way handshake",
+   "TCP handshake",
+   "ESTABLISHED"
+  ],
+  "related": [
+   "syn",
+   "syn-ack",
+   "ack",
+   "isn",
+   "pooling"
+  ]
+ },
+ {
+  "id": "syn",
+  "term": "SYN",
+  "short": "The TCP flag that synchronizes the sender’s initial sequence number.",
+  "detail": "A normal active open starts with a SYN carrying the client ISN. SYN consumes one sequence number before the first payload byte.",
+  "design": "A missing response to a SYN is a different failure mode from an explicit refusal. Diagnose the initial exchange before tuning application retries.",
+  "match": [
+   "SYN",
+   "SYN-SENT"
+  ],
+  "related": [
+   "handshake",
+   "syn-ack",
+   "isn",
+   "rst"
+  ]
+ },
+ {
+  "id": "syn-ack",
+  "term": "SYN-ACK",
+  "short": "The server’s SYN and its acknowledgment of the client’s SYN, carried together.",
+  "detail": "The peer advertises its own ISN and returns the client ISN plus one as the ACK number.",
+  "design": "If a trace shows repeated SYNs and outgoing SYN-ACKs, inspect the return path and the final ACK before blaming application startup.",
+  "match": [
+   "SYN-ACK",
+   "SYN-RECEIVED"
+  ],
+  "related": [
+   "syn",
+   "ack",
+   "isn",
+   "handshake"
+  ]
+ },
+ {
+  "id": "ack",
+  "term": "ACK and cumulative acknowledgment",
+  "short": "An ACK number specifies the next sequence number the receiver expects.",
+  "detail": "It cumulatively covers all bytes before that number in this direction. SACK can describe blocks beyond the first gap. Pure ACKs consume no sequence space.",
+  "design": "A stalled ACK with rising SACK coverage points to a missing range. A falling advertised window points to a receiver that cannot drain fast enough.",
+  "match": [
+   "cumulative ACK",
+   "cumulative acknowledgment",
+   "ACK"
+  ],
+  "related": [
+   "sequence",
+   "duplicate-ack",
+   "sack",
+   "rwnd"
+  ]
+ },
+ {
+  "id": "fin",
+  "term": "FIN and half-close",
+  "short": "FIN says that the sender has finished its direction of the stream.",
+  "detail": "FIN follows previously queued bytes and consumes one sequence number. The other direction can remain open until the peer sends its own FIN.",
+  "design": "If a protocol treats end of stream as a request boundary, half-close lets the client finish its write while still reading the response.",
+  "match": [
+   "FIN",
+   "FIN-ACK",
+   "half-close",
+   "FIN-WAIT-1",
+   "FIN-WAIT-2",
+   "CLOSE-WAIT",
+   "LAST-ACK"
+  ],
+  "related": [
+   "time-wait",
+   "sequence",
+   "rst"
+  ]
+ },
+ {
+  "id": "rst",
+  "term": "RST",
+  "short": "The TCP reset flag rejects or aborts a connection.",
+  "detail": "A SYN sent to a closed port commonly receives RST-ACK. An in-window reset on an existing connection can abort it without the orderly FIN exchange.",
+  "design": "Distinguish immediate refusal or reset from a timeout. The symptoms point to different failure locations and have different retry costs.",
+  "match": [
+   "RST",
+   "RST-ACK",
+   "connection refused"
+  ],
+  "related": [
+   "syn",
+   "fin",
+   "rto"
+  ]
+ },
+ {
+  "id": "isn",
+  "term": "Initial sequence number (ISN)",
+  "short": "The starting sequence number a TCP endpoint announces in its SYN.",
+  "detail": "Each direction has its own ISN. The first data byte starts at ISN plus one.",
+  "design": "Packet analyzers often normalize sequence numbers. Know whether a trace uses raw or relative numbers before comparing captures.",
+  "match": [
+   "ISN",
+   "initial sequence number"
+  ],
+  "related": [
+   "sequence",
+   "syn",
+   "syn-ack"
+  ]
+ },
+ {
+  "id": "sequence",
+  "term": "Sequence number",
+  "short": "The position of a byte range in one direction of a TCP stream.",
+  "detail": "Data advances the number by the payload length, SYN and FIN advance it by one, and a retry reuses the sequence range.",
+  "design": "Sequence ranges tell you whether the sender released new bytes, retried a gap, or waited on flow control.",
+  "match": [
+   "sequence number",
+   "sequence numbers",
+   "sequence range"
+  ],
+  "related": [
+   "isn",
+   "ack",
+   "segment"
+  ]
+ },
+ {
+  "id": "ephemeral-port",
+  "term": "Ephemeral port",
+  "short": "A local port usually allocated automatically for an outbound connection.",
+  "detail": "TCP identity includes both IP addresses and both ports. For one source IP and one destination tuple, the usable local range can cap simultaneous and recently closed connections.",
+  "design": "At high connection churn, check client or NAT port availability and connection lifetimes before raising server concurrency.",
+  "match": [
+   "ephemeral port",
+   "ephemeral ports",
+   "port exhaustion"
+  ],
+  "related": [
+   "time-wait",
+   "pooling",
+   "handshake"
+  ]
+ },
+ {
+  "id": "time-wait",
+  "term": "TIME_WAIT",
+  "short": "The active closer retains TCP state after sending the final ACK.",
+  "detail": "The nominal interval is 2MSL. The retained state can acknowledge a repeated FIN and allows old segments to expire before reuse of the same connection identity.",
+  "design": "Estimate the port demand from close rate times retention time. Connection reuse reduces churn without weakening close safety.",
+  "match": [
+   "TIME_WAIT",
+   "TIME-WAIT"
+  ],
+  "related": [
+   "msl",
+   "fin",
+   "ephemeral-port",
+   "pooling"
+  ]
+ },
+ {
+  "id": "msl",
+  "term": "Maximum segment lifetime (MSL)",
+  "short": "The maximum time TCP assumes an old segment can remain in the network.",
+  "detail": "An orderly active close waits two MSLs. The lab uses a compressed MSL of one second to make the release visible. Operating systems use their own retention timings.",
+  "design": "Measure the actual platform’s TIME_WAIT retention before sizing the outbound connection budget.",
+  "match": [
+   "MSL",
+   "2MSL",
+   "maximum segment lifetime"
+  ],
+  "related": [
+   "time-wait",
+   "ephemeral-port"
+  ]
+ },
+ {
+  "id": "pooling",
+  "term": "Connection reuse and pooling",
+  "short": "Send more than one request over an already established connection.",
+  "detail": "A pool keeps a bounded set of live connections to reuse. The lab uses a one-connection pool and runs its requests serially.",
+  "design": "Set pool size and queue limits together. Reuse saves handshake work and ports, while too small a pool can add request wait time.",
+  "match": [
+   "connection reuse",
+   "connection pooling",
+   "pooled TCP connection"
+  ],
+  "related": [
+   "handshake",
+   "time-wait",
+   "ephemeral-port"
+  ]
+ },
+ {
+  "id": "mss",
+  "term": "Maximum segment size (MSS)",
+  "short": "The maximum payload size of an ordinary TCP segment for a sender.",
+  "detail": "Peers advertise receive MSS in SYNs. The effective send MSS also depends on path and header overhead. The lab uses 1460 bytes.",
+  "design": "Tunnels and extra headers can reduce payload per packet. When sizing a window, convert segments to bytes using the effective MSS.",
+  "match": [
+   "MSS",
+   "maximum segment size"
+  ],
+  "related": [
+   "segment",
+   "cwnd",
+   "bdp"
+  ]
+ },
+ {
+  "id": "rtt",
+  "term": "Round-trip time (RTT)",
+  "short": "The elapsed time for traffic to reach the peer and its response to return.",
+  "detail": "Propagation, queueing and receiver behavior can all affect observed samples. The congestion chart separates base RTT from illustrative queueing.",
+  "design": "RTT establishes the price of each handshake or feedback round. It also determines how many bytes a window-limited flow needs in flight.",
+  "match": [
+   "RTT",
+   "round-trip time",
+   "ACK round"
+  ],
+  "related": [
+   "rto",
+   "bdp",
+   "bufferbloat"
+  ]
+ },
+ {
+  "id": "rto",
+  "term": "Retransmission timeout (RTO)",
+  "short": "The sender’s deadline for retrying the oldest unacknowledged bytes without other loss evidence.",
+  "detail": "Real TCP estimates it from smoothed RTT and variability, and doubles it on successive expirations. The lab uses a shorter illustrative starting RTO.",
+  "design": "Sparse requests and tail losses can miss the duplicate ACK threshold, so retransmission timers can dominate tail latency.",
+  "match": [
+   "RTO",
+   "retransmission timeout",
+   "exponential backoff"
+  ],
+  "related": [
+   "rtt",
+   "fast-retransmit",
+   "duplicate-ack"
+  ]
+ },
+ {
+  "id": "duplicate-ack",
+  "term": "Duplicate ACK",
+  "short": "An ACK that repeats the same cumulative number without advancing the window.",
+  "detail": "An out-of-order segment can elicit a duplicate ACK. Reordering can also generate duplicates, so one repeat is weak loss evidence.",
+  "design": "Correlate repeated ACKs with sequence gaps, SACK blocks and RTT before treating them as proof of congestion.",
+  "match": [
+   "duplicate ACK",
+   "duplicate ACKs"
+  ],
+  "related": [
+   "ack",
+   "fast-retransmit",
+   "sack"
+  ]
+ },
+ {
+  "id": "fast-retransmit",
+  "term": "Fast retransmit",
+  "short": "Classic TCP retries a missing segment after three duplicate ACKs.",
+  "detail": "The duplicate ACKs imply that later data reached the receiver. Modern implementations can also use time-based loss detection and selective recovery.",
+  "design": "Short or tail-loss-heavy transfers may have too little data after the gap to trigger this path. Watch timeout and fast-retry counters separately.",
+  "match": [
+   "fast retransmit",
+   "fast retransmits",
+   "fast recovery"
+  ],
+  "related": [
+   "duplicate-ack",
+   "sack",
+   "rto",
+   "aimd"
+  ]
+ },
+ {
+  "id": "sack",
+  "term": "Selective acknowledgment (SACK)",
+  "short": "A TCP option reporting received byte ranges beyond the cumulative ACK.",
+  "detail": "Each SACK block gives the first byte and the exclusive right edge of a contiguous range. SACK reports receipt without advancing the cumulative ACK through a gap.",
+  "design": "On a large flight with multiple losses, selective recovery can repair missing ranges without resending everything beyond the first gap.",
+  "match": [
+   "SACK",
+   "SACK blocks",
+   "selective acknowledgment"
+  ],
+  "related": [
+   "ack",
+   "duplicate-ack",
+   "fast-retransmit"
+  ]
+ },
+ {
+  "id": "receive-buffer",
+  "term": "Receive buffer and flow control",
+  "short": "The receiver keeps unread and out-of-order bytes in bounded socket storage.",
+  "detail": "An unread contiguous range consumes receive-window space. Out-of-order segments occupy positions in the already advertised sequence range until the gap fills.",
+  "design": "Inspect app read cadence and socket buffer pressure together. More receive memory can absorb a burst, but it cannot fix sustained consumer lag.",
+  "match": [
+   "receive buffer",
+   "flow control",
+   "out-of-order"
+  ],
+  "related": [
+   "rwnd",
+   "zero-window",
+   "byte-stream"
+  ]
+ },
+ {
+  "id": "rwnd",
+  "term": "Advertised receive window (rwnd)",
+  "short": "How many bytes the peer offers to accept starting at the cumulative ACK.",
+  "detail": "The sender must stay inside the advertised right edge as well as its own congestion window. The window can reopen after application reads.",
+  "design": "A large congestion window cannot overcome a receiver with no room. Separate network bottlenecks from flow-control stalls.",
+  "match": [
+   "rwnd",
+   "receive window",
+   "window update"
+  ],
+  "related": [
+   "receive-buffer",
+   "zero-window",
+   "cwnd"
+  ]
+ },
+ {
+  "id": "zero-window",
+  "term": "Zero window",
+  "short": "The receiver advertises no room for new stream bytes.",
+  "detail": "The sender stops ordinary new data. A window update or probe response advertises fresh space after the receiver drains.",
+  "design": "A live socket can show no progress because its app stopped reading. Alert on useful app progress as well as connection health.",
+  "match": [
+   "zero window",
+   "zero-window stall"
+  ],
+  "related": [
+   "rwnd",
+   "receive-buffer",
+   "zero-window-probe"
+  ]
+ },
+ {
+  "id": "zero-window-probe",
+  "term": "Zero-window probe",
+  "short": "A small transmission that asks the peer to report its receive window again.",
+  "detail": "TCP can send or retransmit an octet despite a zero window. The peer ACKs with its current window, and probe spacing backs off while it stays closed.",
+  "design": "The probe recovers from a lost window update. It cannot make a stalled application read, so client deadlines still matter.",
+  "match": [
+   "zero-window probe",
+   "zero-window probes",
+   "window probe"
+  ],
+  "related": [
+   "zero-window",
+   "rwnd",
+   "rto"
+  ]
+ },
+ {
+  "id": "nagle",
+  "term": "Nagle algorithm",
+  "short": "TCP can buffer a small write while earlier data is unacknowledged.",
+  "detail": "It can send again when data is acknowledged or when it accumulates enough bytes for a full segment. A delayed ACK can add a visible wait for a small second write.",
+  "design": "Batch logically related writes at the application boundary, or consider TCP_NODELAY for a measured small-message latency problem.",
+  "match": [
+   "Nagle",
+   "Nagle algorithm"
+  ],
+  "related": [
+   "tcp-nodelay",
+   "delayed-ack",
+   "mss"
+  ]
+ },
+ {
+  "id": "delayed-ack",
+  "term": "Delayed ACK",
+  "short": "A receiver briefly holds an ACK so one ACK can cover more data.",
+  "detail": "The lab ACKs the second in-order segment immediately or waits up to 40 ms for a lone segment. Real timer and ACK policies vary by stack and traffic.",
+  "design": "Small back-to-back writes can wait on the interaction with Nagle. Measure the actual timer pattern before attributing every latency bump to it.",
+  "match": [
+   "delayed ACK",
+   "delayed ACKs"
+  ],
+  "related": [
+   "ack",
+   "nagle",
+   "tcp-nodelay"
+  ]
+ },
+ {
+  "id": "tcp-nodelay",
+  "term": "TCP_NODELAY",
+  "short": "A socket option that disables Nagle’s wait on small TCP writes.",
+  "detail": "It lets queued small payloads send immediately when the send and receive windows allow. Delayed ACK remains a receiver policy.",
+  "design": "Use it for latency-sensitive small writes when justified. More packets per byte can increase host CPU and link overhead.",
+  "match": [
+   "TCP_NODELAY"
+  ],
+  "related": [
+   "nagle",
+   "delayed-ack",
+   "rwnd"
+  ]
+ },
+ {
+  "id": "cwnd",
+  "term": "Congestion window (cwnd)",
+  "short": "The sender’s estimate of how much unacknowledged data the path can handle.",
+  "detail": "A sender is constrained by cwnd and rwnd. With ample receive window and offered data, cwnd divided by RTT approximates the window-limited send rate.",
+  "design": "Capacity, RTT, receiver limits and the sender’s current window can all cap throughput. Inspect each before you buy bandwidth.",
+  "match": [
+   "cwnd",
+   "congestion window"
+  ],
+  "related": [
+   "rwnd",
+   "slow-start",
+   "bdp",
+   "aimd"
+  ]
+ },
+ {
+  "id": "slow-start",
+  "term": "Slow start",
+  "short": "An ACK-driven phase that grows the congestion window rapidly from a small initial value.",
+  "detail": "With one ACK per full segment the window can roughly double per RTT until a threshold or congestion event. Actual initial windows and startup algorithms vary.",
+  "design": "Short transfers can end before they fully use the path. Connection reuse and smaller responses can matter more than peak link capacity.",
+  "match": [
+   "slow start"
+  ],
+  "related": [
+   "cwnd",
+   "ssthresh",
+   "rtt",
+   "congestion-avoidance"
+  ]
+ },
+ {
+  "id": "ssthresh",
+  "term": "Slow-start threshold (ssthresh)",
+  "short": "The window level at which classic growth changes from slow start to congestion avoidance.",
+  "detail": "Loss recovery can lower it based on the earlier outstanding flight. The lab starts at 16 MSS for readability.",
+  "design": "Separate a startup stall from steady-state loss when analyzing small transfers. Their recovery time and tuning levers differ.",
+  "match": [
+   "ssthresh",
+   "slow-start threshold"
+  ],
+  "related": [
+   "slow-start",
+   "congestion-avoidance",
+   "aimd"
+  ]
+ },
+ {
+  "id": "congestion-avoidance",
+  "term": "Congestion avoidance",
+  "short": "The phase that searches for more capacity more cautiously than slow start.",
+  "detail": "Reno adds about one MSS per RTT during a healthy round. Other controllers use different growth and loss rules.",
+  "design": "A linear ramp takes more wall time on high-RTT paths. Judge transfer recovery in milliseconds as well as rounds.",
+  "match": [
+   "congestion avoidance",
+   "additive increase"
+  ],
+  "related": [
+   "aimd",
+   "cubic",
+   "bbr",
+   "ssthresh"
+  ]
+ },
+ {
+  "id": "aimd",
+  "term": "Reno and AIMD",
+  "short": "Reno’s congestion window grows additively and shrinks multiplicatively after a congestion signal.",
+  "detail": "A saturated flight grows roughly one MSS per RTT, and a loss handled by fast recovery roughly halves it. An RTO invokes a more severe reset.",
+  "design": "The sawtooth trades throughput for stability and sharing. Longer RTT means each additive step takes longer.",
+  "match": [
+   "Reno",
+   "AIMD",
+   "multiplicative decrease"
+  ],
+  "related": [
+   "cwnd",
+   "congestion-avoidance",
+   "cubic"
+  ]
+ },
+ {
+  "id": "cubic",
+  "term": "CUBIC",
+  "short": "A loss-based controller with a cubic window target over elapsed time.",
+  "detail": "It normally keeps about 70% of the prior window after a congestion event. The cubic target approaches the prior peak gently and grows faster past it. Real implementations include safeguards absent from this lab.",
+  "design": "CUBIC helps probing on high-bandwidth, long-distance paths. Compare recovery, latency and fairness under the expected traffic mix.",
+  "match": [
+   "CUBIC",
+   "cubic window"
+  ],
+  "related": [
+   "aimd",
+   "cwnd",
+   "bbr",
+   "bdp"
+  ]
+ },
+ {
+  "id": "bbr",
+  "term": "BBR",
+  "short": "A congestion controller that models bottleneck bandwidth and propagation RTT.",
+  "detail": "BBR estimates delivery rate and minimum RTT, then varies pacing and flight to test the path. Version-specific behavior also considers loss and inflight bounds.",
+  "design": "Evaluate an algorithm against the queues, competing flows and tail-latency goals of your path. A higher average goodput alone can miss user-visible regressions.",
+  "match": [
+   "BBR",
+   "model-based congestion control"
+  ],
+  "related": [
+   "bdp",
+   "bufferbloat",
+   "cubic"
+  ]
+ },
+ {
+  "id": "bdp",
+  "term": "Bandwidth-delay product (BDP)",
+  "short": "The amount of data in flight needed to fill a path at its bottleneck rate over one base RTT.",
+  "detail": "Multiply bottleneck bits per second by base RTT in seconds, then divide by eight for bytes. More flight than the BDP can occupy queues.",
+  "design": "Long paths need bigger windows at the same bandwidth. Size buffers and parallelism against actual RTT and capacity.",
+  "match": [
+   "BDP",
+   "bandwidth-delay product"
+  ],
+  "related": [
+   "rtt",
+   "cwnd",
+   "rwnd",
+   "bufferbloat"
+  ]
+ },
+ {
+  "id": "bufferbloat",
+  "term": "Bufferbloat",
+  "short": "Excessive queue delay from persistently filled network buffers.",
+  "detail": "Flight above the unqueued BDP can back up at the bottleneck. A large queue may keep throughput high while making RTT much worse.",
+  "design": "Measure loaded RTT alongside throughput. Queue management and pacing can improve interactive latency on a shared link.",
+  "match": [
+   "bufferbloat",
+   "queueing delay"
+  ],
+  "related": [
+   "bdp",
+   "cwnd",
+   "rtt",
+   "bbr"
+  ]
+ },
+ {
+  "id": "quic",
+  "term": "QUIC",
+  "short": "A secure transport over UDP with its own reliability and congestion control.",
+  "detail": "QUIC is often implemented in user space. It acknowledges QUIC packets and retransmits lost stream data as needed, with ordering scoped to each stream.",
+  "design": "QUIC offers independent streams on one connection, while the UDP substrate still needs path validation, pacing and mature loss recovery.",
+  "match": [
+   "QUIC",
+   "QUIC congestion control"
+  ],
+  "related": [
+   "udp",
+   "datagram",
+   "cwnd",
+   "byte-stream"
+  ]
+ }
+]

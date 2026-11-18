@@ -1,0 +1,644 @@
+[
+ {
+  "id": "dual-write",
+  "term": "Dual write",
+  "short": "One operation that writes to two systems (a database and a broker) with no transaction around both.",
+  "detail": "The service commits to its database, then publishes an event (or the other way round). A crash, timeout or broker outage between the two leaves one write done and the other not.",
+  "design": "Treat any \"write here, then tell them\" code as a bug waiting for a crash. Swapping the order only swaps a lost event for a phantom one; the fix is to make the second write derive from the first (outbox, CDC).",
+  "match": [
+   "dual write",
+   "dual writes",
+   "dual-write"
+  ],
+  "related": [
+   "outbox",
+   "lost-event",
+   "phantom-event",
+   "two-phase-commit"
+  ]
+ },
+ {
+  "id": "atomicity",
+  "term": "Atomicity",
+  "short": "All of a transaction happens, or none of it does. There is no state in between that anyone can observe after a crash.",
+  "detail": "A database gets atomicity from its write-ahead log: on restart, uncommitted changes are rolled back and committed ones are kept. The guarantee stops at the database boundary.",
+  "design": "Ask \"what is the unit of atomicity here?\" for every operation that touches more than one store. If it spans two systems, you need a pattern (outbox, saga), not hope.",
+  "match": [
+   "atomic",
+   "atomically",
+   "atomicity",
+   "rolled back",
+   "roll back",
+   "rollback"
+  ],
+  "related": [
+   "local-transaction",
+   "dual-write",
+   "outbox"
+  ]
+ },
+ {
+  "id": "local-transaction",
+  "term": "Local transaction",
+  "short": "A transaction inside one service's own database. It is ACID, but only for the rows that database owns.",
+  "detail": "In a microservice architecture each service owns its data, so there is no transaction across services. Every multi-service pattern is built from local transactions plus messages.",
+  "design": "Put everything that must change together into the same database and the same transaction: the order and its outbox row, the inbox row and the shipment.",
+  "match": [
+   "local transaction",
+   "local transactions",
+   "same transaction",
+   "one transaction"
+  ],
+  "related": [
+   "atomicity",
+   "outbox",
+   "saga"
+  ]
+ },
+ {
+  "id": "outbox",
+  "term": "Transactional outbox",
+  "short": "Write the event to an outbox table in the same transaction as the business change; publish it later from there.",
+  "detail": "Because the order row and the outbox row commit (or roll back) together, an event exists exactly when the order does. A separate relay reads the outbox and publishes to the broker, retrying until it succeeds.",
+  "design": "The default answer to \"update my DB and notify others\". It costs a table, a relay process and some latency, and turns delivery into at-least-once, so consumers must dedupe.",
+  "match": [
+   "outbox",
+   "transactional outbox",
+   "outbox row",
+   "outbox rows",
+   "outbox table"
+  ],
+  "related": [
+   "relay",
+   "local-transaction",
+   "at-least-once",
+   "inbox"
+  ]
+ },
+ {
+  "id": "relay",
+  "term": "Message relay",
+  "short": "The process that moves events from the outbox to the broker, by polling the table or by tailing the database log.",
+  "detail": "It publishes, waits for the broker to confirm, then records progress (marks the row sent, or saves its log position). A crash between those two steps republishes the event.",
+  "design": "Run it as its own process with monitoring on its lag (age of the oldest unsent event). It is the one place where \"published\" is decided, so keep it simple and restartable.",
+  "match": [
+   "relay",
+   "message relay"
+  ],
+  "related": [
+   "outbox",
+   "polling-publisher",
+   "cdc",
+   "at-least-once"
+  ]
+ },
+ {
+  "id": "polling-publisher",
+  "term": "Polling publisher",
+  "short": "A relay that queries the outbox every so often for unsent rows, publishes them and marks them sent.",
+  "detail": "Simple and portable: any database, plain SQL. The poll interval sets a floor on latency, and the queries load the database even when nothing is happening.",
+  "design": "Fine for modest volumes. Index the unsent rows, batch the publishes, delete old rows, and with several relay instances use `SELECT … FOR UPDATE SKIP LOCKED` so they don't publish the same row in parallel.",
+  "match": [
+   "polling",
+   "polling publisher",
+   "polls",
+   "poll"
+  ],
+  "related": [
+   "relay",
+   "cdc",
+   "outbox"
+  ]
+ },
+ {
+  "id": "cdc",
+  "term": "Change data capture (CDC)",
+  "short": "Reading committed changes straight from the database's log and turning them into events.",
+  "detail": "A connector (Debezium, for example) tails the WAL through logical replication, sees each committed insert into the outbox and publishes it. It keeps its own position (LSN) and resumes from there after a restart.",
+  "design": "Lower latency and no polling load, at the cost of running and operating a connector and coupling to the database's replication features. Common at scale; the outbox table still decides what the event looks like.",
+  "match": [
+   "CDC",
+   "change data capture",
+   "Debezium",
+   "tails the WAL",
+   "tailing the WAL"
+  ],
+  "related": [
+   "wal",
+   "lsn",
+   "relay",
+   "polling-publisher"
+  ]
+ },
+ {
+  "id": "wal",
+  "term": "Write-ahead log (WAL)",
+  "short": "The database's append-only log of every change, written before the change is considered committed.",
+  "detail": "It is how the database survives crashes and how replicas copy data. Logical decoding turns WAL records back into row-level changes that CDC can publish.",
+  "design": "The WAL is already a durable, ordered event stream of your data. CDC reuses it instead of adding a second write path, which is why it cannot drift from the database.",
+  "match": [
+   "WAL",
+   "write-ahead log"
+  ],
+  "related": [
+   "cdc",
+   "lsn",
+   "atomicity"
+  ]
+ },
+ {
+  "id": "lsn",
+  "term": "Log position (LSN)",
+  "short": "An offset into the WAL. A CDC relay saves the position of the last change it published.",
+  "detail": "After a restart the relay reads again from the saved position. Everything it published after that point but before saving is published a second time.",
+  "design": "Saving the position after publishing gives at-least-once; saving before gives at-most-once (silent loss). Always pick the first and dedupe downstream.",
+  "match": [
+   "LSN",
+   "saved LSN",
+   "log position"
+  ],
+  "related": [
+   "cdc",
+   "wal",
+   "at-least-once"
+  ]
+ },
+ {
+  "id": "at-least-once",
+  "term": "At-least-once delivery",
+  "short": "Every message is delivered, but some may be delivered more than once.",
+  "detail": "Whoever sends records success only after the receiver confirms. If the confirmation (or the record of it) is lost, the sender sends again. Brokers redeliver unacked messages for the same reason.",
+  "design": "This is the realistic guarantee of every reliable pipeline. Design every consumer to handle the same message twice; \"at-most-once\" is the alternative, and it loses data.",
+  "match": [
+   "at-least-once",
+   "at least once",
+   "at-least-once delivery",
+   "ack",
+   "acks",
+   "acked",
+   "unacked"
+  ],
+  "related": [
+   "duplicate",
+   "inbox",
+   "exactly-once",
+   "idempotent"
+  ]
+ },
+ {
+  "id": "duplicate",
+  "term": "Duplicate message",
+  "short": "A second copy of a message that was already delivered: same event id, same content.",
+  "detail": "Duplicates come from relays that crash before recording progress, consumers that crash before acking (redelivery), producer retries after a timeout, and rebalances.",
+  "design": "Give every event a stable id at the source (the outbox row id) so consumers can recognise copies. Never derive the id from delivery metadata.",
+  "match": [
+   "duplicate",
+   "duplicates",
+   "redelivered",
+   "redelivery",
+   "redelivers",
+   "second copy"
+  ],
+  "related": [
+   "at-least-once",
+   "inbox",
+   "idempotent"
+  ]
+ },
+ {
+  "id": "inbox",
+  "term": "Inbox (dedup) table",
+  "short": "A table of event ids a consumer has already processed, written in the same transaction as the work.",
+  "detail": "The consumer inserts the event id first. If the insert hits the primary key, the event was handled before: skip the work and ack. Because the id and the effect commit together, they can never disagree.",
+  "design": "The standard way to make a consumer idempotent when its work is not naturally idempotent. Expire old ids after the longest possible redelivery window.",
+  "match": [
+   "inbox",
+   "inbox table",
+   "dedup",
+   "deduplicate",
+   "dedupe",
+   "dedupes",
+   "processed-ids"
+  ],
+  "related": [
+   "idempotent",
+   "duplicate",
+   "exactly-once",
+   "local-transaction"
+  ]
+ },
+ {
+  "id": "exactly-once",
+  "term": "Exactly-once (myth vs effect)",
+  "short": "Exactly-once delivery over an unreliable network is impossible. Exactly-once effect is achievable: at-least-once delivery plus idempotent processing.",
+  "detail": "The receiver can't tell \"the sender never sent\" from \"my ack was lost\", so either it risks duplicates or it risks loss. Systems that advertise exactly-once (Kafka transactions, for example) mean exactly-once effect inside their own boundary.",
+  "design": "When someone promises exactly-once, ask where the boundary is. Across your database, broker and other services, you build it yourself with ids and dedup.",
+  "match": [
+   "exactly-once",
+   "exactly once"
+  ],
+  "related": [
+   "at-least-once",
+   "inbox",
+   "idempotent"
+  ]
+ },
+ {
+  "id": "lost-event",
+  "term": "Lost event",
+  "short": "The database change committed, but the event announcing it was never published.",
+  "detail": "Classic dual-write failure: commit, then crash (or the broker is down) before the publish. Downstream services never learn about the change and nothing raises an error.",
+  "design": "Silent and permanent, which is worse than a crash. Only an outbox/CDC design prevents it; a reconciliation job can detect it after the fact.",
+  "match": [
+   "lost event",
+   "lost events"
+  ],
+  "related": [
+   "dual-write",
+   "outbox",
+   "reconciliation"
+  ]
+ },
+ {
+  "id": "phantom-event",
+  "term": "Phantom event",
+  "short": "An event was published for a change that then rolled back, so it describes something that never happened.",
+  "detail": "Happens when a service publishes before committing and the commit then fails (crash, deadlock, constraint violation). Consumers act on it; you cannot unsend a message.",
+  "design": "Never publish from inside an open transaction. Publish only what has committed, which is exactly what the outbox and CDC guarantee.",
+  "match": [
+   "phantom event",
+   "phantom events",
+   "phantom"
+  ],
+  "related": [
+   "dual-write",
+   "outbox",
+   "reconciliation"
+  ]
+ },
+ {
+  "id": "reconciliation",
+  "term": "Reconciliation",
+  "short": "A job that compares two systems' data and reports (or repairs) where they disagree.",
+  "detail": "Here: every committed order should have exactly one shipment. Real systems reconcile payments against the bank, orders against the warehouse, and so on, on a schedule.",
+  "design": "Even with good patterns, run reconciliation for anything involving money or inventory: it is how you find the bug you didn't design for. Make its output an alert, not a dashboard nobody reads.",
+  "match": [
+   "reconciliation",
+   "reconciliation job"
+  ],
+  "related": [
+   "lost-event",
+   "phantom-event",
+   "eventual-consistency"
+  ]
+ },
+ {
+  "id": "two-phase-commit",
+  "term": "Two-phase commit (2PC)",
+  "short": "A protocol where a coordinator asks every participant to prepare, then tells all of them to commit, making a distributed transaction atomic.",
+  "detail": "Participants that voted \"prepared\" must hold their locks until the coordinator decides. If the coordinator dies at the wrong moment, they block. XA is the standard API; most brokers and cloud services don't support it.",
+  "design": "Avoided in microservices: it couples every participant's availability and latency to the slowest one, holds locks across the network, and is often not on offer. Use an outbox for \"DB + event\" and a saga for multi-service workflows.",
+  "match": [
+   "two-phase commit",
+   "2PC",
+   "XA"
+  ],
+  "related": [
+   "dual-write",
+   "saga",
+   "atomicity"
+  ]
+ },
+ {
+  "id": "idempotency-key",
+  "term": "Idempotency key",
+  "short": "A unique id the client attaches to a request (the `Idempotency-Key` header) so the server can recognise retries of it.",
+  "detail": "The server records the key before doing the work, stores the final response with it, and answers any later request with the same key by replaying that stored response instead of doing the work again.",
+  "design": "Required on any non-idempotent API that clients retry: payments, orders, emails. Store the key in the same database as the effect so they commit together, and return the stored status and body byte for byte.",
+  "match": [
+   "idempotency key",
+   "Idempotency-Key",
+   "idempotency keys",
+   "stored response",
+   "replayed",
+   "replay",
+   "replays"
+  ],
+  "related": [
+   "idempotent",
+   "in-progress",
+   "key-scope",
+   "key-ttl",
+   "retry"
+  ]
+ },
+ {
+  "id": "idempotent",
+  "term": "Idempotent operation",
+  "short": "An operation that has the same effect whether it runs once or many times.",
+  "detail": "`SET status = shipped` is idempotent; `balance = balance - 40` and \"charge the card\" are not. You can make a non-idempotent operation idempotent by remembering that it already ran (inbox table, idempotency key).",
+  "design": "Prefer naturally idempotent designs (set state, upsert by id) and add dedup only where you must. Every handler that can be retried, including compensations, has to be idempotent.",
+  "match": [
+   "idempotent",
+   "idempotency",
+   "idempotently"
+  ],
+  "related": [
+   "idempotency-key",
+   "inbox",
+   "retry",
+   "compensation"
+  ]
+ },
+ {
+  "id": "retry",
+  "term": "Retry with backoff",
+  "short": "Sending a failed or timed-out request again, waiting longer between attempts.",
+  "detail": "Exponential backoff (0.6 s, 1.2 s, 2.4 s here) plus jitter spreads retries out so a struggling server isn't hammered. Retries are only safe when the operation is idempotent.",
+  "design": "Every retry policy needs three answers: which errors are retryable, how many attempts, and what makes a repeat harmless. Without the third, retries turn timeouts into duplicates.",
+  "match": [
+   "retry",
+   "retries",
+   "retried",
+   "retrying",
+   "backoff",
+   "exponential backoff"
+  ],
+  "related": [
+   "timeout-ambiguity",
+   "idempotent",
+   "idempotency-key"
+  ]
+ },
+ {
+  "id": "timeout-ambiguity",
+  "term": "Timeout ambiguity",
+  "short": "When a request times out, the caller can't know whether the server did the work.",
+  "detail": "The request may have been lost, the server may have crashed halfway, or it may have finished and only the response was lost. From the client these look identical.",
+  "design": "The root reason idempotency keys exist. Never treat a timeout as \"it failed\"; treat it as \"unknown\", and make the retry safe instead of guessing.",
+  "match": [
+   "timed out",
+   "timeout",
+   "timeouts",
+   "times out",
+   "ambiguity"
+  ],
+  "related": [
+   "retry",
+   "idempotency-key",
+   "at-least-once"
+  ]
+ },
+ {
+  "id": "key-scope",
+  "term": "Key scope",
+  "short": "Which requests share a key namespace: keys should be unique per client (account) and per endpoint, not globally.",
+  "detail": "Clients choose their own keys, often from their own ids (`order-1042`). Two clients can pick the same value. With a global namespace, the second client gets the first client's stored response.",
+  "design": "Make the primary key `(account, endpoint, key)`. Also store a hash of the request body and reject reuse of a key with different parameters (422) rather than replaying the wrong answer.",
+  "match": [
+   "scope",
+   "scoped",
+   "key scope",
+   "global keys"
+  ],
+  "related": [
+   "idempotency-key",
+   "key-ttl"
+  ]
+ },
+ {
+  "id": "key-ttl",
+  "term": "Key TTL",
+  "short": "How long the server remembers an idempotency key before deleting it.",
+  "detail": "Keys can't be kept forever. Once a key expires, a request with it looks new and runs again. Stripe keeps keys for 24 hours.",
+  "design": "The TTL must be longer than the longest time a client might still retry, including offline mobile clients and queued jobs. A TTL shorter than the retry window quietly brings duplicates back.",
+  "match": [
+   "TTL",
+   "expired",
+   "expires",
+   "expiry"
+  ],
+  "related": [
+   "idempotency-key",
+   "key-scope",
+   "retry"
+  ]
+ },
+ {
+  "id": "in-progress",
+  "term": "In-progress marker (409)",
+  "short": "A key row that says \"a request with this key is running right now\", inserted before the work starts.",
+  "detail": "A unique constraint on the key makes the insert the lock: of two concurrent duplicates, only one insert succeeds. The other sees \"in progress\" and gets `409 Conflict` (retry later) or waits for the result. If the owner crashes, the marker needs a lock timeout so the key isn't stuck forever.",
+  "design": "Don't look up and then insert without a unique constraint: two requests can both see \"no key\" and both charge. Pick the lock timeout longer than the slowest legitimate request.",
+  "match": [
+   "in progress",
+   "409",
+   "409 Conflict",
+   "unique constraint",
+   "lock timeout"
+  ],
+  "related": [
+   "idempotency-key",
+   "idempotent",
+   "retry"
+  ]
+ },
+ {
+  "id": "saga",
+  "term": "Saga",
+  "short": "A business transaction split into a sequence of local transactions, one per service, with a compensating action for each step.",
+  "detail": "Each step commits right away in its own database. If a later step fails, the saga runs the compensations of the completed steps in reverse order. It is atomic in the end (all or undone), but not isolated along the way.",
+  "design": "The microservice alternative to a distributed transaction. Order the steps so the ones most likely to fail, and the ones that can't be undone, come as late as possible.",
+  "match": [
+   "saga",
+   "sagas"
+  ],
+  "related": [
+   "compensation",
+   "orchestration",
+   "choreography",
+   "isolation"
+  ]
+ },
+ {
+  "id": "orchestration",
+  "term": "Orchestration",
+  "short": "A central orchestrator tells each service what to do next and tracks the saga's state in one state machine.",
+  "detail": "The orchestrator sends commands, waits for replies, persists its state after each step and decides when to compensate. Services only know their own commands.",
+  "design": "The flow lives in one place, so it is easy to read, test, monitor and change. The cost is one more component that knows about everyone, which can grow into a god service.",
+  "match": [
+   "orchestrator",
+   "orchestration",
+   "orchestrated"
+  ],
+  "related": [
+   "saga",
+   "choreography",
+   "compensation"
+  ]
+ },
+ {
+  "id": "choreography",
+  "term": "Choreography",
+  "short": "No coordinator: each service reacts to other services' events and emits its own.",
+  "detail": "The saga emerges from subscriptions: payment listens for OrderCreated, inventory for PaymentCharged, and so on, including the failure and undo events.",
+  "design": "Loosely coupled and simple for two or three steps. Beyond that, nobody can see the whole flow, cyclic dependencies creep in and debugging means correlating events across services by saga id.",
+  "match": [
+   "choreography",
+   "choreographed"
+  ],
+  "related": [
+   "saga",
+   "orchestration",
+   "eventual-consistency"
+  ]
+ },
+ {
+  "id": "compensation",
+  "term": "Compensating transaction",
+  "short": "An action that semantically undoes a completed step: a refund for a charge, a release for a reservation.",
+  "detail": "It is not a rollback: the original change was committed and may have been seen. Compensation adds a new change (a refund row) that cancels its effect. Some steps (sending an email) can't be compensated.",
+  "design": "Compensations must be idempotent (they get retried) and must eventually succeed (retry forever, or escalate to a human). Design them together with the forward step, not afterwards.",
+  "match": [
+   "compensation",
+   "compensations",
+   "compensating transaction",
+   "compensating transactions",
+   "compensate",
+   "compensates",
+   "compensated",
+   "compensating"
+  ],
+  "related": [
+   "saga",
+   "idempotent",
+   "retry",
+   "semantic-lock"
+  ]
+ },
+ {
+  "id": "semantic-lock",
+  "term": "Semantic lock (pending states)",
+  "short": "An application-level flag, like order status `PENDING`, saying \"a saga is still working on this record\".",
+  "detail": "Readers that see it show the record as tentative (\"processing\") instead of final; writers that want to change it are refused or queued until the saga clears the flag by confirming or cancelling.",
+  "design": "The main countermeasure to sagas' missing isolation. It costs extra states in your model and a policy for what to do when a request meets the lock (reject, wait, or queue).",
+  "match": [
+   "semantic lock",
+   "semantic locks",
+   "PENDING",
+   "pending states"
+  ],
+  "related": [
+   "isolation",
+   "saga",
+   "compensation"
+  ]
+ },
+ {
+  "id": "isolation",
+  "term": "Isolation (and its absence in sagas)",
+  "short": "Isolation means concurrent work can't see or clobber each other's unfinished changes. A saga has none.",
+  "detail": "Each saga step commits immediately, so other readers see intermediate states (\"charged but not confirmed\") that may later be compensated (a dirty read), and concurrent updates can overwrite each other (a lost update).",
+  "design": "Assume anything a saga writes is visible at once. Use semantic locks, commutative updates, re-reading before acting, and ordering risky steps late to keep the anomalies harmless.",
+  "match": [
+   "isolation",
+   "lost update",
+   "lost updates",
+   "dirty read",
+   "dirty reads"
+  ],
+  "related": [
+   "semantic-lock",
+   "saga",
+   "eventual-consistency"
+  ]
+ },
+ {
+  "id": "eventual-consistency",
+  "term": "Eventual consistency",
+  "short": "If no new changes arrive, all copies of the data converge to the same state, but at any moment they may disagree.",
+  "detail": "Events take time to travel and be processed, so a downstream service or read model lags its source. Outboxes, sagas and projections are all eventually consistent by design.",
+  "design": "Decide per screen and per decision how stale is acceptable, measure the lag, and give users their own writes back (read-your-writes) even when the rest of the system catches up later.",
+  "match": [
+   "eventual consistency",
+   "eventually consistent",
+   "converge"
+  ],
+  "related": [
+   "read-model",
+   "read-your-writes",
+   "saga"
+  ]
+ },
+ {
+  "id": "read-model",
+  "term": "Read model (projection)",
+  "short": "A copy of data shaped for queries, kept up to date by consuming change events from the write side.",
+  "detail": "A projector applies each event to the read model and records the last version it applied. Until it catches up, the read model is behind the write database.",
+  "design": "Lets reads scale and be shaped freely, at the price of lag. Monitor projection lag like you monitor replica lag, and make projectors idempotent (they get the same event twice too).",
+  "match": [
+   "read model",
+   "read models",
+   "projection",
+   "projector",
+   "projections"
+  ],
+  "related": [
+   "cqrs",
+   "eventual-consistency",
+   "version-token"
+  ]
+ },
+ {
+  "id": "cqrs",
+  "term": "CQRS",
+  "short": "Command Query Responsibility Segregation: writes go to one model, reads come from another.",
+  "detail": "The command side validates and stores changes (often with an outbox); the query side serves one or more read models built from the change events.",
+  "design": "Worth it when read and write shapes or loads differ a lot. Every CQRS system must answer \"what does a user see right after their own write?\"",
+  "match": [
+   "CQRS",
+   "command side",
+   "query side"
+  ],
+  "related": [
+   "read-model",
+   "read-your-writes",
+   "eventual-consistency"
+  ]
+ },
+ {
+  "id": "read-your-writes",
+  "term": "Read-your-writes",
+  "short": "A user always sees their own changes on later reads, even if other users may still see older data.",
+  "detail": "With a lagging read model, a user who saves and immediately reloads can find their change missing. Read-your-writes is a per-session guarantee layered on top of eventual consistency.",
+  "design": "Implement it with a version token, by routing that user's reads to the write side for a while, or by merging the write into the UI optimistically. Pick based on how much load the write side can take.",
+  "match": [
+   "read-your-writes",
+   "read your writes",
+   "read-your-own-writes"
+  ],
+  "related": [
+   "version-token",
+   "read-model",
+   "eventual-consistency"
+  ]
+ },
+ {
+  "id": "version-token",
+  "term": "Version token",
+  "short": "A number the write returns (the new version or log position) that the client sends with later reads: \"show me data at least this new\".",
+  "detail": "The query side compares the token with the version its read model has applied. If it is behind, it waits briefly or falls back to the write side, so the user never sees data older than their own write.",
+  "design": "Cheap and precise: only the user who wrote pays a short wait, everyone else reads the lagging model. Put a timeout on the wait and fall back rather than hang.",
+  "match": [
+   "version token",
+   "version tokens",
+   "min_version",
+   "consistency token"
+  ],
+  "related": [
+   "read-your-writes",
+   "read-model",
+   "lsn"
+  ]
+ }
+]

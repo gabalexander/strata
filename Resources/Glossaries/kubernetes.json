@@ -1,0 +1,685 @@
+[
+ {
+  "id": "pod",
+  "term": "Pod",
+  "short": "The smallest unit Kubernetes schedules onto a worker.",
+  "detail": "A pod groups containers that share a network identity and can share volumes. If a controller replaces a pod, the replacement has a new identity even if it runs the same image.",
+  "design": "Keep interchangeable replicas behind a Service and externalize state that must outlive a pod.",
+  "match": [
+   "pod replica",
+   "pod template",
+   "pod replacement"
+  ],
+  "related": [
+   "node",
+   "replica-set",
+   "service"
+  ]
+ },
+ {
+  "id": "node",
+  "term": "Node and kubelet",
+  "short": "A node is a worker machine. Its kubelet runs and monitors assigned pods.",
+  "detail": "The scheduler assigns a pod to a node. The kubelet coordinates container starts, probes, restarts, shutdown and local resource eviction.",
+  "design": "Diagnose placement failures at the scheduler and execution failures at the kubelet. New capacity helps only once its node is ready and schedulable.",
+  "match": [
+   "kubelet",
+   "worker node",
+   "node loss",
+   "node template"
+  ],
+  "related": [
+   "scheduler",
+   "allocatable",
+   "eviction"
+  ]
+ },
+ {
+  "id": "scheduler",
+  "term": "Scheduler and control plane",
+  "short": "The scheduler is the control-plane component that picks a node for each unassigned pod.",
+  "detail": "The control plane stores desired state and runs controllers that reconcile it. The scheduler filters nodes against hard constraints, scores eligible nodes and records the binding.",
+  "design": "Eligibility precedes optimization. Add capacity in a compatible pool or relax the failed constraint before tuning a score.",
+  "match": [
+   "scheduler",
+   "control plane",
+   "scheduler filters"
+  ],
+  "related": [
+   "pending",
+   "node-affinity",
+   "bin-packing"
+  ]
+ },
+ {
+  "id": "pending",
+  "term": "Pending and FailedScheduling",
+  "short": "Pending means a pod has been accepted but its containers are still being set up. FailedScheduling means it has no eligible node.",
+  "detail": "An unbound pod stays Pending after a failed attempt and can be retried. A bound pod can also be Pending while the kubelet pulls its image or creates its containers.",
+  "design": "Check the node assignment and recent events before scaling. Extra machines help only if they can satisfy the failing constraints.",
+  "match": [
+   "Pending pods",
+   "stays Pending",
+   "FailedScheduling",
+   "ContainerCreating"
+  ],
+  "related": [
+   "scheduler",
+   "request",
+   "cluster-autoscaler"
+  ]
+ },
+ {
+  "id": "request",
+  "term": "CPU and memory requests",
+  "short": "A resource request is the amount a container declares it needs for placement.",
+  "detail": "The scheduler adds pod requests against node allocatable capacity. CPU requests also affect CPU share under contention and form the denominator for CPU-utilization HPA.",
+  "design": "Overstated requests strand capacity and lower reported utilization. Understated requests increase contention and can make HPA react before the load justifies more replicas.",
+  "match": [
+   "CPU request",
+   "CPU requests",
+   "resource requests",
+   "memory request",
+   "requested CPU"
+  ],
+  "related": [
+   "allocatable",
+   "limit",
+   "hpa"
+  ]
+ },
+ {
+  "id": "limit",
+  "term": "CPU and memory limits",
+  "short": "A resource limit caps what a container can use at runtime.",
+  "detail": "The kernel throttles CPU at its quota. A container trying to exceed its memory limit can be OOM-killed. If a limit is set without a request and no admission rule sets one, Kubernetes uses that limit as the request.",
+  "design": "Set CPU and memory ceilings independently. A CPU cap can raise latency while a memory cap can cause a restart.",
+  "match": [
+   "CPU limits",
+   "CPU limit",
+   "memory limit",
+   "resource limit"
+  ],
+  "related": [
+   "request",
+   "oom-killed",
+   "cpu-throttling"
+  ]
+ },
+ {
+  "id": "allocatable",
+  "term": "Allocatable capacity",
+  "short": "The CPU and memory a node makes available to pods after reservations.",
+  "detail": "Node allocatable excludes resources reserved for system and Kubernetes processes and typically accounts for eviction thresholds. The scheduler compares a new pod to remaining requested capacity on a single node.",
+  "design": "Track fragmentation as well as total free capacity. Several small holes do not fit a single large request.",
+  "match": [
+   "allocatable capacity",
+   "allocatable CPU"
+  ],
+  "related": [
+   "request",
+   "bin-packing",
+   "pending"
+  ]
+ },
+ {
+  "id": "bin-packing",
+  "term": "Bin packing",
+  "short": "A scoring strategy that places pods on already-filling nodes.",
+  "detail": "A MostAllocated-style scheduler score can favor a higher fraction of requested CPU and memory after placement. Other scheduler profiles can prefer emptier nodes or use different weights.",
+  "design": "Packing can free machines for consolidation. Pair it with placement rules for replicas that must survive correlated failures.",
+  "match": [
+   "bin packing",
+   "MostAllocated"
+  ],
+  "related": [
+   "request",
+   "spread",
+   "cluster-autoscaler"
+  ]
+ },
+ {
+  "id": "taint",
+  "term": "Taint",
+  "short": "A node attribute that repels pods without a matching toleration.",
+  "detail": "NoSchedule blocks new placement. NoExecute can also evict running pods. PreferNoSchedule is a preference.",
+  "design": "Use a taint to keep general work out of specialized pools. Use affinity as well if dedicated workloads should land only in that pool.",
+  "match": [
+   "NoSchedule",
+   "untolerated taint",
+   "batch taint"
+  ],
+  "related": [
+   "toleration",
+   "node-affinity",
+   "scheduler"
+  ]
+ },
+ {
+  "id": "toleration",
+  "term": "Toleration",
+  "short": "A pod rule allowing it onto a node with a matching taint.",
+  "detail": "The rule matches a taint key, value and effect or matches more broadly with Exists. After the taint check, other filters and scores still run.",
+  "design": "A toleration opens a pool to a workload. Add affinity when the workload also requires that pool.",
+  "match": [
+   "batch toleration",
+   "matching toleration",
+   "tolerates batch"
+  ],
+  "related": [
+   "taint",
+   "node-affinity"
+  ]
+ },
+ {
+  "id": "node-affinity",
+  "term": "Node affinity",
+  "short": "A pod rule requiring or preferring nodes with particular labels.",
+  "detail": "Required affinity is a hard scheduling filter. Preferred affinity contributes to the score. RequiredDuringSchedulingIgnoredDuringExecution does not evict a running pod if a label later changes.",
+  "design": "Express real hardware or residency needs as hard rules. Use preferences when surviving capacity should take precedence.",
+  "match": [
+   "node affinity",
+   "affinity mismatch"
+  ],
+  "related": [
+   "taint",
+   "anti-affinity",
+   "zone"
+  ]
+ },
+ {
+  "id": "anti-affinity",
+  "term": "Pod anti-affinity",
+  "short": "A rule to keep matching pods apart across hosts, zones or other labeled domains.",
+  "detail": "A required rule rejects an eligible topology domain that contains a matching pod. A preferred rule contributes a scoring penalty. The exercise applies required anti-affinity per zone.",
+  "design": "Hard separation reduces correlated failure but can block replacements when eligible domains disappear.",
+  "match": [
+   "pod anti-affinity",
+   "required anti-affinity"
+  ],
+  "related": [
+   "zone",
+   "spread",
+   "pending"
+  ]
+ },
+ {
+  "id": "spread",
+  "term": "Topology spread",
+  "short": "A pod placement policy that balances matching replicas across labeled domains.",
+  "detail": "ScheduleAnyway favors domains with fewer matching pods. DoNotSchedule can reject a placement when skew would exceed maxSkew, subject to domain eligibility and minDomains.",
+  "design": "Use soft spread if a surviving zone should absorb replacements during an outage. Reserve enough spare capacity there to make that possible.",
+  "match": [
+   "topology spread",
+   "zone skew",
+   "ScheduleAnyway",
+   "maxSkew"
+  ],
+  "related": [
+   "zone",
+   "anti-affinity",
+   "bin-packing"
+  ]
+ },
+ {
+  "id": "zone",
+  "term": "Availability zone",
+  "short": "A failure domain with independently operated infrastructure inside a region.",
+  "detail": "Nodes typically carry a topology.kubernetes.io/zone label. Scheduling policies can use that label to keep replicas from sharing the same failure domain.",
+  "design": "Test losing an entire zone. Replica count is useful only if the remaining zones have both replicas and recovery capacity.",
+  "match": [
+   "availability zone",
+   "zone loss",
+   "zone failure"
+  ],
+  "related": [
+   "spread",
+   "anti-affinity",
+   "node-affinity"
+  ]
+ },
+ {
+  "id": "cluster-autoscaler",
+  "term": "Cluster Autoscaler",
+  "short": "A controller that changes node group size when pods cannot fit or nodes can be consolidated.",
+  "detail": "Scale-up checks Pending pods against configured node templates. Scale-down checks requested utilization and whether workloads can move within constraints. Provisioning takes time.",
+  "design": "Match node groups to the pod shapes you actually deploy. Spare CPU in the wrong zone or pool does not shorten Pending time.",
+  "match": [
+   "Cluster Autoscaler",
+   "node group",
+   "node provisioning",
+   "node consolidation"
+  ],
+  "related": [
+   "pending",
+   "allocatable",
+   "hpa",
+   "pdb"
+  ]
+ },
+ {
+  "id": "deployment",
+  "term": "Deployment",
+  "short": "A controller that manages versions and replica counts for an interchangeable workload.",
+  "detail": "A pod template change produces or reuses a ReplicaSet. The Deployment adjusts the old and new sets toward the desired state.",
+  "design": "Let the Deployment own application revisions and let an HPA own replica count if enabled. Separate these intents in deployment tooling.",
+  "match": [
+   "Deployment controller",
+   "deployment/api",
+   "Deployment owns"
+  ],
+  "related": [
+   "replica-set",
+   "rolling-update",
+   "hpa"
+  ]
+ },
+ {
+  "id": "replica-set",
+  "term": "ReplicaSet",
+  "short": "A controller that maintains the requested number of pods for one template.",
+  "detail": "A Deployment uses separate ReplicaSets for different revisions. A ReplicaSet may remain at zero replicas so its template can be reused for rollback.",
+  "design": "Inspect each ReplicaSet during a stalled rollout. Deployment-wide totals can hide an old revision serving all traffic.",
+  "match": [
+   "ReplicaSet",
+   "ReplicaSets",
+   "NewReplicaSetCreated"
+  ],
+  "related": [
+   "deployment",
+   "pod",
+   "rollback"
+  ]
+ },
+ {
+  "id": "rolling-update",
+  "term": "Rolling update",
+  "short": "Gradually replace old replicas with replicas from a new pod template.",
+  "detail": "The Deployment limits the extra non-terminating replicas with maxSurge and limits reduced availability with maxUnavailable. Terminating pods may temporarily keep consuming resources.",
+  "design": "Budget extra real capacity for both surge and slow termination. A zero-unavailable rollout can block if the first surge pod never fits or becomes ready.",
+  "match": [
+   "rolling update",
+   "stalled rollout",
+   "surge pod"
+  ],
+  "related": [
+   "max-surge",
+   "max-unavailable",
+   "progress-deadline"
+  ]
+ },
+ {
+  "id": "max-surge",
+  "term": "maxSurge",
+  "short": "Extra replicas the Deployment may create above its desired count during a rolling update.",
+  "detail": "Configure an integer or a percentage rounded up. Terminating pods can linger outside that count.",
+  "design": "Add surge when cold starts are expensive and spare placement capacity exists. Verify quota and node headroom alongside rollout policy.",
+  "match": [
+   "maxSurge",
+   "max surge"
+  ],
+  "related": [
+   "max-unavailable",
+   "rolling-update",
+   "allocatable"
+  ]
+ },
+ {
+  "id": "max-unavailable",
+  "term": "maxUnavailable",
+  "short": "How far available replicas may fall below desired during a rolling update.",
+  "detail": "Configure an integer or a percentage rounded down. With zero unavailable, the controller must wait for a new available replica before retiring a healthy old one.",
+  "design": "Translate an availability budget into serving headroom at peak load. Losing even one replica may overload the rest.",
+  "match": [
+   "maxUnavailable",
+   "max unavailable"
+  ],
+  "related": [
+   "max-surge",
+   "readiness-probe",
+   "pdb"
+  ]
+ },
+ {
+  "id": "readiness-probe",
+  "term": "Readiness probe and availability",
+  "short": "Readiness determines whether a pod is eligible for traffic. Deployment availability can require it to stay ready for longer.",
+  "detail": "A failed readiness probe makes the endpoint unready without restarting the container. A Deployment counts the pod as available only after minReadySeconds of continuous readiness.",
+  "design": "Probe readiness for ability to serve. Set minReadySeconds if an early pass can conceal a startup fault before old capacity is removed.",
+  "match": [
+   "readiness probe",
+   "continuous readiness",
+   "available replicas",
+   "minReadySeconds"
+  ],
+  "related": [
+   "liveness-probe",
+   "endpoint-slice",
+   "max-unavailable"
+  ]
+ },
+ {
+  "id": "liveness-probe",
+  "term": "Liveness probe",
+  "short": "A check that can restart a container that has stopped making progress.",
+  "detail": "After repeated probe failures, the kubelet restarts the container according to its policy. An early liveness failure can restart an otherwise healthy process before it finishes initializing.",
+  "design": "Reserve liveness for failures that restarting can fix. A check coupled to a shared dependency can restart an entire fleet during that dependency’s outage.",
+  "match": [
+   "liveness probe",
+   "liveness-only"
+  ],
+  "related": [
+   "startup-probe",
+   "crash-loop",
+   "readiness-probe"
+  ]
+ },
+ {
+  "id": "startup-probe",
+  "term": "Startup probe",
+  "short": "A probe that gates readiness and liveness while a container initializes.",
+  "detail": "The other probes start only after it succeeds. If the startup probe exhausts its own failure threshold, the kubelet can restart the container.",
+  "design": "Give slow initialization a separate startup budget and keep steady-state failure detection short.",
+  "match": [
+   "startup probe",
+   "startup gate"
+  ],
+  "related": [
+   "liveness-probe",
+   "readiness-probe",
+   "crash-loop"
+  ]
+ },
+ {
+  "id": "crash-loop",
+  "term": "CrashLoopBackOff",
+  "short": "A kubectl status saying repeated container failures are delaying the next restart.",
+  "detail": "With conventional defaults the kubelet waits 10, 20, 40 seconds and so on, up to 300 seconds. The pod phase can still be Running even though the container is waiting for a retry.",
+  "design": "Inspect the last termination reason and probe events. Recreating pods resets symptoms while leaving the failing configuration in place.",
+  "match": [
+   "CrashLoopBackOff",
+   "exponential backoff",
+   "Back-off restarting"
+  ],
+  "related": [
+   "liveness-probe",
+   "startup-probe",
+   "oom-killed"
+  ]
+ },
+ {
+  "id": "rollback",
+  "term": "Roll back a Deployment",
+  "short": "Restore a Deployment to a previous pod template.",
+  "detail": "A rollout undo points the Deployment at a retained revision, typically allowing it to reuse an old ReplicaSet. Its controller still reconciles replica counts and availability.",
+  "design": "Keep an actionable known-good revision and design database and protocol changes so both revisions can operate during the recovery.",
+  "match": [
+   "rollback",
+   "roll back",
+   "rollout undo"
+  ],
+  "related": [
+   "replica-set",
+   "rolling-update",
+   "progress-deadline"
+  ]
+ },
+ {
+  "id": "progress-deadline",
+  "term": "progressDeadlineSeconds",
+  "short": "How long a Deployment can go without rollout progress before reporting a stall.",
+  "detail": "A stalled Deployment reports ProgressDeadlineExceeded. Its controller keeps reconciling. The previous revision can be restored through an explicit rollback.",
+  "design": "Set a deadline above normal rollout pauses, alert on the condition and make the rollback decision explicit in delivery tooling.",
+  "match": [
+   "progressDeadlineSeconds",
+   "ProgressDeadlineExceeded"
+  ],
+  "related": [
+   "readiness-probe",
+   "rolling-update",
+   "rollback"
+  ]
+ },
+ {
+  "id": "service",
+  "term": "Service and ClusterIP",
+  "short": "A Service gives clients a stable address for a changing set of backends.",
+  "detail": "A ClusterIP is a virtual in-cluster IP. A selector-based Service normally has EndpointSlices with backend pod addresses and conditions.",
+  "design": "Clients should use the stable address. Check endpoint eligibility and data-plane convergence separately when the address responds intermittently.",
+  "match": [
+   "ClusterIP",
+   "Service IP",
+   "Service traffic"
+  ],
+  "related": [
+   "endpoint-slice",
+   "kube-proxy",
+   "readiness-probe"
+  ]
+ },
+ {
+  "id": "endpoint-slice",
+  "term": "EndpointSlice",
+  "short": "An API object recording a subset of a Service’s backend addresses and their eligibility.",
+  "detail": "Ready reflects ordinary eligibility. A terminating endpoint may remain in the slice with ready=false and terminating=true. Serving reports whether it can still handle traffic.",
+  "design": "Inspect slice conditions and installed proxy rules separately. A reported API change can precede data-plane convergence.",
+  "match": [
+   "EndpointSlice",
+   "EndpointSlices",
+   "terminating endpoint"
+  ],
+  "related": [
+   "service",
+   "kube-proxy",
+   "readiness-probe"
+  ]
+ },
+ {
+  "id": "kube-proxy",
+  "term": "kube-proxy and connection pinning",
+  "short": "kube-proxy programs node networking so a new Service connection reaches an eligible backend.",
+  "detail": "EndpointSlice watches update the rules asynchronously. A reused TCP connection retains its selected backend. The exact selection algorithm depends on proxy mode and configuration.",
+  "design": "Check connection lifetime as well as endpoint health. A few long-lived connections can produce uneven load or keep hitting a retiring backend.",
+  "match": [
+   "kube-proxy",
+   "pinned connection",
+   "connection pinning",
+   "existing TCP connections"
+  ],
+  "related": [
+   "service",
+   "endpoint-slice",
+   "sigterm"
+  ]
+ },
+ {
+  "id": "sigterm",
+  "term": "SIGTERM and draining",
+  "short": "SIGTERM asks the container process to shut down gracefully.",
+  "detail": "The app must handle the signal to stop accepting new work and finish active work. EndpointSlice eligibility changes independently of the signal.",
+  "design": "Measure both incoming and in-flight requests during termination, and make the app signal clients to reconnect where its protocol supports it.",
+  "match": [
+   "SIGTERM",
+   "drains active requests"
+  ],
+  "related": [
+   "pre-stop",
+   "grace-period",
+   "kube-proxy"
+  ]
+ },
+ {
+  "id": "pre-stop",
+  "term": "preStop hook",
+  "short": "A lifecycle hook that runs before the kubelet requests container shutdown.",
+  "detail": "A short preStop sleep lets routing rules converge while the app still accepts requests. The hook uses part of the termination grace period.",
+  "design": "Choose the delay from observed propagation times. Leave enough grace after the hook to finish active work.",
+  "match": [
+   "preStop",
+   "preStop hook",
+   "preStop sleep"
+  ],
+  "related": [
+   "sigterm",
+   "grace-period",
+   "endpoint-slice"
+  ]
+ },
+ {
+  "id": "grace-period",
+  "term": "terminationGracePeriodSeconds",
+  "short": "The overall budget for graceful pod termination before remaining processes can be killed.",
+  "detail": "The timer starts before preStop. After the hook and shutdown signal, a container still alive at the deadline can receive SIGKILL.",
+  "design": "Budget for propagation, handler tails and cleanup together. Test a request that starts just before the server stops accepting.",
+  "match": [
+   "terminationGracePeriodSeconds",
+   "SIGKILL",
+   "grace period",
+   "Terminating"
+  ],
+  "related": [
+   "sigterm",
+   "pre-stop",
+   "drain"
+  ]
+ },
+ {
+  "id": "qos-class",
+  "term": "Pod QoS class",
+  "short": "A classification based on the pod’s declared CPU and memory requests and limits.",
+  "detail": "Guaranteed requires equal CPU and memory requests and limits for every container. BestEffort has none. Remaining pods with resource declarations are Burstable.",
+  "design": "Use QoS to reason about likely pressure behavior, then check actual usage above requests and Pod Priority to predict eviction.",
+  "match": [
+   "QoS class",
+   "Guaranteed",
+   "Burstable",
+   "BestEffort"
+  ],
+  "related": [
+   "request",
+   "limit",
+   "eviction"
+  ]
+ },
+ {
+  "id": "eviction",
+  "term": "Node-pressure eviction",
+  "short": "The kubelet terminates pods to reclaim resources when a node is under pressure.",
+  "detail": "For memory it orders candidates by whether usage exceeds requests, then priority, then how much usage exceeds the request. This commonly removes BestEffort and over-request Burstable pods first.",
+  "design": "Set representative memory requests and leave eviction headroom. PodDisruptionBudget does not protect against local memory pressure.",
+  "match": [
+   "node-pressure eviction",
+   "memory pressure",
+   "MemoryPressure",
+   "Evicted"
+  ],
+  "related": [
+   "qos-class",
+   "oom-killed",
+   "pdb"
+  ]
+ },
+ {
+  "id": "oom-killed",
+  "term": "OOMKilled (137)",
+  "short": "A container was killed because available memory ran out.",
+  "detail": "This exercise triggers a container memory limit. Exit 137 indicates SIGKILL and has other possible causes, so check for OOMKilled as the termination reason.",
+  "design": "Inspect memory usage, working set and limit before increasing the cap. Compare with the CPU and memory simulator for cgroups and the kill mechanism.",
+  "match": [
+   "OOMKilled",
+   "OOM-killed",
+   "exit 137"
+  ],
+  "related": [
+   "limit",
+   "eviction",
+   "crash-loop"
+  ]
+ },
+ {
+  "id": "cpu-throttling",
+  "term": "CPU throttling",
+  "short": "The kernel delays runnable work after a container consumes its CPU quota.",
+  "detail": "The process remains alive and runs again when it has quota. The CPU and memory simulator shows cgroups and CFS quota accounting in depth.",
+  "design": "Watch throttling alongside tail latency and demand. Usage can flatten at the quota while queues and response times rise.",
+  "match": [
+   "CPU throttling",
+   "CPU throttled",
+   "CPU quota"
+  ],
+  "related": [
+   "limit",
+   "request",
+   "hpa"
+  ]
+ },
+ {
+  "id": "hpa",
+  "term": "Horizontal Pod Autoscaler (HPA)",
+  "short": "A controller that adjusts a workload’s desired replica count from observed metrics.",
+  "detail": "For CPU utilization, observed usage is normalized by CPU requests. The basic calculation is ceil(current replicas × observed utilization / target), before tolerance, incomplete metrics and configured scaling behavior.",
+  "design": "Treat scaling as a delayed feedback loop. Metric collection, the usual 15 s sync, Pending capacity and startup all add to reaction time.",
+  "match": [
+   "Horizontal Pod Autoscaler",
+   "HPA",
+   "CPU utilization",
+   "HPA sync"
+  ],
+  "related": [
+   "request",
+   "stabilization",
+   "cluster-autoscaler"
+  ]
+ },
+ {
+  "id": "stabilization",
+  "term": "Downscale stabilization window",
+  "short": "HPA looks back over recent recommendations before reducing replica count.",
+  "detail": "During a downscale it retains the highest applicable recommendation in the window, 300 s by default. Separate scaling policies can also limit the rate of change.",
+  "design": "Hold capacity through short demand dips to avoid churn. A longer window delays cost recovery after traffic falls.",
+  "match": [
+   "stabilization window",
+   "downscale stabilization"
+  ],
+  "related": [
+   "hpa",
+   "cluster-autoscaler"
+  ]
+ },
+ {
+  "id": "pdb",
+  "term": "PodDisruptionBudget (PDB)",
+  "short": "A policy that limits simultaneous voluntary evictions for a group of pods.",
+  "detail": "An Eviction API request can be denied when eviction would violate minAvailable or maxUnavailable. Deployment rollouts and node-pressure evictions do not use that admission check.",
+  "design": "Allow enough healthy replicas for maintenance to proceed. A budget matching the full replica count can prevent draining any healthy pod.",
+  "match": [
+   "PodDisruptionBudget",
+   "EvictionBlocked",
+   "voluntary eviction",
+   "PDB"
+  ],
+  "related": [
+   "drain",
+   "eviction",
+   "readiness-probe"
+  ]
+ },
+ {
+  "id": "drain",
+  "term": "kubectl drain",
+  "short": "Prepare a node for maintenance by cordoning it and requesting pod eviction.",
+  "detail": "Cordoning blocks normal new placements. Drain then uses the Eviction API where supported and waits for admitted pods to terminate. The exercise focuses on the API workload.",
+  "design": "Check availability budgets and placement headroom before maintenance. A blocked drain can be a signal that the remaining cluster cannot safely take over.",
+  "match": [
+   "kubectl drain",
+   "node drain",
+   "cordons",
+   "SchedulingDisabled"
+  ],
+  "related": [
+   "pdb",
+   "cluster-autoscaler",
+   "grace-period"
+  ]
+ }
+]

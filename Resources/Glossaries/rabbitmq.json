@@ -1,0 +1,469 @@
+[
+ {
+  "id": "exchange",
+  "term": "Exchange",
+  "short": "The router a producer publishes to. It never stores messages; it decides which queues get a copy.",
+  "detail": "Each message carries a routing key. The exchange compares it with the bindings of its queues and copies the message into every queue that matches. If nothing matches, the message is dropped (or returned, with `mandatory`).",
+  "design": "Producers depend on an exchange name, not on queues, so consumers can add or change queues without touching producers.",
+  "match": [
+   "exchange",
+   "exchanges"
+  ],
+  "related": [
+   "routing-key",
+   "binding",
+   "exchange-types",
+   "unroutable"
+  ]
+ },
+ {
+  "id": "exchange-types",
+  "term": "Direct, fanout and topic exchanges",
+  "short": "Direct routes on an exact key match, fanout copies to every bound queue, topic matches word patterns with * and #.",
+  "detail": "Topic keys are dot-separated words: `*` matches exactly one word and `#` matches zero or more. The default exchange is a direct exchange where every queue is bound by its own name.",
+  "design": "Pick fanout for broadcast events, topic when subscribers filter by category, direct for point-to-point work queues.",
+  "match": [
+   "fanout",
+   "topic exchange",
+   "direct exchange",
+   "default exchange"
+  ],
+  "related": [
+   "exchange",
+   "binding",
+   "routing-key"
+  ]
+ },
+ {
+  "id": "routing-key",
+  "term": "Routing key",
+  "short": "A label the producer puts on each message, like `payments.error`, that the exchange uses to route it.",
+  "detail": "Fanout exchanges ignore it. Direct exchanges compare it exactly with binding keys; topic exchanges match it against binding patterns.",
+  "match": [
+   "routing key",
+   "routing keys"
+  ],
+  "related": [
+   "exchange",
+   "binding"
+  ]
+ },
+ {
+  "id": "binding",
+  "term": "Binding",
+  "short": "A rule linking a queue to an exchange: \"send me messages whose key matches this\".",
+  "detail": "A queue can have many bindings, and many queues can bind to the same exchange with overlapping patterns, so one message can land in several queues.",
+  "match": [
+   "binding",
+   "bindings",
+   "binding key",
+   "bound with",
+   "bound queue",
+   "bound queues"
+  ],
+  "related": [
+   "exchange",
+   "routing-key",
+   "exchange-types"
+  ]
+ },
+ {
+  "id": "queue",
+  "term": "Queue",
+  "short": "Where messages wait, in order, until a consumer takes them. Messages leave from the head; new ones join at the tail.",
+  "detail": "A message is \"ready\" while it waits and \"unacked\" once it has been delivered but not yet acknowledged. Classic queues live on one node; quorum queues replicate with Raft.",
+  "design": "One queue per subscriber for pub/sub, one shared queue for a pool of workers. Long queues mean consumers can't keep up: watch queue depth as a capacity signal.",
+  "match": [
+   "queue",
+   "queues"
+  ],
+  "related": [
+   "ready",
+   "unacked",
+   "competing-consumers",
+   "quorum-queue"
+  ]
+ },
+ {
+  "id": "ready",
+  "term": "Ready",
+  "short": "Messages waiting in a queue that no consumer has been given yet.",
+  "match": [
+   "ready"
+  ],
+  "related": [
+   "queue",
+   "unacked"
+  ]
+ },
+ {
+  "id": "unacked",
+  "term": "Unacked",
+  "short": "Delivered to a consumer but not yet acknowledged. The broker keeps it until the ack arrives.",
+  "detail": "If the consumer's channel or connection closes first, every unacked message goes back to the queue with `redelivered=true` and is delivered again, possibly to another consumer.",
+  "design": "A growing unacked count with no acks usually means a stuck consumer or a forgotten ack, not slow processing.",
+  "match": [
+   "unacked",
+   "unacknowledged"
+  ],
+  "related": [
+   "ack",
+   "prefetch",
+   "redelivered"
+  ]
+ },
+ {
+  "id": "consumer",
+  "term": "Consumer",
+  "short": "A process subscribed to a queue that receives messages, does the work and acknowledges them.",
+  "match": [
+   "consumer",
+   "consumers",
+   "subscriber",
+   "subscribers"
+  ],
+  "related": [
+   "competing-consumers",
+   "ack",
+   "prefetch"
+  ]
+ },
+ {
+  "id": "competing-consumers",
+  "term": "Competing consumers",
+  "short": "Several consumers on the same queue share the work: each message goes to exactly one of them.",
+  "detail": "The broker hands messages out round-robin among consumers that have room under their prefetch limit.",
+  "design": "This is how you scale workers horizontally. For broadcast, give each subscriber its own queue instead.",
+  "match": [
+   "competing consumers",
+   "compete",
+   "work queue",
+   "round-robin"
+  ],
+  "related": [
+   "consumer",
+   "prefetch",
+   "queue"
+  ]
+ },
+ {
+  "id": "ack",
+  "term": "Ack (basic.ack)",
+  "short": "The consumer telling the broker \"done, you can delete this message\".",
+  "detail": "With manual acks, the consumer acks after the work succeeds, so a crash before the ack means the message is delivered again. That is at-least-once delivery.",
+  "design": "Ack after side effects are durable, not before. Make the handler idempotent because a crash between the work and the ack causes a redelivery.",
+  "match": [
+   "ack",
+   "acks",
+   "acked",
+   "basic.ack",
+   "manual ack",
+   "manual acks"
+  ],
+  "related": [
+   "nack",
+   "auto-ack",
+   "at-least-once",
+   "idempotent"
+  ]
+ },
+ {
+  "id": "nack",
+  "term": "Nack and reject",
+  "short": "The consumer saying \"I could not process this\". With requeue=true it goes back to the queue; with requeue=false it is dead-lettered or dropped.",
+  "detail": "`basic.reject` handles one message, `basic.nack` can cover several. A requeued message returns near the head of the queue, so a message that always fails will loop forever.",
+  "design": "Requeue only for transient failures. For bad input, reject without requeue into a dead-letter queue so it can be inspected instead of blocking the queue.",
+  "match": [
+   "nack",
+   "nacked",
+   "nacks",
+   "reject",
+   "rejected",
+   "rejects",
+   "requeue=true",
+   "requeue=false",
+   "basic.nack",
+   "basic.reject"
+  ],
+  "related": [
+   "requeue",
+   "dlx",
+   "poison-message"
+  ]
+ },
+ {
+  "id": "requeue",
+  "term": "Requeue",
+  "short": "Putting an unacked message back on its queue so it can be delivered again.",
+  "detail": "Happens on nack/reject with requeue=true, and automatically for every unacked message when a consumer's channel closes.",
+  "match": [
+   "requeue",
+   "requeued",
+   "requeues"
+  ],
+  "related": [
+   "redelivered",
+   "nack",
+   "unacked"
+  ]
+ },
+ {
+  "id": "redelivered",
+  "term": "Redelivered flag",
+  "short": "Set on a message that was delivered before and is being delivered again (↻ on the stage).",
+  "detail": "It tells the consumer this might be a duplicate: the previous attempt may have done part or all of the work before failing to ack.",
+  "design": "Use it as a hint to check for duplicates, but rely on idempotency keys rather than the flag alone.",
+  "match": [
+   "redelivered",
+   "redelivery",
+   "redeliveries",
+   "redelivered=true"
+  ],
+  "related": [
+   "requeue",
+   "idempotent",
+   "at-least-once"
+  ]
+ },
+ {
+  "id": "delivery-tag",
+  "term": "Delivery tag",
+  "short": "A number the broker gives each delivery on a channel; the consumer quotes it when it acks.",
+  "detail": "Tags are per channel and increase by one per delivery, so the same message gets a new tag every time it is redelivered.",
+  "match": [
+   "delivery tag",
+   "delivery-tag"
+  ],
+  "related": [
+   "ack",
+   "channel"
+  ]
+ },
+ {
+  "id": "channel",
+  "term": "Channel",
+  "short": "A lightweight session multiplexed inside one TCP connection. Consumers, acks and prefetch live on a channel.",
+  "detail": "Closing a channel (or losing the connection) requeues every message that was unacked on it.",
+  "match": [
+   "channel",
+   "channels"
+  ],
+  "related": [
+   "unacked",
+   "delivery-tag"
+  ]
+ },
+ {
+  "id": "prefetch",
+  "term": "Prefetch (basic.qos)",
+  "short": "The maximum number of unacked messages the broker will hand one consumer at a time.",
+  "detail": "With prefetch 1 a consumer gets the next message only after acking the last, so fast consumers naturally take more work. With no limit (∞) the broker pushes everything up front and a slow consumer sits on a backlog.",
+  "design": "Prefetch is your backpressure knob. Start around 10–50 for fast handlers and lower it for slow, uneven work so load spreads by real capacity.",
+  "match": [
+   "prefetch",
+   "basic.qos",
+   "qos",
+   "prefetch slots",
+   "prefetch slot"
+  ],
+  "related": [
+   "unacked",
+   "competing-consumers",
+   "auto-ack",
+   "backpressure"
+  ]
+ },
+ {
+  "id": "backpressure",
+  "term": "Backpressure",
+  "short": "Slowing the sender down when the receiver can't keep up, instead of buffering without limit.",
+  "detail": "In RabbitMQ, prefetch limits what each consumer holds; queue length limits and publisher flow control limit what the broker holds.",
+  "match": [
+   "backpressure"
+  ],
+  "related": [
+   "prefetch",
+   "max-length"
+  ]
+ },
+ {
+  "id": "auto-ack",
+  "term": "Auto-ack",
+  "short": "The broker treats a message as acknowledged the moment it sends it. The consumer never acks.",
+  "detail": "Prefetch no longer applies, so the broker pushes as fast as the network allows and messages pile up in the consumer's memory. If the consumer dies, everything it had buffered is lost.",
+  "design": "Only for data you can afford to lose (metrics, cache warmups). Anything that matters needs manual acks.",
+  "match": [
+   "auto-ack",
+   "auto-acked",
+   "autoack",
+   "no-ack"
+  ],
+  "related": [
+   "ack",
+   "at-most-once",
+   "prefetch"
+  ]
+ },
+ {
+  "id": "at-least-once",
+  "term": "At-least-once delivery",
+  "short": "Every message is processed, but some may be processed more than once.",
+  "detail": "You get it by acking after the work: a crash between the work and the ack causes a redelivery. It is the default for anything important.",
+  "design": "Pair it with idempotent consumers (dedupe by message id or an idempotency key) to get \"effectively once\" results.",
+  "match": [
+   "at-least-once"
+  ],
+  "related": [
+   "at-most-once",
+   "idempotent",
+   "redelivered"
+  ]
+ },
+ {
+  "id": "at-most-once",
+  "term": "At-most-once delivery",
+  "short": "No message is processed twice, but some may never be processed.",
+  "detail": "Auto-ack gives you this: the broker forgets the message on send, so a crash loses it.",
+  "match": [
+   "at-most-once"
+  ],
+  "related": [
+   "at-least-once",
+   "auto-ack"
+  ]
+ },
+ {
+  "id": "idempotent",
+  "term": "Idempotent consumer",
+  "short": "A handler that gives the same result whether a message is processed once or several times.",
+  "detail": "Typical techniques: store processed message ids and skip repeats, use upserts instead of inserts, or make side effects conditional on a version.",
+  "design": "Required for any at-least-once pipeline. Decide the dedupe key and how long you keep it when you design the consumer, not after the first double charge.",
+  "match": [
+   "idempotent",
+   "idempotency"
+  ],
+  "related": [
+   "at-least-once",
+   "redelivered"
+  ]
+ },
+ {
+  "id": "dlx",
+  "term": "Dead-letter exchange (DLX)",
+  "short": "Where a queue sends messages it gives up on: rejected without requeue, expired by TTL, or pushed out by max-length.",
+  "detail": "The DLX is an ordinary exchange set on the queue (`x-dead-letter-exchange`). Messages keep their routing key (unless overridden) and gain an `x-death` header recording why.",
+  "design": "Every important queue should have a DLQ plus an alert on its depth and a way to replay. A TTL wait queue whose DLX points back at the work queue gives you delayed retries.",
+  "match": [
+   "dead-letter exchange",
+   "dead-lettered",
+   "dead letters",
+   "dead-letters",
+   "dead letter",
+   "dlx",
+   "dlq"
+  ],
+  "related": [
+   "nack",
+   "ttl",
+   "max-length",
+   "poison-message"
+  ]
+ },
+ {
+  "id": "ttl",
+  "term": "Message TTL",
+  "short": "How long a message may wait in a queue before it expires.",
+  "detail": "Expired messages are dead-lettered if the queue has a DLX, otherwise dropped. Queue-level TTL (`x-message-ttl`) applies the same limit to every message.",
+  "design": "Use TTL for data that goes stale (prices, notifications) and to build delayed-retry queues.",
+  "match": [
+   "ttl",
+   "expired",
+   "expire",
+   "expires"
+  ],
+  "related": [
+   "dlx"
+  ]
+ },
+ {
+  "id": "max-length",
+  "term": "Max length and overflow",
+  "short": "A cap on how many ready messages a queue holds. With the default `drop-head`, the oldest message is pushed out when a new one arrives.",
+  "detail": "Pushed-out messages are dead-lettered if a DLX is set. `reject-publish` refuses new messages instead, which pushes back on publishers using confirms.",
+  "design": "Bound every queue. An unbounded queue turns an outage into memory exhaustion on the broker.",
+  "match": [
+   "max-length",
+   "max length",
+   "drop-head",
+   "overflow"
+  ],
+  "related": [
+   "dlx",
+   "backpressure"
+  ]
+ },
+ {
+  "id": "poison-message",
+  "term": "Poison message",
+  "short": "A message that fails every time it is processed, so requeueing it just loops forever.",
+  "detail": "With requeue=true it keeps going back to the head of the queue and burns consumer time on every attempt. Quorum queues can cap attempts with `x-delivery-limit`.",
+  "design": "Count attempts and move the message to a DLQ after a few, so one bad message can't stall a pipeline.",
+  "match": [
+   "poison message",
+   "poison",
+   "x-delivery-limit"
+  ],
+  "related": [
+   "nack",
+   "dlx",
+   "quorum-queue"
+  ]
+ },
+ {
+  "id": "unroutable",
+  "term": "Unroutable message",
+  "short": "A message whose routing key matches no binding. The exchange silently drops it.",
+  "detail": "Publishing with the `mandatory` flag makes the broker return it to the producer; an alternate exchange catches it instead.",
+  "design": "Silent drops hide bugs after a binding change. Use mandatory or an alternate exchange on important flows.",
+  "match": [
+   "unroutable",
+   "mandatory",
+   "alternate exchange"
+  ],
+  "related": [
+   "exchange",
+   "binding"
+  ]
+ },
+ {
+  "id": "quorum-queue",
+  "term": "Quorum queue",
+  "short": "A replicated queue type that keeps copies on several nodes using Raft, so it survives a node failure.",
+  "detail": "Writes are confirmed once a majority of replicas have them. It also supports a delivery limit for poison messages.",
+  "design": "The default choice for durable queues in production; classic mirrored queues are deprecated.",
+  "match": [
+   "quorum queue",
+   "quorum queues"
+  ],
+  "related": [
+   "queue",
+   "poison-message"
+  ]
+ },
+ {
+  "id": "late-subscriber",
+  "term": "No replay",
+  "short": "Once a message is acked it is deleted, and a newly bound queue only sees messages published after it was bound.",
+  "detail": "RabbitMQ is a broker, not a log. Kafka (or RabbitMQ Streams) keeps the log so new consumers can read history.",
+  "design": "If consumers need history, event replay or reprocessing after a bug fix, use a log (Kafka, streams), not a queue.",
+  "match": [
+   "late subscriber",
+   "no history",
+   "keeps no history"
+  ],
+  "related": [
+   "queue",
+   "exchange"
+  ]
+ }
+]

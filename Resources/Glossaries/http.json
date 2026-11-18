@@ -1,0 +1,678 @@
+[
+ {
+  "id": "rtt",
+  "term": "Round-trip time (RTT)",
+  "short": "The time for a packet to reach the server and an answer to come back. Every handshake step and every request costs at least one.",
+  "detail": "RTT is set by distance and routing: light in fiber covers about 200 km per ms, so a transatlantic round trip is around 70–80 ms however fast the link. On the stage each packet takes RTT/2 to cross, and the waterfall draws a faint line every RTT.",
+  "design": "For pages and APIs made of many small requests, latency is round trips × RTT and bandwidth barely matters. Cut round trips (connection reuse, TLS 1.3, HTTP/3, fewer dependent requests) or cut the RTT itself (CDN edges near users).",
+  "match": [
+   "RTT",
+   "RTTs",
+   "round trip",
+   "round trips",
+   "round-trip",
+   "round-trip time"
+  ],
+  "related": [
+   "bandwidth",
+   "handshake",
+   "ttfb"
+  ]
+ },
+ {
+  "id": "bandwidth",
+  "term": "Bandwidth",
+  "short": "How many bits per second the link carries. It decides how long a big response takes to download, not how soon the first byte arrives.",
+  "detail": "Here one bottleneck link at the server sends one 16 KB chunk at a time, shared round-robin by every connection and stream: at 20 Mbps a chunk takes about 6.4 ms to put on the wire. The download bars in the waterfall are mostly this.",
+  "design": "More bandwidth helps large transfers (video, big bundles) and does little for a page of small files, where RTT dominates. Find out which one bounds you before paying for either.",
+  "match": [
+   "bandwidth",
+   "Mbps",
+   "bottleneck link"
+  ],
+  "related": [
+   "rtt",
+   "slow-start",
+   "page-load"
+  ]
+ },
+ {
+  "id": "packet",
+  "term": "Segment, packet and chunk",
+  "short": "Units of data on the wire. TCP calls them segments, QUIC calls them packets; each data token here stands for a 16 KB chunk.",
+  "detail": "A real packet carries about 1.4 KB, so one 16 KB token is about 11 real packets. TCP numbers segments by their byte position in the connection; QUIC packet numbers only go up and are never reused.",
+  "design": "Response size in packets sets how many round trips a fresh connection needs: slow start allows about 10 packets (~14 KB) in the first flight, so critical HTML and CSS under that size arrive a round trip sooner.",
+  "match": [
+   "segment",
+   "segments",
+   "packet",
+   "packets",
+   "data packet",
+   "data packets"
+  ],
+  "related": [
+   "frame",
+   "packet-loss",
+   "slow-start"
+  ]
+ },
+ {
+  "id": "ack",
+  "term": "ACK",
+  "short": "The receiver telling the sender which data has arrived. ACKs are how a sender learns about both delivery and loss.",
+  "detail": "TCP ACKs are cumulative: they name the next byte expected, so after a hole every ACK repeats the same number. QUIC ACK frames list ranges of received packet numbers. ACKs also pace how fast the sender may send.",
+  "design": "Every reliable protocol over an unreliable network (TCP, QUIC, a message broker, your own retry logic) works this way: the sender only knows what it has been told, and silence is ambiguous.",
+  "match": [
+   "ACK",
+   "ACKs",
+   "ACKing",
+   "ACK frames"
+  ],
+  "related": [
+   "fast-retransmit",
+   "tcp-handshake",
+   "tcp"
+  ]
+ },
+ {
+  "id": "tcp",
+  "term": "TCP",
+  "short": "The reliable transport under HTTP/1.1 and HTTP/2: one ordered byte stream per connection, with lost data resent automatically.",
+  "detail": "TCP numbers every byte, the receiver acknowledges what it has in order, and the sender retransmits gaps. It hands bytes to the application strictly in order, so one missing segment holds back everything after it on that connection.",
+  "design": "Ordering per connection is TCP's strength and HTTP/2's weakness: every stream multiplexed on one connection shares the fate of every lost packet. TCP lives in the OS kernel, so improving it means waiting for OS upgrades, one reason QUIC lives in user space.",
+  "match": [
+   "TCP",
+   "byte stream",
+   "ordered byte stream"
+  ],
+  "related": [
+   "tcp-handshake",
+   "hol-tcp",
+   "ack",
+   "receive-buffer"
+  ]
+ },
+ {
+  "id": "udp",
+  "term": "UDP",
+  "short": "A bare datagram transport: no connection, no ordering, no retransmission. QUIC builds all of that itself, on top of it.",
+  "detail": "Running over UDP lets QUIC live in user space, in the browser and the server, so it can evolve without kernel changes and pass through middleboxes that only understand TCP and UDP.",
+  "design": "Some firewalls and corporate networks block or throttle UDP 443, so HTTP/3 deployments must fall back to HTTP/2 over TCP without the user noticing.",
+  "match": [
+   "UDP"
+  ],
+  "related": [
+   "quic",
+   "http3"
+  ]
+ },
+ {
+  "id": "handshake",
+  "term": "Handshake",
+  "short": "Setup round trips before a connection can carry a request: TCP needs 1, TLS 1.3 one more, TLS 1.2 two more, QUIC 1 in total, 0-RTT none.",
+  "detail": "The Handshake RTTs counter adds them up over every connection opened. Parallel connections handshake at the same time, so their wall-clock cost overlaps even though the round trips add up.",
+  "design": "A fresh HTTPS connection over TCP costs 2–3 RTTs before its first request: at 200 ms RTT that is up to 600 ms of nothing. Reuse connections (keep-alive, pooled clients between services) and prefer protocols with fewer setup round trips.",
+  "match": [
+   "handshake",
+   "handshakes"
+  ],
+  "related": [
+   "tcp-handshake",
+   "tls-handshake",
+   "quic",
+   "zero-rtt",
+   "keep-alive"
+  ]
+ },
+ {
+  "id": "tcp-handshake",
+  "term": "TCP handshake (SYN, SYN-ACK, ACK)",
+  "short": "Three packets that open a TCP connection. It costs one round trip before any data can be sent.",
+  "detail": "The client sends `SYN`, the server answers `SYN-ACK`, and the client's `ACK` can already carry data (here, the TLS `ClientHello`). In the waterfall this is the \"TCP connect\" phase.",
+  "design": "Every new connection pays it again, which is why connection pools and keep-alive matter between services too. TCP Fast Open could skip it but is rarely deployed; QUIC folds it into the TLS handshake.",
+  "match": [
+   "TCP handshake",
+   "SYN",
+   "SYN-ACK",
+   "three-way handshake",
+   "TCP connect"
+  ],
+  "related": [
+   "handshake",
+   "tls-handshake",
+   "tcp"
+  ]
+ },
+ {
+  "id": "tls-handshake",
+  "term": "TLS handshake (1.3 vs 1.2)",
+  "short": "Agreeing on keys and checking the server's certificate before encrypted data can flow. TLS 1.3 needs one round trip, TLS 1.2 two.",
+  "detail": "TLS 1.3 sends its key share in the `ClientHello`, so the server can answer with its certificate and `Finished` at once. TLS 1.2 first exchanges hellos and the certificate, then does the key exchange in a second round trip. Over TCP it only starts once the TCP handshake is done.",
+  "design": "Going from TLS 1.2 to 1.3 removes a full RTT from every new connection for free: check your load balancers and CDNs. Terminating TLS near the user (at an edge) shortens what each of those round trips costs.",
+  "match": [
+   "TLS",
+   "TLS 1.3",
+   "TLS 1.2",
+   "TLS handshake",
+   "ClientHello",
+   "certificate"
+  ],
+  "related": [
+   "handshake",
+   "tcp-handshake",
+   "quic",
+   "zero-rtt"
+  ]
+ },
+ {
+  "id": "zero-rtt",
+  "term": "0-RTT resumption",
+  "short": "On a return visit the browser sends its first request in the very first packet, using keys from a session ticket saved last time.",
+  "detail": "TLS 1.3 and QUIC let a client holding a session ticket send \"early data\" with its hello, so the first response arrives after one RTT. Early data has no replay protection: an attacker can capture and resend it.",
+  "design": "Only allow 0-RTT for idempotent requests (a GET without side effects); servers should reject or delay early data for anything that changes state. In this sim it is HTTP/3 only, as in browsers.",
+  "match": [
+   "0-RTT",
+   "0-RTT resumption",
+   "session ticket",
+   "early data",
+   "resumption"
+  ],
+  "related": [
+   "quic",
+   "tls-handshake",
+   "handshake"
+  ]
+ },
+ {
+  "id": "quic",
+  "term": "QUIC",
+  "short": "The transport under HTTP/3: runs over UDP, builds TLS 1.3 into its own handshake, and keeps each stream's order separately.",
+  "detail": "Transport and encryption are set up together in one round trip. A lost packet only holds back the stream whose bytes it carried. Resent data goes out in a new packet number, ACK frames say exactly what arrived, and connection IDs let a connection survive a switch from Wi-Fi to cellular.",
+  "design": "QUIC wins most on high-RTT, lossy links (mobile). It costs more CPU than kernel TCP and UDP is blocked on some networks, so clients always need a TCP fallback.",
+  "match": [
+   "QUIC",
+   "QUIC handshake",
+   "packet number",
+   "packet numbers",
+   "connection ID",
+   "connection IDs"
+  ],
+  "related": [
+   "udp",
+   "http3",
+   "hol-tcp",
+   "zero-rtt",
+   "stream"
+  ]
+ },
+ {
+  "id": "keep-alive",
+  "term": "Keep-alive (persistent connections)",
+  "short": "Reusing an open connection for the next request instead of closing it after one response.",
+  "detail": "Persistent connections are the default in HTTP/1.1; `Connection: close` turns them off, so every request pays the TCP and TLS handshakes again. A reused connection skips straight to the request's own round trip.",
+  "design": "The same lesson applies to every client you build: use a connection pool, and set idle timeouts so the client gives up before the proxy and the proxy before the server (a server closing first causes failed requests). Watch new connections per second.",
+  "match": [
+   "keep-alive",
+   "Connection: close",
+   "persistent connection",
+   "persistent connections",
+   "connection reuse"
+  ],
+  "related": [
+   "handshake",
+   "connection-limit",
+   "http1"
+  ]
+ },
+ {
+  "id": "connection-limit",
+  "term": "Connections per origin",
+  "short": "Browsers open at most 6 HTTP/1.1 connections to one origin at a time and queue any further requests.",
+  "detail": "An HTTP/1.1 connection carries one request at a time, so 6 connections means at most 6 requests in flight. HTTP/2 and HTTP/3 use a single connection per origin and multiplex instead. Domain sharding (spreading assets over several hostnames) was the HTTP/1.1 workaround.",
+  "design": "Remove domain sharding and sprite sheets when you move to HTTP/2: they add handshakes and defeat prioritisation. Between services the same limit is your connection pool size: too small and requests queue, too large and you overload the backend.",
+  "match": [
+   "per origin",
+   "connection per origin",
+   "connections per origin",
+   "domain sharding"
+  ],
+  "related": [
+   "queued",
+   "keep-alive",
+   "multiplexing",
+   "http1"
+  ]
+ },
+ {
+  "id": "queued",
+  "term": "Queued",
+  "short": "The waterfall phase where a request waits in the browser for a free connection, before anything goes on the wire.",
+  "detail": "Under HTTP/1.1 it is the staircase you see once every allowed connection is busy. Under HTTP/2 and HTTP/3 it is close to zero because every request becomes a stream at once.",
+  "design": "Long queued times in a real DevTools waterfall mean you hit the connection limit: fix it with HTTP/2 or fewer requests, not with a faster server.",
+  "match": [
+   "queued",
+   "wait for a free connection",
+   "waits for a free connection"
+  ],
+  "related": [
+   "connection-limit",
+   "waterfall",
+   "http1"
+  ]
+ },
+ {
+  "id": "pipelining",
+  "term": "HTTP/1.1 pipelining",
+  "short": "Sending the next request on a connection before the previous response has arrived. The responses must still come back in request order.",
+  "detail": "It saves the gap between requests, but a slow response blocks every response queued behind it on that connection, even ones the server already has ready. Buggy proxies made it worse, so browsers never turned it on.",
+  "design": "A lesson in HTTP-level head-of-line blocking: ordering without independent streams lets one slow item stall the rest. HTTP/2 fixed it with multiplexed streams.",
+  "match": [
+   "pipelining",
+   "pipelined"
+  ],
+  "related": [
+   "hol-http",
+   "http1",
+   "multiplexing"
+  ]
+ },
+ {
+  "id": "hol-http",
+  "term": "Head-of-line blocking (HTTP level)",
+  "short": "A slow response holding up others because responses on one connection must come back one at a time, in order.",
+  "detail": "In HTTP/1.1 a connection is busy until its response finishes; with pipelining, ready responses wait behind a slow one. HTTP/2 removes this by giving every request its own stream on the connection.",
+  "design": "Anything with a single ordered lane (a queue partition, a single-threaded worker, an ordered stream) has this failure mode. Keep slow work away from fast work, or give independent items independent lanes.",
+  "match": [
+   "head-of-line blocking",
+   "HTTP-level head-of-line blocking",
+   "request order",
+   "in request order"
+  ],
+  "related": [
+   "pipelining",
+   "hol-tcp",
+   "multiplexing",
+   "http1"
+  ]
+ },
+ {
+  "id": "multiplexing",
+  "term": "Multiplexing",
+  "short": "Many requests in flight at once on one connection, their data interleaved on the wire and reassembled per stream.",
+  "detail": "HTTP/2 splits every request and response into frames tagged with a stream id, so the server can send pieces of all responses in turn: no extra connections, no extra handshakes, no queue.",
+  "design": "One connection per origin means fewer handshakes but one shared fate under loss. On servers it also means one client can open many concurrent streams: cap `SETTINGS_MAX_CONCURRENT_STREAMS` and watch for rapid-reset style abuse.",
+  "match": [
+   "multiplexing",
+   "multiplexed",
+   "interleave",
+   "interleaves",
+   "interleaved"
+  ],
+  "related": [
+   "stream",
+   "frame",
+   "hol-http",
+   "http2"
+  ]
+ },
+ {
+  "id": "stream",
+  "term": "Stream",
+  "short": "One request and its response inside an HTTP/2 or HTTP/3 connection, with its own id (`s1`, `s3`… here).",
+  "detail": "HTTP/2 client streams use odd ids (1, 3, 5…); QUIC client streams use multiples of 4 (0, 4, 8…). Streams are independent at the HTTP layer; in HTTP/3 they are independent in the transport as well.",
+  "design": "Streams are cheap, but per-connection limits (flow-control windows, max concurrent streams) still apply to all of them together, and a stream is not a separate connection for a load balancer.",
+  "match": [
+   "stream",
+   "streams",
+   "stream id"
+  ],
+  "related": [
+   "multiplexing",
+   "frame",
+   "quic"
+  ]
+ },
+ {
+  "id": "frame",
+  "term": "Frames (HEADERS and DATA)",
+  "short": "HTTP/2 and HTTP/3 cut messages into binary frames: HEADERS frames carry the request and response headers, DATA frames the body.",
+  "detail": "Each frame names its stream, so frames from different streams can interleave on the wire and be put back together. Here each data token is a 16 KB DATA frame, HTTP/2's default maximum frame size.",
+  "design": "Binary framing is why HTTP/2 needs tooling to read (no telnet), but it is also what makes multiplexing, flow control and prioritisation possible.",
+  "match": [
+   "frame",
+   "frames",
+   "DATA frame",
+   "DATA frames",
+   "HEADERS frame",
+   "HEADERS frames",
+   "binary frames"
+  ],
+  "related": [
+   "stream",
+   "multiplexing",
+   "hpack",
+   "packet"
+  ]
+ },
+ {
+  "id": "hpack",
+  "term": "HPACK and QPACK",
+  "short": "Header compression for HTTP/2 (HPACK) and HTTP/3 (QPACK): a repeated header like `cookie` shrinks to a few bytes.",
+  "detail": "Both use a static table of common headers plus a dynamic table that both ends build per connection. HPACK assumes frames arrive in order, which QUIC streams don't guarantee, so HTTP/3 uses QPACK with separate encoder and decoder streams.",
+  "design": "Big cookies and custom headers are cheap after the first request on a connection, not on the first one. Compression state is per connection: one more reason to keep connections long-lived.",
+  "match": [
+   "HPACK",
+   "QPACK",
+   "header compression"
+  ],
+  "related": [
+   "frame",
+   "http2",
+   "http3"
+  ]
+ },
+ {
+  "id": "server-push",
+  "term": "Server push",
+  "short": "An HTTP/2 feature that let the server send resources before the browser asked. It rarely helped, and Chrome removed it in 2022.",
+  "detail": "The server can't see the browser's cache, so it often pushed bytes the browser already had. `103 Early Hints` replaced it: a quick interim response lists resources to preload, and the browser decides.",
+  "design": "Prefer hints (Early Hints, `preload`) over pushing bytes: let the client, which knows its cache, decide what to fetch.",
+  "match": [
+   "server push",
+   "103 Early Hints",
+   "Early Hints"
+  ],
+  "related": [
+   "http2",
+   "subresource"
+  ]
+ },
+ {
+  "id": "packet-loss",
+  "term": "Packet loss",
+  "short": "A packet that never arrives: dropped by a congested router, a flaky radio link or a full buffer.",
+  "detail": "The sender only learns about it from the receiver's ACKs (or their absence) and sends the data again, so each loss delays the data it carried by roughly one RTT or more. Here you can click a packet to drop it, arm a drop, or turn on random loss.",
+  "design": "Loss is normal on mobile and Wi-Fi (1–3% is common) and shows up as tail latency. Test under loss, not only on a clean LAN: that is where HTTP/2 and HTTP/3 really differ.",
+  "match": [
+   "packet loss",
+   "lost packet",
+   "loss",
+   "random loss",
+   "scripted loss"
+  ],
+  "related": [
+   "retransmission",
+   "fast-retransmit",
+   "rto",
+   "hol-tcp"
+  ]
+ },
+ {
+  "id": "retransmission",
+  "term": "Retransmission",
+  "short": "Sending lost data again. TCP resends the same segment; QUIC resends the bytes in a new packet with a new number.",
+  "detail": "Retransmitted packets are marked ↻ on the stage. Until one arrives, the receiver holds back whatever depends on the missing bytes: everything on the connection for TCP, only that stream for QUIC.",
+  "design": "A rising retransmit rate signals congestion or bad links and inflates p99 latency directly. Track it on hosts and load balancers (`ss -ti`, `netstat -s`).",
+  "match": [
+   "retransmission",
+   "retransmissions",
+   "retransmit",
+   "retransmits",
+   "retransmitted",
+   "retransmitting",
+   "resent",
+   "resend",
+   "resends",
+   "resending"
+  ],
+  "related": [
+   "packet-loss",
+   "fast-retransmit",
+   "rto"
+  ]
+ },
+ {
+  "id": "fast-retransmit",
+  "term": "Fast retransmit (duplicate ACKs)",
+  "short": "The sender resends a lost segment as soon as the ACKs for later packets reveal the gap, about one RTT after sending, without waiting for a timer.",
+  "detail": "TCP's receiver keeps acknowledging the last byte it has in order; three duplicate ACKs tell the sender a segment is missing. QUIC's ACK frames list exactly which packet numbers arrived, so the gap is plain.",
+  "design": "It only works when more packets follow the lost one. A loss at the tail of a response falls back to a timeout and costs far more, which is why small responses on lossy links have ugly tails.",
+  "match": [
+   "fast retransmit",
+   "duplicate ACK",
+   "duplicate ACKs"
+  ],
+  "related": [
+   "retransmission",
+   "rto",
+   "ack"
+  ]
+ },
+ {
+  "id": "rto",
+  "term": "Retransmission timeout (RTO / PTO)",
+  "short": "The timer that resends lost data when no later ACK reveals the gap. It waits longer than fast retransmit: about 2 RTTs here.",
+  "detail": "TCP derives its retransmission timeout (RTO) from the measured RTT and its variance, with a floor (200 ms on Linux) and doubling on every repeat. QUIC uses a probe timeout (PTO) that sends a probe packet to draw out an ACK.",
+  "design": "Timeouts dominate tail latency on lossy links. Be careful with application timeouts shorter than a couple of RTOs: they turn one lost packet into a failed request.",
+  "match": [
+   "retransmission timeout",
+   "probe timeout",
+   "RTO",
+   "PTO"
+  ],
+  "related": [
+   "fast-retransmit",
+   "retransmission",
+   "packet-loss"
+  ]
+ },
+ {
+  "id": "receive-buffer",
+  "term": "Receive buffer",
+  "short": "Where the receiver holds data that arrived but can't be handed to the application yet, because earlier data is still missing.",
+  "detail": "TCP keeps one buffer per connection in the kernel and releases bytes only in order, so a hole blocks everything behind it. QUIC buffers per stream, so only the stream with the hole waits. On the stage it is the strip at the left of each lane.",
+  "design": "The receive buffer also caps throughput: if it is smaller than bandwidth × RTT, the sender stalls waiting for ACKs on fast long-distance links. Tune it for high bandwidth-delay paths.",
+  "match": [
+   "receive buffer",
+   "TCP receive buffer",
+   "TCP buffer",
+   "kernel buffer",
+   "buffered segments",
+   "hole"
+  ],
+  "related": [
+   "hol-tcp",
+   "tcp",
+   "quic"
+  ]
+ },
+ {
+  "id": "hol-tcp",
+  "term": "TCP head-of-line blocking",
+  "short": "One lost TCP segment stalls every HTTP/2 stream on the connection, because TCP delivers bytes strictly in order.",
+  "detail": "Segments that arrive after the hole wait in the receive buffer, whatever stream they carry, until the retransmission fills it about an RTT later. QUIC orders each stream on its own, so a loss only stalls the stream it belongs to.",
+  "design": "At a few percent loss HTTP/2 can be slower than six HTTP/1.1 connections. That is the main case for HTTP/3 on mobile and lossy networks; on clean datacenter links it rarely matters.",
+  "match": [
+   "TCP head-of-line blocking",
+   "TCP-level head-of-line blocking"
+  ],
+  "related": [
+   "hol-http",
+   "tcp",
+   "receive-buffer",
+   "quic",
+   "packet-loss"
+  ]
+ },
+ {
+  "id": "stalled",
+  "term": "Stalled",
+  "short": "Time a request had data stuck: bytes waiting behind a lost packet, its own lost data overdue, or a ready response waiting its turn.",
+  "detail": "Hatched red in the waterfall. Under HTTP/2 one loss stalls every stream at once, under HTTP/3 only the stream that lost data, under HTTP/1.1 pipelining a response waits behind a slow one. (DevTools uses \"Stalled\" for time before a request is sent, which is different.)",
+  "design": "Stalls are the price of ordering. They show up as latency spikes across unrelated requests at the same moment, a hint that the shared resource is a connection, not the server.",
+  "match": [
+   "stalled",
+   "stall",
+   "stalls"
+  ],
+  "related": [
+   "hol-tcp",
+   "hol-http",
+   "packet-loss"
+  ]
+ },
+ {
+  "id": "slow-start",
+  "term": "Slow start and congestion control",
+  "short": "A new TCP or QUIC connection starts by sending about 10 packets and doubles each round trip until it finds the link's limit. Not modelled here.",
+  "detail": "Congestion control keeps a congestion window of how much unacknowledged data may be in flight; loss or rising delay shrinks it. A fresh connection therefore needs several RTTs to reach full speed.",
+  "design": "Another reason to reuse connections: a warm one already has a large window. The algorithm matters on long or lossy paths too (Cubic vs BBR).",
+  "match": [
+   "slow start",
+   "congestion control",
+   "congestion window"
+  ],
+  "related": [
+   "bandwidth",
+   "rtt",
+   "packet"
+  ]
+ },
+ {
+  "id": "waterfall",
+  "term": "Waterfall",
+  "short": "A timeline with one row per request, showing when each phase happened: queued, connect, TLS, waiting, download, stalled.",
+  "detail": "The same view as the Network tab in browser DevTools. Here the axis is real network milliseconds, with a faint vertical line every RTT so you can count round trips.",
+  "design": "Read a waterfall for chains and gaps, not just long bars: a staircase means queuing, repeated connect and TLS bars mean no connection reuse, and a late start means a resource was discovered late.",
+  "match": [
+   "waterfall"
+  ],
+  "related": [
+   "queued",
+   "ttfb",
+   "stalled",
+   "page-load"
+  ]
+ },
+ {
+  "id": "ttfb",
+  "term": "Time to first byte (TTFB)",
+  "short": "From sending a request to receiving the first byte of its response: one RTT plus the server's think time. The \"waiting\" phase in the waterfall.",
+  "detail": "It excludes connection setup (shown as separate phases) but includes the trip both ways and everything the server does before writing a byte: routing, queuing, database calls.",
+  "design": "TTFB minus RTT is your server time as users experience it. Stream responses (flush the head of the HTML early) so the browser can discover subresources while the backend finishes.",
+  "match": [
+   "TTFB",
+   "time to first byte",
+   "first byte"
+  ],
+  "related": [
+   "rtt",
+   "server-time",
+   "waterfall"
+  ]
+ },
+ {
+  "id": "server-time",
+  "term": "Server think time",
+  "short": "How long the server takes to produce a response once the request arrives: 8 ms per resource here, 40 ms for the HTML, plus 1 s for the one marked slow.",
+  "detail": "It is part of TTFB. A slow response only hurts requests that must wait for it: on HTTP/1.1 it ties up a whole connection, on HTTP/2 and HTTP/3 the other streams keep flowing.",
+  "design": "Keep slow endpoints from occupying shared lanes (connections, worker threads, queue partitions), and set timeouts per dependency.",
+  "match": [
+   "think time",
+   "server time",
+   "slow response",
+   "slow database call"
+  ],
+  "related": [
+   "ttfb",
+   "hol-http",
+   "multiplexing"
+  ]
+ },
+ {
+  "id": "subresource",
+  "term": "Subresources and discovery",
+  "short": "The CSS, scripts, fonts and images a page needs. The browser only learns about them by parsing the HTML, so they can't start before it arrives.",
+  "detail": "That makes a dependent chain: connection, HTML, then everything else. The \"HTML parsed\" marker in the waterfall is when discovery happens here; real browsers parse as the HTML streams in and also find resources inside CSS and scripts, adding more levels.",
+  "design": "Shorten the critical chain: inline critical CSS, `preload` late-discovered resources (fonts, hero images), send `103 Early Hints`, and avoid scripts that load scripts that load data.",
+  "match": [
+   "subresource",
+   "subresources",
+   "HTML parsed",
+   "parser"
+  ],
+  "related": [
+   "page-load",
+   "waterfall",
+   "server-push"
+  ]
+ },
+ {
+  "id": "page-load",
+  "term": "Page load time",
+  "short": "From the start of the load until the HTML and every subresource have arrived (roughly the browser's load event).",
+  "detail": "Here it is the end of the last download, in real network milliseconds. The log also gives it in RTTs, which shows how much of it is pure round trips.",
+  "design": "Users feel the critical path (first render, largest contentful paint) more than full load, but both are dominated by round trips on high-latency links. Measure real users by region and network type, not only your office Wi-Fi.",
+  "match": [
+   "page load",
+   "page loads",
+   "page loaded"
+  ],
+  "related": [
+   "rtt",
+   "waterfall",
+   "subresource"
+  ]
+ },
+ {
+  "id": "http1",
+  "term": "HTTP/1.1",
+  "short": "A text protocol where each connection carries one request and response at a time. Browsers open up to 6 connections per origin for parallelism.",
+  "detail": "With keep-alive, connections are reused; without it, every request opens a new one. Pipelining was specified but never enabled in browsers. It is still common between services and behind load balancers.",
+  "design": "Many internal hops still speak HTTP/1.1 (proxy to backend): size connection pools to your concurrency, because each in-flight request needs its own connection.",
+  "match": [
+   "HTTP/1.1"
+  ],
+  "related": [
+   "keep-alive",
+   "connection-limit",
+   "pipelining",
+   "hol-http"
+  ]
+ },
+ {
+  "id": "http2",
+  "term": "HTTP/2",
+  "short": "One TCP + TLS connection per origin, every request a multiplexed stream of binary frames, headers compressed with HPACK.",
+  "detail": "It removes HTTP-level head-of-line blocking and the 6-connection limit, but every stream shares one TCP byte stream, so a single lost packet stalls all of them.",
+  "design": "The default for browsers and gRPC. On lossy networks its single connection can lose to HTTP/1.1's six; and with long-lived gRPC connections, load balancers must balance per request, not per connection.",
+  "match": [
+   "HTTP/2"
+  ],
+  "related": [
+   "multiplexing",
+   "stream",
+   "hpack",
+   "hol-tcp",
+   "http3"
+  ]
+ },
+ {
+  "id": "http3",
+  "term": "HTTP/3",
+  "short": "HTTP over QUIC instead of TCP: setup in one round trip (or zero), streams ordered independently, QPACK headers.",
+  "detail": "Browsers learn that a server speaks HTTP/3 from an `Alt-Svc` header or a DNS HTTPS record, so a first visit often uses HTTP/2 and later ones upgrade.",
+  "design": "Turn it on at your CDN or edge for user-facing traffic, especially mobile, and keep HTTP/2 as the fallback. Inside a datacenter the gains are small and the CPU cost is real.",
+  "match": [
+   "HTTP/3",
+   "Alt-Svc",
+   "HTTPS record"
+  ],
+  "related": [
+   "quic",
+   "udp",
+   "zero-rtt",
+   "http2"
+  ]
+ }
+]

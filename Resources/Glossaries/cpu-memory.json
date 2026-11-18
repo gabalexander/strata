@@ -1,0 +1,669 @@
+[
+ {
+  "id": "virtual-memory",
+  "term": "Virtual memory",
+  "short": "Every process sees its own private address space; the kernel maps the parts it actually uses onto physical RAM.",
+  "detail": "Addresses a program uses are virtual. The address space is a list of regions (VMAs: code, heap, stack, mappings), and the MMU translates each access through the page table. Most of the 128 TiB is never mapped at all.",
+  "design": "Because the mapping is lazy, “allocated” and “using RAM” are different numbers. Capacity planning has to look at resident memory, never at virtual size.",
+  "match": [
+   "virtual memory",
+   "address space",
+   "VMA",
+   "VMAs"
+  ],
+  "related": [
+   "page",
+   "page-table",
+   "vsz",
+   "rss"
+  ]
+ },
+ {
+  "id": "page",
+  "term": "Page and frame",
+  "short": "Memory is managed in fixed blocks: a 4 KiB page of virtual memory sits in a 4 KiB frame of physical RAM.",
+  "detail": "One cell on the stage stands for 4 MiB, i.e. 1,024 pages. Huge pages (2 MiB, 1 GiB) exist too; transparent huge pages can make the kernel use them automatically for large anonymous regions.",
+  "design": "Everything the kernel does with memory (faults, reclaim, swap, copy-on-write) happens per page, so costs scale with page count. Huge pages cut page-table and TLB overhead for big heaps but can waste memory and cause latency spikes during compaction.",
+  "match": [
+   "4 KiB pages",
+   "frame",
+   "frames",
+   "huge pages",
+   "transparent huge pages"
+  ],
+  "related": [
+   "page-table",
+   "page-fault",
+   "virtual-memory"
+  ]
+ },
+ {
+  "id": "page-table",
+  "term": "Page table (PTE)",
+  "short": "The per-process map from virtual pages to physical frames, one entry (PTE) per page, walked by the CPU on every access.",
+  "detail": "A PTE holds the frame number and flags: present, writable, user, accessed, dirty. A missing or write-protected entry makes the CPU trap into the kernel: a page fault. The TLB caches recent translations.",
+  "design": "Page tables cost RAM too (about 2 MiB per GiB mapped with 4 KiB pages) and must be copied on fork, which is why forking a process with a 50 GiB heap takes noticeable time.",
+  "match": [
+   "page table",
+   "page tables",
+   "page-table entry",
+   "PTE",
+   "PFN"
+  ],
+  "related": [
+   "page",
+   "page-fault",
+   "cow"
+  ]
+ },
+ {
+  "id": "page-fault",
+  "term": "Page fault (minor and major)",
+  "short": "The CPU trapping into the kernel because a page is not mapped (or not writable) yet. Minor faults are fixed from RAM; major faults wait for the disk.",
+  "detail": "A minor fault zeroes a free frame for fresh anonymous memory, maps a page that is already in the page cache, or copies a page on write: about a microsecond. A major fault has to read the page from a file or swap first: 100 µs on NVMe, 10 ms on a spinning disk. Counted in `/proc/PID/stat` as `minflt` and `majflt`.",
+  "design": "Minor faults are normal (every new byte costs one). A rising major-fault rate means the working set does not fit in RAM: page cache thrashing or swapping, and latency follows. Pre-touch memory (`MAP_POPULATE`, `-XX:+AlwaysPreTouch`) when first-request latency matters.",
+  "match": [
+   "page fault",
+   "page faults",
+   "minor fault",
+   "minor faults",
+   "major fault",
+   "major faults",
+   "minflt",
+   "majflt",
+   "faults in"
+  ],
+  "related": [
+   "page-table",
+   "page-cache",
+   "swap",
+   "cow"
+  ]
+ },
+ {
+  "id": "vsz",
+  "term": "VSZ (VmSize)",
+  "short": "The total size of everything mapped into the process’s address space, used or not.",
+  "detail": "`VmSize` in `/proc/PID/status`, `VSZ` in `ps`. It grows with every `mmap`, `brk` and thread stack, even if not one page is touched. Go and the JVM reserve large ranges up front, so VSZ in the gigabytes is normal.",
+  "design": "Do not alert on VSZ, and do not size containers by it: it says what the process could touch, not what it does. It only matters for `RLIMIT_AS` and on 32-bit systems.",
+  "match": [
+   "VSZ",
+   "VmSize",
+   "virtual size"
+  ],
+  "related": [
+   "rss",
+   "virtual-memory",
+   "mmap"
+  ]
+ },
+ {
+  "id": "rss",
+  "term": "RSS and PSS",
+  "short": "Resident set size: how much of the process is in RAM right now. PSS divides shared pages among the processes sharing them.",
+  "detail": "`VmRSS` = `RssAnon` + `RssFile` + `RssShmem`. A page shared by two processes counts fully in each one’s RSS; in PSS (from `/proc/PID/smaps_rollup`) each gets half. After fork, adding up RSS counts shared memory twice.",
+  "design": "RSS is the number containers get killed over (through `memory.current`). To total memory across forked workers (gunicorn, Postgres backends, Redis BGSAVE), use PSS or the cgroup’s own counter, not the sum of RSS.",
+  "match": [
+   "RSS",
+   "VmRSS",
+   "resident set",
+   "PSS",
+   "resident"
+  ],
+  "related": [
+   "vsz",
+   "anon",
+   "file-backed",
+   "shmem",
+   "cow"
+  ]
+ },
+ {
+  "id": "anon",
+  "term": "Anonymous memory (RssAnon)",
+  "short": "Memory not backed by any file: heap, stacks, private mappings. Its only copy is in RAM (or swap).",
+  "detail": "Created by `malloc`, `brk`, `mmap(MAP_ANONYMOUS)` and copy-on-write. The kernel cannot drop it to free RAM, because there is nowhere to re-read it from; without swap it stays until the process frees it or dies.",
+  "design": "Anonymous memory is what gets you OOM-killed. Size limits for heap plus stacks plus runtime overhead, because the page cache will be squeezed first and then there is nothing else to give.",
+  "match": [
+   "anonymous memory",
+   "RssAnon",
+   "anon memory",
+   "anonymous pages",
+   "anonymous mapping"
+  ],
+  "related": [
+   "rss",
+   "swap",
+   "oom-killer",
+   "malloc"
+  ]
+ },
+ {
+  "id": "file-backed",
+  "term": "File-backed memory (RssFile)",
+  "short": "Pages mapped from a file: program code, shared libraries, mmap’d data files. Clean ones can be dropped and re-read.",
+  "detail": "They live in the page cache, so two processes mapping the same file share the same frames. `RssFile` counts the file pages a process currently has mapped.",
+  "design": "File-backed memory is cheap pressure relief: the kernel reclaims it before anything else. But if it reclaims the pages your code runs from, you get thrashing: the box is “not out of memory” and yet crawling on major faults.",
+  "match": [
+   "file-backed",
+   "RssFile",
+   "file pages",
+   "file-backed memory"
+  ],
+  "related": [
+   "page-cache",
+   "mmap",
+   "rss",
+   "reclaim"
+  ]
+ },
+ {
+  "id": "shmem",
+  "term": "Shared memory (RssShmem)",
+  "short": "Memory several processes map and write together: `MAP_SHARED|MAP_ANONYMOUS`, `/dev/shm`, `memfd`, tmpfs.",
+  "detail": "The kernel backs it with tmpfs, so it sits in the page cache (and shows in `buff/cache` and `free`’s `shared` column), but it is not reclaimable without swap. It is shared across fork, not copied.",
+  "design": "Shared memory is fast IPC (Postgres shared buffers, Chrome tabs), but it hides in “cache” while behaving like anonymous memory. A full `/dev/shm` in a container counts against `memory.max`.",
+  "match": [
+   "shared memory",
+   "RssShmem",
+   "shmem",
+   "MAP_SHARED|MAP_ANONYMOUS",
+   "tmpfs"
+  ],
+  "related": [
+   "page-cache",
+   "mmap",
+   "anon"
+  ]
+ },
+ {
+  "id": "page-cache",
+  "term": "Page cache",
+  "short": "File data the kernel keeps in otherwise unused RAM so the next read does not touch the disk.",
+  "detail": "`read()` and `write()` go through it; mmap maps its pages directly. It shows as `buff/cache` in `free`. Clean pages are dropped first when memory is needed; dirty ones are written back first. In a cgroup, the group that caused a read is charged for the cached pages.",
+  "design": "“Free” memory near zero is healthy: look at `available`. In containers the page cache counts in `memory.current`, so a log-heavy service can look close to its limit while most of it is reclaimable.",
+  "match": [
+   "page cache",
+   "buff/cache",
+   "cached",
+   "drop_caches"
+  ],
+  "related": [
+   "file-backed",
+   "reclaim",
+   "memory-current",
+   "mmap"
+  ]
+ },
+ {
+  "id": "mmap",
+  "term": "mmap",
+  "short": "The system call that adds a region to the address space: anonymous memory, or a file’s pages mapped directly.",
+  "detail": "Nothing is read or allocated at `mmap` time; pages fault in on first touch. `MAP_PRIVATE` mappings are copy-on-write; `MAP_SHARED` file mappings write through to the page cache. `munmap` removes the region.",
+  "design": "mmap’d files avoid a copy and let the kernel manage caching (LMDB, Kafka indexes, many databases), but a page fault can block a thread on disk at an unpredictable moment, and I/O errors arrive as SIGBUS.",
+  "match": [
+   "mmap",
+   "munmap",
+   "MAP_PRIVATE",
+   "MAP_SHARED",
+   "MAP_ANONYMOUS"
+  ],
+  "related": [
+   "virtual-memory",
+   "page-fault",
+   "file-backed",
+   "malloc"
+  ]
+ },
+ {
+  "id": "cow",
+  "term": "Copy-on-write and fork",
+  "short": "After `fork()`, parent and child share every page read-only; a page is copied only when one of them writes to it.",
+  "detail": "fork copies the page tables, marks private pages write-protected in both processes and bumps each frame’s map count. The first write takes a fault that copies the page. Reads, and pages nobody writes, stay shared forever.",
+  "design": "fork is cheap until writes start. Redis BGSAVE and Postgres-style forking servers rely on it; a write-heavy workload during a snapshot can nearly double memory and get the box OOM-killed. Budget for it.",
+  "match": [
+   "copy-on-write",
+   "COW",
+   "fork",
+   "fork()",
+   "copied on write"
+  ],
+  "related": [
+   "page-table",
+   "rss",
+   "page-fault"
+  ]
+ },
+ {
+  "id": "malloc",
+  "term": "malloc, brk and arenas",
+  "short": "glibc’s allocator: small blocks come from the heap (grown with `brk`), large ones (≥ 128 KiB) get their own `mmap`.",
+  "detail": "Freed small blocks go on free lists for reuse; the heap shrinks only from the top (`M_TRIM_THRESHOLD`), or with `malloc_trim`. Large mmap’d blocks are `munmap`’d at once. Multi-threaded programs get extra arenas (up to 8 × cores), each holding its own free memory.",
+  "design": "A C/C++ (or cgo, or Python) service whose RSS never shrinks is usually allocator retention, not a leak. `MALLOC_ARENA_MAX=2`, jemalloc or tcmalloc often cut RSS a lot; measure before and after.",
+  "match": [
+   "malloc",
+   "free()",
+   "brk",
+   "arena",
+   "arenas",
+   "M_MMAP_THRESHOLD",
+   "M_TRIM_THRESHOLD",
+   "malloc_trim",
+   "MALLOC_ARENA_MAX",
+   "glibc"
+  ],
+  "related": [
+   "fragmentation",
+   "anon",
+   "mmap"
+  ]
+ },
+ {
+  "id": "fragmentation",
+  "term": "Fragmentation",
+  "short": "Free memory scattered between live allocations, so the allocator cannot give it back or use it for larger requests.",
+  "detail": "One live block at the top of the heap pins everything below it. Long-lived objects interleaved with short-lived ones (caches, connection buffers) are the classic cause.",
+  "design": "Memory that grows to a plateau after a traffic spike and never comes down is often fragmentation. Pool or arena-allocate objects with the same lifetime, and restart-to-reclaim is a legitimate (if blunt) mitigation.",
+  "match": [
+   "fragmentation",
+   "fragmented"
+  ],
+  "related": [
+   "malloc",
+   "rss"
+  ]
+ },
+ {
+  "id": "swap",
+  "term": "Swap",
+  "short": "Disk space where the kernel can write anonymous pages so their RAM can be reused.",
+  "detail": "With swap, anonymous memory becomes reclaimable: cold pages go to disk and come back on a major fault. cgroup v2 limits it per group with `memory.swap.max`. Kubernetes nodes historically run with swap off.",
+  "design": "Swap turns a sudden OOM kill into gradual slowness. Good for cold, rarely touched memory; terrible for garbage-collected heaps, whose collector touches every page and drags it back in.",
+  "match": [
+   "swap",
+   "swapped",
+   "memory.swap.max",
+   "swap-in"
+  ],
+  "related": [
+   "anon",
+   "reclaim",
+   "page-fault"
+  ]
+ },
+ {
+  "id": "cgroup",
+  "term": "cgroup (v2)",
+  "short": "A kernel group of processes with shared resource accounting and limits; every container is one.",
+  "detail": "cgroup v2 is a single tree under `/sys/fs/cgroup`; each group has files like `memory.max`, `memory.current`, `cpu.max` and `cpu.stat`. Limits apply to all processes in the group together.",
+  "design": "Container limits are cgroup limits: when an app “ignores” its limit, it is usually reading host values (`/proc/meminfo`, CPU count) instead of the cgroup files. Runtimes now read cgroups (Go 1.25 GOMAXPROCS, JDK container support).",
+  "match": [
+   "cgroup",
+   "cgroups",
+   "cgroup v2",
+   "container"
+  ],
+  "related": [
+   "memory-max",
+   "cfs-quota",
+   "memory-current"
+  ]
+ },
+ {
+  "id": "memory-current",
+  "term": "memory.current",
+  "short": "Everything the cgroup is charged for right now: anonymous memory plus its page cache, plus some kernel memory.",
+  "detail": "`memory.stat` breaks it down (`anon`, `file`, `shmem`, `kernel`, …). Page cache is charged to the group whose reads or writes created it. It is compared with `memory.high` and `memory.max`.",
+  "design": "This is what Kubernetes calls container memory usage, and it includes cache. For “how close to OOM”, watch working set (usage minus inactive file pages) or anon alone.",
+  "match": [
+   "memory.current",
+   "memory.stat"
+  ],
+  "related": [
+   "memory-max",
+   "page-cache",
+   "anon",
+   "cgroup"
+  ]
+ },
+ {
+  "id": "memory-max",
+  "term": "memory.max",
+  "short": "The cgroup’s hard memory limit. Past it the kernel reclaims, and if that fails, it OOM-kills a process in the group.",
+  "detail": "Kubernetes sets it from `resources.limits.memory`. `memory.events` counts `max` (limit hit), `oom` (reclaim failed) and `oom_kill` (a process was killed).",
+  "design": "Set it from measured peak memory plus headroom, and tell the runtime about it (GOMEMLIMIT, -XX:MaxRAMPercentage), or the runtime will happily grow past it.",
+  "match": [
+   "memory.max",
+   "memory.events",
+   "oom_kill",
+   "memory limit",
+   "limits.memory",
+   "hard limit"
+  ],
+  "related": [
+   "memory-high",
+   "oom-killer",
+   "memory-current",
+   "reclaim"
+  ]
+ },
+ {
+  "id": "memory-high",
+  "term": "memory.high",
+  "short": "A soft memory limit: above it the kernel reclaims aggressively and slows down allocating tasks instead of killing them.",
+  "detail": "Tasks that allocate past `memory.high` are put to sleep for a penalty that grows with the overage (up to seconds). It never OOM-kills on its own. `memory.events: high` counts throttling events; memory PSI shows the stall time.",
+  "design": "Use it for graceful degradation or to find a service’s real working set (lower it until PSI rises). Kubernetes uses it for MemoryQoS. A service stuck at `memory.high` looks “slow” in latency graphs, not “crashed”.",
+  "match": [
+   "memory.high",
+   "soft limit",
+   "throttles",
+   "PSI",
+   "memory pressure"
+  ],
+  "related": [
+   "memory-max",
+   "reclaim"
+  ]
+ },
+ {
+  "id": "reclaim",
+  "term": "Page reclaim",
+  "short": "The kernel freeing memory under pressure: dropping clean page cache, writing back dirty pages, swapping anonymous pages.",
+  "detail": "Page cache goes first, from the inactive end of the LRU lists. Anonymous pages can only be reclaimed by swapping them out. Reclaim runs in the background (kswapd) or synchronously in the allocating task (direct reclaim), which adds latency.",
+  "design": "Reclaim is why memory “usage” is a misleading signal: the kernel fills RAM with cache on purpose. Watch major faults, PSI and direct-reclaim stalls instead.",
+  "match": [
+   "reclaim",
+   "reclaims",
+   "reclaimed",
+   "reclaimable",
+   "direct reclaim",
+   "kswapd"
+  ],
+  "related": [
+   "page-cache",
+   "swap",
+   "memory-max",
+   "memory-high"
+  ]
+ },
+ {
+  "id": "oom-killer",
+  "term": "OOM killer",
+  "short": "When memory cannot be reclaimed, the kernel kills a process (the one with the highest badness score) to free its memory.",
+  "detail": "Badness is roughly RSS + swap + page tables, adjusted by `oom_score_adj` (-1000 to 1000). A cgroup OOM only picks inside the cgroup; `memory.oom.group = 1` kills the whole group at once. The kernel logs a `Killed process` line to dmesg.",
+  "design": "The victim is the biggest process, not the one that allocated last, so a sidecar can take down your main app. In Kubernetes the kubelet sets `oom_score_adj` by QoS class so BestEffort pods die first on node pressure.",
+  "match": [
+   "OOM killer",
+   "OOM kill",
+   "OOM-kills",
+   "OOM-killed",
+   "out of memory",
+   "oom_score_adj",
+   "memory.oom.group",
+   "badness"
+  ],
+  "related": [
+   "exit-137",
+   "memory-max",
+   "anon"
+  ]
+ },
+ {
+  "id": "exit-137",
+  "term": "Exit code 137 (OOMKilled)",
+  "short": "A process killed by SIGKILL exits with 128 + 9 = 137. Kubernetes reports `Reason: OOMKilled` when the kill came from the OOM killer.",
+  "detail": "SIGKILL cannot be caught: no shutdown hooks, no final log line, no stack trace. The kubelet restarts the container with exponential back-off (10 s, 20 s, 40 s … up to 5 minutes): CrashLoopBackOff.",
+  "design": "137 with no app error in the logs means memory, not a crash. Look at `kubectl describe pod` and `memory.events`, compare the limit with the peak, and check what the runtime thinks its limit is.",
+  "match": [
+   "exit code 137",
+   "137",
+   "OOMKilled",
+   "SIGKILL",
+   "CrashLoopBackOff"
+  ],
+  "related": [
+   "oom-killer",
+   "memory-max"
+  ]
+ },
+ {
+  "id": "heap-goal",
+  "term": "GC heap goal",
+  "short": "The heap size at which a garbage collector plans to finish its next cycle. Go’s is live heap × (1 + GOGC/100).",
+  "detail": "With GOGC=100 the heap may grow to twice what survived the last collection before the next one ends. After a cycle the heap in use drops back to the live data, but RSS stays near the peak: freed memory is kept for reuse and returned to the OS slowly by the scavenger.",
+  "design": "A garbage-collected service needs roughly heap goal + runtime overhead in RAM, not just its live data. That ratio is the first thing to check when a Go or Java service is OOM-killed.",
+  "match": [
+   "heap goal",
+   "heap target",
+   "live heap",
+   "sawtooth",
+   "scavenger",
+   "GC cycle",
+   "GC CPU"
+  ],
+  "related": [
+   "gogc",
+   "gomemlimit",
+   "jvm-heap"
+  ]
+ },
+ {
+  "id": "gogc",
+  "term": "GOGC",
+  "short": "Go’s GC knob: how much the heap may grow, in percent of live heap, before the next collection. Default 100.",
+  "detail": "GOGC=100 lets a 300 MiB live heap grow to 600 MiB; GOGC=200 to 900 MiB; GOGC=off disables the proportional goal (only GOMEMLIMIT then triggers GC). Set by environment variable or `debug.SetGCPercent`.",
+  "design": "GOGC trades memory for CPU: doubling it roughly halves GC CPU and raises peak memory. Tune it together with GOMEMLIMIT, not alone, when running under a container limit.",
+  "match": [
+   "GOGC"
+  ],
+  "related": [
+   "heap-goal",
+   "gomemlimit"
+  ]
+ },
+ {
+  "id": "gomemlimit",
+  "term": "GOMEMLIMIT",
+  "short": "A soft memory limit for the Go runtime (Go 1.19+): as total Go memory nears it, the GC runs more often to stay under it.",
+  "detail": "It lowers the heap goal below what GOGC would allow and makes the scavenger return memory promptly. To avoid death spirals the GC limits itself to about 50% of CPU, after which the heap may exceed the limit.",
+  "design": "Set it to ~90% of the container limit (minus non-Go memory like cgo or mmap). It turns OOM kills from GC headroom into CPU cost, but it cannot save a service whose live data does not fit.",
+  "match": [
+   "GOMEMLIMIT",
+   "death spiral"
+  ],
+  "related": [
+   "gogc",
+   "heap-goal",
+   "memory-max"
+  ]
+ },
+ {
+  "id": "jvm-heap",
+  "term": "JVM -Xmx and the container limit",
+  "short": "-Xmx caps only the Java heap. The JVM process also needs metaspace, code cache, thread stacks, GC structures and direct buffers.",
+  "detail": "Setting -Xmx equal to the container limit guarantees the process will exceed it. Modern JDKs read the cgroup limit; `-XX:MaxRAMPercentage=75` sizes the heap from it and leaves room for the rest. A full heap throws `OutOfMemoryError` inside the JVM; exceeding `memory.max` gets the whole process SIGKILLed.",
+  "design": "Budget container memory as heap + non-heap (often 100–300 MiB, more with many threads or Netty direct buffers) + headroom. Prefer MaxRAMPercentage over a hard-coded -Xmx so limits and heap move together.",
+  "match": [
+   "-Xmx",
+   "Xmx",
+   "MaxRAMPercentage",
+   "OutOfMemoryError",
+   "JVM",
+   "metaspace"
+  ],
+  "related": [
+   "heap-goal",
+   "memory-max",
+   "exit-137"
+  ]
+ },
+ {
+  "id": "run-queue",
+  "term": "Run queue",
+  "short": "Threads that are ready to run (state R) but waiting for a CPU. Each CPU has its own queue.",
+  "detail": "The Linux fair scheduler (CFS, EEVDF since 6.6) orders each queue by virtual runtime: the thread that has had the least CPU, weighted by its cgroup’s `cpu.weight`, runs next. Idle CPUs steal work from busy ones.",
+  "design": "Time in the run queue is latency your profiler does not see as CPU time. A long run queue (load above CPU count) means requests wait to be scheduled: scheduling delay shows up in `/proc/PID/schedstat` and as p99.",
+  "match": [
+   "run queue",
+   "run queues",
+   "runnable",
+   "vruntime",
+   "CFS",
+   "EEVDF"
+  ],
+  "related": [
+   "context-switch",
+   "load-average",
+   "requests-limits"
+  ]
+ },
+ {
+  "id": "load-average",
+  "term": "Load average",
+  "short": "The 1, 5 and 15-minute moving averages of threads running, runnable, or in D state. Not CPU utilisation.",
+  "detail": "`/proc/loadavg` samples nr_running + nr_uninterruptible every 5 s. A load of 8 on 4 CPUs can mean 4 threads waiting for CPU, or 8 threads waiting for a slow disk with the CPUs idle.",
+  "design": "Compare load with the CPU count and with utilisation: high load + high utilisation is CPU saturation; high load + low utilisation is I/O (D state). For containers, CPU pressure (PSI) and throttling are better signals.",
+  "match": [
+   "load average",
+   "loadavg",
+   "utilisation",
+   "utilization"
+  ],
+  "related": [
+   "run-queue",
+   "d-state",
+   "iowait"
+  ]
+ },
+ {
+  "id": "context-switch",
+  "term": "Context switch",
+  "short": "A CPU switching from one thread to another. Voluntary when the thread blocks; involuntary when it is preempted.",
+  "detail": "`/proc/PID/status` counts `voluntary_ctxt_switches` (waited for I/O, a lock, a request) and `nonvoluntary_ctxt_switches` (slice used up, a higher-priority wakeup, or its cgroup was throttled). Each costs a few microseconds plus cold caches.",
+  "design": "Many involuntary switches mean CPU contention or throttling; many voluntary ones mean lots of blocking (locks, small I/O). Thread pools far larger than the CPU count turn into context-switch overhead.",
+  "match": [
+   "context switch",
+   "context switches",
+   "voluntary_ctxt_switches",
+   "nonvoluntary_ctxt_switches",
+   "preempted",
+   "preemption"
+  ],
+  "related": [
+   "run-queue",
+   "throttling"
+  ]
+ },
+ {
+  "id": "cfs-quota",
+  "term": "CFS quota (cpu.max)",
+  "short": "A CPU budget per period for a cgroup: `cpu.max = 100000 100000` means 100 ms of CPU time every 100 ms, one CPU on average.",
+  "detail": "The quota is shared by all the group’s threads on all CPUs. Four busy threads spend 100 ms of quota in 25 ms of wall time. When it runs out, the group is throttled until the period ends. Kubernetes sets it from `resources.limits.cpu`.",
+  "design": "A CPU limit is a rate limit with a 100 ms window, not a reservation. Bursty, multi-threaded work (GC, fan-out, thread pools sized to the node) hits it even at low average usage. Many teams set CPU requests and drop CPU limits.",
+  "match": [
+   "cpu.max",
+   "CFS quota",
+   "quota",
+   "CPU limit",
+   "limits.cpu",
+   "nr_periods",
+   "usage_usec"
+  ],
+  "related": [
+   "throttling",
+   "requests-limits",
+   "cgroup"
+  ]
+ },
+ {
+  "id": "throttling",
+  "term": "CPU throttling",
+  "short": "A cgroup that used its whole `cpu.max` quota is taken off the CPUs until the next period, even if CPUs are idle.",
+  "detail": "`cpu.stat` counts it: `nr_throttled` (periods in which the group was throttled) and `throttled_usec` (stall time, summed over CPUs). Throttled threads are not in the run queue and not in the load average; they simply do not run.",
+  "design": "Alert on the throttled share of periods (`nr_throttled / nr_periods`), not on average CPU. Throttling adds whole chunks of the period to whatever request is in flight, which is why it shows up as p99 latency, not as high CPU.",
+  "match": [
+   "throttling",
+   "throttled",
+   "nr_throttled",
+   "throttled_usec",
+   "throttle"
+  ],
+  "related": [
+   "cfs-quota",
+   "p99",
+   "requests-limits"
+  ]
+ },
+ {
+  "id": "requests-limits",
+  "term": "CPU requests vs limits",
+  "short": "A Kubernetes CPU request sets the share you get under contention (`cpu.weight`); a CPU limit sets a hard cap (`cpu.max`).",
+  "detail": "requests.cpu: 1 becomes `cpu.weight` 39 (cgroup v2), and the scheduler only places the pod where that much is unreserved. limits.cpu becomes a CFS quota. With no limit, a container can use idle CPU; with no request (BestEffort), it gets almost nothing under contention.",
+  "design": "Requests protect you from noisy neighbours; limits protect neighbours from you, at the price of throttling. For latency-sensitive services, set accurate requests and think hard before adding limits.",
+  "match": [
+   "requests vs limits",
+   "requests.cpu",
+   "CPU request",
+   "cpu.weight",
+   "noisy neighbour",
+   "noisy neighbor",
+   "BestEffort",
+   "Burstable",
+   "Guaranteed"
+  ],
+  "related": [
+   "cfs-quota",
+   "throttling",
+   "run-queue"
+  ]
+ },
+ {
+  "id": "iowait",
+  "term": "iowait",
+  "short": "CPU time spent idle while some task is waiting for disk I/O. It is idle time with an excuse, not work.",
+  "detail": "A CPU counts as iowait when it has nothing to run and a task that last ran on it is blocked on I/O. It drops if other work appears, even though the I/O is just as slow.",
+  "design": "High iowait says the disk (or network storage) is the bottleneck, not the CPU: faster CPUs or more cores will not help. Look at device latency and queue depth (`iostat -x`).",
+  "match": [
+   "iowait",
+   "%iowait"
+  ],
+  "related": [
+   "d-state",
+   "load-average"
+  ]
+ },
+ {
+  "id": "d-state",
+  "term": "D state (uninterruptible sleep)",
+  "short": "A thread blocked inside the kernel waiting for I/O (disk, NFS), which not even SIGKILL can interrupt.",
+  "detail": "Shown as `D` in `ps` and `top`. It uses no CPU but counts in the load average. Typical causes: `fsync`, reads on a slow or saturated disk, hung network storage.",
+  "design": "Processes stuck in D state cannot be killed or restarted until the I/O completes, so a hung NFS mount can wedge a whole node. A load average that climbs while CPUs are idle points here.",
+  "match": [
+   "D state",
+   "uninterruptible",
+   "uninterruptible sleep",
+   "fsync"
+  ],
+  "related": [
+   "iowait",
+   "load-average"
+  ]
+ },
+ {
+  "id": "p99",
+  "term": "p50 and p99 latency",
+  "short": "The latency half of requests beat (p50) and the latency 99% beat (p99). The tail is where users feel problems.",
+  "detail": "Averages hide tails: if one request in twenty waits out a 75 ms throttle, the mean barely moves while p99 jumps by 75 ms. With fan-out, each user request waits for the slowest of many calls, so backend p99 becomes user-facing p50.",
+  "design": "Set SLOs on high percentiles, and look for mechanisms that add fixed stalls (throttling, GC pauses, major faults, lock convoys) when p99 is bad and CPU looks fine.",
+  "match": [
+   "p99",
+   "p50",
+   "tail latency",
+   "percentile"
+  ],
+  "related": [
+   "throttling",
+   "run-queue"
+  ]
+ }
+]

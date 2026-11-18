@@ -1,0 +1,700 @@
+[
+ {
+  "id": "dns",
+  "term": "Domain Name System (DNS)",
+  "short": "A distributed directory that answers questions about domain names.",
+  "detail": "A DNS question includes a name and record type. DNS can return addresses, aliases and delegations. A cache hit can avoid one or more network round trips.",
+  "design": "DNS gives services a stable name while addresses change. Measure cold and warm lookup latency separately and include cached answers in rollout timelines.",
+  "match": [
+   "Domain Name System",
+   "DNS lookup",
+   "DNS question",
+   "lookup latency",
+   "network round trip"
+  ],
+  "related": [
+   "recursive",
+   "address-records",
+   "ttl"
+  ]
+ },
+ {
+  "id": "address-records",
+  "term": "A and AAAA records",
+  "short": "A stores an IPv4 address. AAAA stores an IPv6 address.",
+  "detail": "The record sets are distinct even when they belong to the same hostname. A dual-stack client can ask for both and choose which address to connect to.",
+  "design": "Test both families independently. A healthy IPv4 deployment can still publish a broken IPv6 path.",
+  "match": [
+   "A record",
+   "AAAA record",
+   "IPv4 address",
+   "IPv6 address"
+  ],
+  "related": [
+   "dns",
+   "cname",
+   "ttl"
+  ]
+ },
+ {
+  "id": "cname",
+  "term": "CNAME record",
+  "short": "An alias that names another hostname.",
+  "detail": "For an address lookup, the resolver follows the alias to its target and needs an A or AAAA record there. The two record sets have independent TTLs.",
+  "design": "Aliases make provider changes easier, but long chains increase cold latency and add dependencies on other zones.",
+  "match": [
+   "CNAME",
+   "CNAME record",
+   "CNAME chain"
+  ],
+  "related": [
+   "address-records",
+   "auth",
+   "ttl"
+  ]
+ },
+ {
+  "id": "ns",
+  "term": "NS record",
+  "short": "A record naming a nameserver for a DNS zone.",
+  "detail": "A parent zone uses NS records to delegate a child zone. A child zone also publishes an authoritative NS set at its apex. The parent can supply glue addresses when resolution would otherwise depend on the child.",
+  "design": "Keep parent and child delegation data consistent. A nameserver migration can be limited by delegation and glue lifetimes even if answer TTLs are short.",
+  "match": [
+   "NS record",
+   "NS records",
+   "delegation records"
+  ],
+  "related": [
+   "referral",
+   "auth",
+   "ttl"
+  ]
+ },
+ {
+  "id": "soa",
+  "term": "SOA record",
+  "short": "A zone record with administrative data and timing parameters.",
+  "detail": "Start of Authority (SOA) carries the zone serial, refresh parameters and MINIMUM. Negative answer TTL uses the smaller of the SOA record TTL and SOA.MINIMUM.",
+  "design": "Choose negative cache lifetimes alongside provisioning deadlines. A long negative TTL can hide newly created names during rollout.",
+  "match": [
+   "SOA",
+   "SOA.MINIMUM",
+   "Start of Authority"
+  ],
+  "related": [
+   "negative-caching",
+   "nxdomain",
+   "auth"
+  ]
+ },
+ {
+  "id": "stub",
+  "term": "Stub resolver",
+  "short": "The client-side DNS interface that normally asks a recursive resolver.",
+  "detail": "The OS may have a local DNS cache. On a miss the stub sends a recursive question to its configured resolver. Some browsers use an independent resolver path.",
+  "design": "App, OS and client policies can differ. Reproduce lookup behavior with the same client stack that showed the incident.",
+  "match": [
+   "stub resolver",
+   "OS cache"
+  ],
+  "related": [
+   "ttl",
+   "recursive",
+   "dns"
+  ]
+ },
+ {
+  "id": "recursive",
+  "term": "Recursive resolver",
+  "short": "A DNS service that completes a lookup for its clients.",
+  "detail": "It checks its cache and follows referrals as needed, usually making a series of iterative queries. It stores records by their own lifetimes.",
+  "design": "Shared recursion cuts internet traffic and latency. Its cache and availability affect many clients, so measure the resolver itself as well as your authority.",
+  "match": [
+   "recursive resolver",
+   "recursive cache",
+   "upstream DNS queries"
+  ],
+  "related": [
+   "stub",
+   "referral",
+   "ttl"
+  ]
+ },
+ {
+  "id": "root-server",
+  "term": "Root server",
+  "short": "An authoritative server for the DNS root zone, written as a dot.",
+  "detail": "Root hints bootstrap a recursive resolver. For a question under .com, a root server normally points the resolver to the .com nameservers.",
+  "design": "For ordinary name lookups the root is mostly a cold-start dependency because delegations are widely cached.",
+  "match": [
+   "root server",
+   "root zone",
+   "root hints"
+  ],
+  "related": [
+   "tld",
+   "referral",
+   "recursive"
+  ]
+ },
+ {
+  "id": "tld",
+  "term": "Top-level domain (TLD)",
+  "short": "The rightmost label under the DNS root, such as .com.",
+  "detail": "A TLD nameserver is authoritative for its own zone and refers the resolver to separately managed child zones such as example.com.",
+  "design": "Registrar-level delegation and your zone’s records sit in different control planes. Test both during nameserver changes.",
+  "match": [
+   "top-level domain",
+   "TLD nameserver",
+   ".com nameserver"
+  ],
+  "related": [
+   "root-server",
+   "referral",
+   "auth"
+  ]
+ },
+ {
+  "id": "auth",
+  "term": "Authoritative nameserver",
+  "short": "A server responsible for answering from a particular DNS zone.",
+  "detail": "For a name in its zone the server can return a record set, authoritative absence, or a referral when the name lies below a delegation.",
+  "design": "Monitor authoritative QPS and failures. Policy changes there affect new lookups and will be observed at different times as downstream caches refresh.",
+  "match": [
+   "authoritative server",
+   "authoritative DNS",
+   "authoritative nameserver",
+   "authoritative queries"
+  ],
+  "related": [
+   "recursive",
+   "ns",
+   "dns-failover"
+  ]
+ },
+ {
+  "id": "referral",
+  "term": "DNS referral",
+  "short": "A DNS reply pointing the resolver to servers closer to the answer.",
+  "detail": "A referral usually carries the child zone’s NS records in the authority section, sometimes with glue address records. The recursive resolver sends another query.",
+  "design": "Delegations can remain warm when an address expires. Plan delegation changes independently from service record changes.",
+  "match": [
+   "DNS referral",
+   "NS referral",
+   "child-zone referral",
+   "cached delegation"
+  ],
+  "related": [
+   "ns",
+   "root-server",
+   "tld"
+  ]
+ },
+ {
+  "id": "ttl",
+  "term": "Time to live (TTL)",
+  "short": "How long a cache may ordinarily reuse a record.",
+  "detail": "Browser, OS and recursive caches each track remaining TTL in seconds. Changing the advertised TTL affects new answers. Some clients apply local floors or stale-answer policies.",
+  "design": "For a migration, publish the lower TTL at least one old TTL in advance, then verify the old population has drained.",
+  "match": [
+   "TTL",
+   "time to live",
+   "advertised TTL",
+   "DNS cache",
+   "cached address",
+   "TTL floor"
+  ],
+  "related": [
+   "negative-caching",
+   "dns-failover",
+   "max-age"
+  ]
+ },
+ {
+  "id": "negative-caching",
+  "term": "Negative caching",
+  "short": "Saving an answer that a name or requested record is absent.",
+  "detail": "A cached NXDOMAIN applies to name and class across query types. NODATA is specific to a missing record type at an existing name.",
+  "design": "Negative caching protects authorities from repeated misses but can delay the visibility of a fix. Include newly provisioned names in propagation checks.",
+  "match": [
+   "negative caching",
+   "negative cache",
+   "negative TTL",
+   "NODATA"
+  ],
+  "related": [
+   "nxdomain",
+   "soa",
+   "ttl"
+  ]
+ },
+ {
+  "id": "nxdomain",
+  "term": "NXDOMAIN",
+  "short": "The DNS response code for a name that does not exist.",
+  "detail": "An authoritative negative response includes the zone SOA for cache timing. An existing name that lacks the requested type is a separate NODATA case.",
+  "design": "Distinguish name absence from timeout or server failure. The remediation and the persistence of cached results differ.",
+  "match": [
+   "NXDOMAIN",
+   "name error"
+  ],
+  "related": [
+   "negative-caching",
+   "soa",
+   "dns"
+  ]
+ },
+ {
+  "id": "dns-failover",
+  "term": "DNS failover",
+  "short": "Returning a different service address when the usual target is unhealthy.",
+  "detail": "Health checks update the authority’s view, after which a new lookup can get an alternate address. Clients may still hold a cached IP or reuse existing connections.",
+  "design": "Plan recovery time for detection, cache drain and client retries. DNS alone rarely guarantees a hard upper bound.",
+  "match": [
+   "DNS failover",
+   "planned cutover",
+   "stale routing"
+  ],
+  "related": [
+   "health-check",
+   "ttl",
+   "geodns",
+   "anycast"
+  ]
+ },
+ {
+  "id": "health-check",
+  "term": "Health check",
+  "short": "A probe used to decide whether a backend should receive new traffic.",
+  "detail": "Probe intervals and consecutive failures set detection delay. Checks can test transport reachability or application readiness depending on what failure should trigger a switch.",
+  "design": "Probe the dependency whose loss should change routing. Tune hysteresis to avoid oscillation and verify the backup can handle the full load.",
+  "match": [
+   "health check",
+   "health checks",
+   "health probe"
+  ],
+  "related": [
+   "dns-failover",
+   "auth",
+   "bgp"
+  ]
+ },
+ {
+  "id": "geodns",
+  "term": "GeoDNS and latency-based DNS",
+  "short": "Choosing an answer based on where a query appears to come from or how fast a site is for that location.",
+  "detail": "The authority usually sees the recursive resolver’s address. EDNS Client Subnet can convey a client prefix where supported, at the cost of additional cache partitioning and privacy exposure.",
+  "design": "Measure routing from actual user networks. A far-away or shared resolver can make an apparently local policy return a poor address.",
+  "match": [
+   "GeoDNS",
+   "latency-based DNS",
+   "EDNS Client Subnet"
+  ],
+  "related": [
+   "recursive",
+   "dns-failover",
+   "anycast"
+  ]
+ },
+ {
+  "id": "anycast",
+  "term": "Anycast",
+  "short": "Several sites offer the same IP address and routing selects a reachable site.",
+  "detail": "Sites advertise a common prefix. BGP path selection can lead different users to different sites with the same DNS answer. Advertisement changes converge through the network.",
+  "design": "Tie withdrawal to service health. Expect some convergence delay and account for stateful connections that might break during a route change.",
+  "match": [
+   "anycast",
+   "anycast address",
+   "anycast IP"
+  ],
+  "related": [
+   "bgp",
+   "health-check",
+   "geodns"
+  ]
+ },
+ {
+  "id": "bgp",
+  "term": "Border Gateway Protocol (BGP)",
+  "short": "The protocol networks use to exchange IP reachability and select routes.",
+  "detail": "Networks announce prefixes and apply policy to choose paths. Announcements and withdrawals take time to propagate and do not guarantee selection by geographic distance or RTT.",
+  "design": "Coordinate route changes with application health and monitor from multiple networks. Convergence is separate from DNS caching.",
+  "match": [
+   "BGP",
+   "route withdrawal",
+   "BGP convergence"
+  ],
+  "related": [
+   "anycast",
+   "health-check"
+  ]
+ },
+ {
+  "id": "cdn",
+  "term": "Content delivery network (CDN)",
+  "short": "A distributed fleet of edge sites that serve users near their networks.",
+  "detail": "A CDN can cache eligible responses and proxy other requests. The edges can terminate TLS and reuse connections to the application origin.",
+  "design": "Separate latency, request offload and byte offload goals. Dynamic routes may benefit from acceleration even at zero cache hit ratio.",
+  "match": [
+   "CDN",
+   "content delivery network"
+  ],
+  "related": [
+   "pop",
+   "origin",
+   "cache-control",
+   "tls-edge"
+  ]
+ },
+ {
+  "id": "pop",
+  "term": "Edge point of presence (PoP)",
+  "short": "One location in a CDN where user traffic enters or content can be cached.",
+  "detail": "PoPs typically hold independent working sets. A hit in one region does not fill a different region unless a shared tier or proactive distribution is used.",
+  "design": "More PoPs can shorten user paths while increasing duplicate cold fills. A shared shield can absorb the resulting fan-out.",
+  "match": [
+   "edge PoP",
+   "edge PoPs",
+   "PoP",
+   "PoPs",
+   "edge cache"
+  ],
+  "related": [
+   "cdn",
+   "shield",
+   "cache-outcomes"
+  ]
+ },
+ {
+  "id": "origin",
+  "term": "Origin",
+  "short": "The upstream application or storage service a CDN fetches from.",
+  "detail": "The origin serves dynamic responses and supplies misses or validations. This lab counts origin requests and successful response body bytes. The shield lab measures peak origin RPS in one-second buckets aligned to the burst start.",
+  "design": "Budget the origin for cold caches and invalidations. A healthy warm-cache hit ratio can hide a capacity problem during rollout.",
+  "match": [
+   "origin server",
+   "origin fetch",
+   "application origin",
+   "origin RPS",
+   "origin requests",
+   "origin body bytes",
+   "origin bandwidth"
+  ],
+  "related": [
+   "cdn",
+   "shield"
+  ]
+ },
+ {
+  "id": "cache-outcomes",
+  "term": "Cache hit, miss and hit ratio",
+  "short": "A hit uses a cached response. A miss needs a fill. An expired copy may need validation or qualify for stale service.",
+  "detail": "The lab divides fresh hits by all completed requests, including errors, bypasses, stale responses and validations.",
+  "design": "Compare hit ratios across similar traffic classes and check byte offload too. Large misses can dominate bandwidth even when the request hit ratio is high.",
+  "match": [
+   "cache hit",
+   "cache miss",
+   "expired copy",
+   "fresh cache hit",
+   "fresh hit ratio",
+   "cache hit ratio",
+   "hit ratio"
+  ],
+  "related": [
+   "max-age",
+   "not-modified"
+  ]
+ },
+ {
+  "id": "offload",
+  "term": "Request offload",
+  "short": "The share of user requests that did not require a separate origin request.",
+  "detail": "Compare origin fetches with incoming user requests for the same burst. Hits and collapsed followers can both improve request offload. Byte offload also depends on body sizes and revalidation.",
+  "design": "Measure offload at the origin boundary. Edge misses can still be inexpensive when the shield has a hit or a shared fill.",
+  "match": [
+   "request offload",
+   "origin offload",
+   "byte offload"
+  ],
+  "related": [
+   "cache-outcomes",
+   "origin",
+   "collapse"
+  ]
+ },
+ {
+  "id": "cache-control",
+  "term": "Cache-Control",
+  "short": "HTTP directives that govern storage, freshness and reuse.",
+  "detail": "A response can give shared and private caches different freshness limits. Unqualified private allows private caches only. No-store tells recipients to avoid storage.",
+  "design": "Set explicit policy per route. Default personal responses to a policy that prevents shared caching and verify what the edge actually receives.",
+  "match": [
+   "Cache-Control",
+   "no-store",
+   "private cache",
+   "private response"
+  ],
+  "related": [
+   "max-age",
+   "s-maxage",
+   "swr",
+   "sie"
+  ]
+ },
+ {
+  "id": "max-age",
+  "term": "max-age",
+  "short": "The freshness lifetime in seconds for a cached HTTP response.",
+  "detail": "The cache compares current age with the freshness lifetime. Downstream shared caches should account for the age already accumulated upstream.",
+  "design": "Choose freshness according to the tolerated age of content. Longer lifetimes improve reuse and make changing a stable URL slower to observe.",
+  "match": [
+   "max-age",
+   "freshness lifetime"
+  ],
+  "related": [
+   "cache-control",
+   "s-maxage",
+   "etag"
+  ]
+ },
+ {
+  "id": "s-maxage",
+  "term": "s-maxage",
+  "short": "A freshness lifetime that overrides max-age in shared HTTP caches.",
+  "detail": "Browsers still apply their own freshness policy. Once stale, a shared cache applying s-maxage requires validation for further reuse under the normal HTTP cache rules.",
+  "design": "Set a longer shared lifetime when you want strong CDN reuse and quicker browser refreshes. Confirm the policy at both tiers.",
+  "match": [
+   "s-maxage",
+   "shared freshness lifetime"
+  ],
+  "related": [
+   "max-age",
+   "cache-control",
+   "not-modified"
+  ]
+ },
+ {
+  "id": "cache-key",
+  "term": "Cache key",
+  "short": "The request identity used to decide which stored response can be reused.",
+  "detail": "Keys generally include the target URI and can include selected query parameters, cookies or headers. Vary adds matching requirements for request headers.",
+  "design": "Include every dimension that changes the representation. Strip only proven irrelevant dimensions and measure hit ratio by key cardinality.",
+  "match": [
+   "cache key",
+   "cache keys",
+   "key cardinality",
+   "query string"
+  ],
+  "related": [
+   "vary",
+   "cache-outcomes",
+   "collapse"
+  ]
+ },
+ {
+  "id": "vary",
+  "term": "Vary",
+  "short": "A response header telling caches which request headers influence the representation.",
+  "detail": "Vary: Accept-Language means a cache matches the new request against the language header of the stored request. Vary: * prevents a normal cached match.",
+  "design": "Keep negotiation inputs small and intentional. High-cardinality headers fragment the cache while missing variation can serve the wrong response.",
+  "match": [
+   "Vary",
+   "Accept-Language",
+   "header variant"
+  ],
+  "related": [
+   "cache-key",
+   "cache-outcomes",
+   "cache-control"
+  ]
+ },
+ {
+  "id": "etag",
+  "term": "ETag",
+  "short": "A validator that identifies a selected representation of a resource.",
+  "detail": "A cache can send its ETag in If-None-Match. For a matching GET or HEAD, the origin can return 304 and the cache updates its stored metadata.",
+  "design": "Generate validators consistently across origin replicas. Changing a validator while bytes stay the same prevents useful revalidation.",
+  "match": [
+   "ETag",
+   "If-None-Match",
+   "conditional fetch"
+  ],
+  "related": [
+   "not-modified",
+   "max-age"
+  ]
+ },
+ {
+  "id": "not-modified",
+  "term": "304 Not Modified",
+  "short": "A conditional response that allows a client or cache to reuse its stored body.",
+  "detail": "A 304 carries metadata and no representation body. A shared cache can use it to refresh stored metadata, then serve a complete response from the stored bytes.",
+  "design": "Expect 304 to save bandwidth and still consume origin round trips and request handling. Watch both origin QPS and bytes.",
+  "match": [
+   "304",
+   "304 Not Modified",
+   "304 validation",
+   "revalidation"
+  ],
+  "related": [
+   "etag",
+   "origin",
+   "swr"
+  ]
+ },
+ {
+  "id": "swr",
+  "term": "stale-while-revalidate (SWR)",
+  "short": "A bounded window in which a cache can serve stale data while it refreshes asynchronously.",
+  "detail": "An eligible request can trigger a background fetch while it immediately receives the stored body. A successful validation or fill updates the cache for later requests.",
+  "design": "Use SWR where a small freshness lag is acceptable. It moves revalidation latency off the hot path and softens synchronized expiry.",
+  "match": [
+   "stale-while-revalidate",
+   "SWR",
+   "background refresh"
+  ],
+  "related": [
+   "sie",
+   "etag",
+   "collapse"
+  ]
+ },
+ {
+  "id": "sie",
+  "term": "stale-if-error (SIE)",
+  "short": "A bounded window in which a cache can serve a stale copy when fetching fails.",
+  "detail": "An eligible upstream error, such as HTTP 503, lets the cache fall back to stored content while the grace period is open.",
+  "design": "Set grace periods according to how long old content stays useful. Monitor stale serves separately so a resilient edge cannot hide an origin outage.",
+  "match": [
+   "stale-if-error",
+   "SIE",
+   "stale on origin error"
+  ],
+  "related": [
+   "swr",
+   "cache-control",
+   "origin"
+  ]
+ },
+ {
+  "id": "purge",
+  "term": "Cache purge",
+  "short": "Invalidating selected CDN copies before their normal expiry.",
+  "detail": "Providers can support keys, paths or tags, with different propagation and in-flight semantics. The lab models a hard local purge of the selected tiers.",
+  "design": "Purge narrowly and budget the cold traffic it creates. Large invalidations can synchronize misses across PoPs.",
+  "match": [
+   "cache purge",
+   "purge",
+   "purged"
+  ],
+  "related": [
+   "versioned",
+   "herd",
+   "shield"
+  ]
+ },
+ {
+  "id": "versioned",
+  "term": "Versioned immutable URL",
+  "short": "A URL containing a fingerprint or version that changes when the contents change.",
+  "detail": "Publish each version under a new URL and keep old bytes available until old references disappear. An immutable cache directive discourages validation during the fresh lifetime.",
+  "design": "Give immutable assets long freshness and update the documents that point to them separately. Retain old versions for in-flight pages and rollbacks.",
+  "match": [
+   "versioned URL",
+   "versioned URLs",
+   "immutable URL",
+   "immutable asset"
+  ],
+  "related": [
+   "purge",
+   "cache-key",
+   "max-age"
+  ]
+ },
+ {
+  "id": "shield",
+  "term": "Origin shield",
+  "short": "A shared upstream cache that serves misses from several CDN edges.",
+  "detail": "An edge miss goes to a common intermediate point. A shield hit avoids an origin trip, and a collapsing shield can also deduplicate concurrent cold fills.",
+  "design": "Place the shield where edges and origin can reach it reliably. Size and isolate it as an origin protection layer with its own failure domain.",
+  "match": [
+   "origin shield",
+   "shield hit",
+   "collapsing shield"
+  ],
+  "related": [
+   "tiered-cache",
+   "collapse",
+   "offload"
+  ]
+ },
+ {
+  "id": "tiered-cache",
+  "term": "Tiered cache",
+  "short": "An arrangement where a cache asks an upstream cache before reaching the source.",
+  "detail": "Edges can share a larger or longer-lived working set upstream. A hit there keeps origin off the path, while a cold miss can pay an extra hop.",
+  "design": "Pick tiers from request locality and available capacity. Preserve response age between tiers so a copied response does not accidentally get a new full TTL.",
+  "match": [
+   "tiered cache",
+   "tiered caching",
+   "second-tier cache"
+  ],
+  "related": [
+   "shield",
+   "pop",
+   "max-age"
+  ]
+ },
+ {
+  "id": "collapse",
+  "term": "Request collapsing",
+  "short": "Sharing one in-flight fetch among concurrent requests for the same cache key.",
+  "detail": "A leader fetches while followers wait. The safe sharing boundary includes cache key and eligibility. If the leader fails, followers need a bounded failure or retry strategy.",
+  "design": "Collapse at the scope where duplicate work accumulates. Per-PoP deduplication leaves cross-PoP duplicates unless they meet at a shared tier.",
+  "match": [
+   "request collapsing",
+   "collapsed followers",
+   "in-flight fill",
+   "conditional collapse"
+  ],
+  "related": [
+   "cache-key",
+   "shield",
+   "herd"
+  ]
+ },
+ {
+  "id": "herd",
+  "term": "Thundering herd",
+  "short": "A burst of similar work arriving together at an upstream system.",
+  "detail": "A synchronized cache expiry, purge or deploy can turn ordinary traffic into many concurrent origin misses for the same object.",
+  "design": "Test realistic cold release and purge scenarios. Combine collapsing, jitter or prewarming with enough origin capacity for genuinely distinct misses.",
+  "match": [
+   "thundering herd",
+   "synchronized expiry",
+   "cold burst"
+  ],
+  "related": [
+   "collapse",
+   "origin",
+   "purge"
+  ]
+ },
+ {
+  "id": "tls-edge",
+  "term": "TLS termination at the edge",
+  "short": "The CDN accepts the client’s encrypted connection at a nearby PoP.",
+  "detail": "The CDN can use a separate secured upstream connection to origin. Reusing this connection avoids repeated TCP and TLS handshakes across the longer path.",
+  "design": "Measure connection reuse and client handshake latency independently of cache hits. Preserve trust boundaries on both legs when proxying sensitive traffic.",
+  "match": [
+   "TLS termination",
+   "upstream connection",
+   "origin handshakes"
+  ],
+  "related": [
+   "cdn",
+   "pop",
+   "dns"
+  ]
+ }
+]

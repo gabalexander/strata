@@ -1,0 +1,709 @@
+[
+ {
+  "id": "backend",
+  "term": "Client backend",
+  "short": "The PostgreSQL server process that runs statements for a client connection.",
+  "detail": "A backend changes pages in shared buffers and inserts WAL records. It can perform WAL flushes or write a dirty eviction victim on the foreground path.",
+  "design": "Buffer misses and slow storage can increase query latency even when client CPU usage is low.",
+  "match": [
+   "client backend",
+   "backend writes",
+   "backend write"
+  ],
+  "related": [
+   "shared-buffers",
+   "clock-sweep",
+   "synchronous-commit"
+  ]
+ },
+ {
+  "id": "shared-buffers",
+  "term": "shared_buffers",
+  "short": "The common pool of cached data-file pages used by PostgreSQL processes.",
+  "detail": "Each frame can hold one block from a heap or index. Processes share access to cached blocks. Writes usually dirty the frame in memory and let another process write it later.",
+  "design": "Size for the workload and account for the OS page cache. A larger pool can reduce eviction but may leave more dirty data for checkpoints.",
+  "match": [
+   "shared_buffers",
+   "shared buffers",
+   "buffer frames",
+   "buffer frame"
+  ],
+  "related": [
+   "heap-page",
+   "clock-sweep",
+   "bgwriter",
+   "data-files"
+  ]
+ },
+ {
+  "id": "heap-page",
+  "term": "Heap page and dirty flag",
+  "short": "A block of table storage. A buffer is dirty after changes that still need writing.",
+  "detail": "PostgreSQL usually uses 8 KiB pages. A dirty buffer can be written even if the transaction that changed it is still open, as long as the WAL describing the change is durable.",
+  "design": "A clean buffer is cheap to evict. A shortage of clean buffers can put writes on an application request’s critical path.",
+  "match": [
+   "heap page",
+   "heap pages",
+   "dirty page",
+   "dirty pages",
+   "dirty buffer",
+   "dirty buffers"
+  ],
+  "related": [
+   "shared-buffers",
+   "page-lsn",
+   "write-ahead-rule"
+  ]
+ },
+ {
+  "id": "wal-buffers",
+  "term": "WAL buffers and records",
+  "short": "Shared memory used to assemble records in the write-ahead log before writing them to disk.",
+  "detail": "WAL records describe page changes, commits and other events. WAL insertion, write to the operating system, and flush to durable storage are separate milestones.",
+  "design": "Distinguish WAL generation from storage flush latency. Increasing WAL buffer space cannot make the device flush faster.",
+  "match": [
+   "WAL buffers",
+   "WAL record",
+   "WAL records",
+   "write-ahead log"
+  ],
+  "related": [
+   "lsn",
+   "pg-wal",
+   "fsync",
+   "commit-record"
+  ]
+ },
+ {
+  "id": "walwriter",
+  "term": "walwriter",
+  "short": "A background process that periodically writes and flushes WAL.",
+  "detail": "An asynchronous commit may wake it. Backends can flush WAL directly for synchronous commits. In PostgreSQL the documented async risk window can be up to three times wal_writer_delay.",
+  "design": "For transactions that need durable acknowledgements, choose synchronous_commit. Changing writer timing only changes the window of exposure.",
+  "match": [
+   "walwriter",
+   "wal_writer_delay",
+   "WAL writer"
+  ],
+  "related": [
+   "asynchronous-commit",
+   "wal-buffers",
+   "fsync"
+  ]
+ },
+ {
+  "id": "bgwriter",
+  "term": "bgwriter",
+  "short": "The background writer prepares clean, reusable buffers in advance of demand.",
+  "detail": "It estimates upcoming buffer allocations from recent activity and writes some dirty eviction candidates. bgwriter_lru_maxpages controls how many it can write per round.",
+  "design": "More proactive writes can reduce foreground stalls at the cost of rewriting hot buffers that get dirty again.",
+  "match": [
+   "bgwriter",
+   "background writer",
+   "bgwriter_lru_maxpages"
+  ],
+  "related": [
+   "clock-sweep",
+   "backend",
+   "checkpoint"
+  ]
+ },
+ {
+  "id": "checkpoint",
+  "term": "Checkpoint and checkpointer",
+  "short": "The checkpointer establishes a recovery starting point and makes earlier changes durable in the data files.",
+  "detail": "It chooses a REDO point, writes and syncs the required data, and persists a checkpoint record. pg_control is updated after the record is durable. Concurrent writes can leave pages dirty again.",
+  "design": "Checkpoint scheduling trades recovery time against foreground I/O, WAL volume, and the disk space needed before old segments can be recycled.",
+  "match": [
+   "checkpoint record",
+   "checkpointer",
+   "checkpoints",
+   "checkpoint"
+  ],
+  "related": [
+   "redo-point",
+   "pg-control",
+   "checkpoint-completion-target",
+   "full-page-image"
+  ]
+ },
+ {
+  "id": "pg-wal",
+  "term": "pg_wal and WAL segments",
+  "short": "The local directory containing durable WAL and the segment files used to write it.",
+  "detail": "WAL is divided into fixed-size segment files, normally 16 MiB each. Checkpoints can recycle old files once crash recovery, replication and archiving no longer need them. This lab uses 32 KiB segments.",
+  "design": "Budget for retention blockers separately from max_wal_size. A slot or failed archiver can grow the directory beyond that target.",
+  "match": [
+   "pg_wal",
+   "WAL segment",
+   "WAL segments",
+   "retained WAL",
+   "WAL retention"
+  ],
+  "related": [
+   "max-wal-size",
+   "replication-slot",
+   "archive-command",
+   "restart-lsn"
+  ]
+ },
+ {
+  "id": "data-files",
+  "term": "Data files",
+  "short": "The files that hold table and index blocks.",
+  "detail": "Data-file blocks can lag changes already recorded durably in WAL. Checkpoint completion guarantees the on-disk files are sufficient for restart from the chosen REDO point.",
+  "design": "Budget write bandwidth for pages as well as sequential WAL, especially when a write-heavy workload dirties a broad working set.",
+  "match": [
+   "data files",
+   "data-file blocks",
+   "data-file LSN"
+  ],
+  "related": [
+   "heap-page",
+   "write-ahead-rule",
+   "checkpoint"
+  ]
+ },
+ {
+  "id": "pg-control",
+  "term": "pg_control",
+  "short": "The cluster control file that tells startup which checkpoint to use.",
+  "detail": "The control file stores the last completed checkpoint location and a copy of checkpoint metadata. Startup uses the checkpoint’s REDO pointer to find the start of the recovery scan.",
+  "design": "An in-progress checkpoint cannot shorten the next restart. Recovery depends on a usable checkpoint and the WAL it requires.",
+  "match": [
+   "pg_control",
+   "control file"
+  ],
+  "related": [
+   "checkpoint",
+   "redo-point",
+   "redo"
+  ]
+ },
+ {
+  "id": "redo",
+  "term": "WAL redo",
+  "short": "Reapplying logged changes in order after a crash or on a standby.",
+  "detail": "Redo restores applicable full-page images and checks page LSNs before replaying ordinary deltas. Crash recovery scans to the end of valid WAL.",
+  "design": "Measure recovery under realistic WAL backlog and I/O. A database that survives crashes may still miss its recovery-time target.",
+  "match": [
+   "WAL redo",
+   "startup redo",
+   "redo time",
+   "end of valid WAL",
+   "crash recovery"
+  ],
+  "related": [
+   "redo-point",
+   "page-lsn",
+   "pg-xact",
+   "full-page-image"
+  ]
+ },
+ {
+  "id": "pg-xact",
+  "term": "pg_xact (commit status)",
+  "short": "On-disk transaction status used to decide whether a transaction committed.",
+  "detail": "Formerly pg_clog, it stores commit and abort status. Redo can reconstruct committed status from WAL. An interrupted transaction can leave physical changes, but without durable commit status its changes stay invisible.",
+  "design": "Physical page state and transaction visibility are different layers. A flushed heap page is no evidence that its transaction committed.",
+  "match": [
+   "pg_xact",
+   "pg_clog",
+   "commit status",
+   "physical undo"
+  ],
+  "related": [
+   "commit-record",
+   "redo",
+   "heap-page"
+  ]
+ },
+ {
+  "id": "walsender",
+  "term": "walsender and streaming replication",
+  "short": "A primary-side process that streams WAL to a connected standby.",
+  "detail": "A physical walsender sends WAL from the standby’s requested position and tracks its feedback. On a primary it sends locally flushed WAL.",
+  "design": "Compare local flush with sent LSN before blaming replay. Sender backlog and replay backlog point to different bottlenecks.",
+  "match": [
+   "walsender",
+   "streaming replication",
+   "WAL stream",
+   "physical replication"
+  ],
+  "related": [
+   "walreceiver",
+   "transfer-lsn",
+   "flush-lsn",
+   "replication-slot"
+  ]
+ },
+ {
+  "id": "walreceiver",
+  "term": "walreceiver",
+  "short": "The standby process that receives streaming WAL and writes it locally.",
+  "detail": "It reports write and flush progress. The standby startup process applies WAL and reports replay progress separately.",
+  "design": "A standby can durably receive writes faster than it applies them. Use replay progress to reason about stale reads.",
+  "match": [
+   "walreceiver",
+   "standby feedback"
+  ],
+  "related": [
+   "walsender",
+   "transfer-lsn",
+   "flush-lsn",
+   "replay-lsn"
+  ]
+ },
+ {
+  "id": "replication-slot",
+  "term": "Replication slot",
+  "short": "A persistent retention record for a particular WAL consumer.",
+  "detail": "A slot holds the WAL its consumer might still need, even when disconnected. Physical slots serve standbys. Logical slots support decoding and can also retain catalog history.",
+  "design": "Own each slot’s lifecycle and alert on retained bytes. An abandoned slot can take the producer database down by consuming its WAL disk.",
+  "match": [
+   "replication slot",
+   "replication slots",
+   "physical slot",
+   "logical slot"
+  ],
+  "related": [
+   "restart-lsn",
+   "max-slot-wal-keep-size",
+   "pg-wal",
+   "logical-decoding"
+  ]
+ },
+ {
+  "id": "archive-command",
+  "term": "archive_command",
+  "short": "The command PostgreSQL runs to copy a completed WAL segment to archival storage.",
+  "detail": "When archiving is enabled, unarchived complete segments are retained until the copy reports success. The destination must preserve and verify each segment so the chain can be restored.",
+  "design": "Monitor success age and the unarchived backlog. A failing archive can exhaust pg_wal even when every replica is caught up.",
+  "match": [
+   "archive_command",
+   "WAL archiving",
+   "archiver progress",
+   "WAL archive"
+  ],
+  "related": [
+   "pg-wal",
+   "pitr",
+   "replication-slot"
+  ]
+ },
+ {
+  "id": "write-ahead-rule",
+  "term": "Write-ahead rule",
+  "short": "WAL for a page change must be durable before PostgreSQL writes that data page.",
+  "detail": "The buffer writer flushes WAL through the page LSN if needed. This ordering lets recovery reconstruct updates even when the data-file page lags WAL.",
+  "design": "Separating a small sequential durability write from later page writes keeps the synchronous commit path short while preserving recovery.",
+  "match": [
+   "write-ahead rule",
+   "WAL before data"
+  ],
+  "related": [
+   "wal-buffers",
+   "page-lsn",
+   "fsync",
+   "checkpoint"
+  ]
+ },
+ {
+  "id": "lsn",
+  "term": "LSN (log sequence number)",
+  "short": "A byte position in the WAL stream.",
+  "detail": "PostgreSQL displays a WAL position as two hexadecimal numbers separated by a slash. The difference between positions on the same timeline is the WAL bytes generated between them.",
+  "design": "Measure lag and retention in bytes as well as time. Even a short stall can consume a large amount of disk during a write spike.",
+  "match": [
+   "log sequence number",
+   "insert LSN",
+   "WAL LSN",
+   "LSN"
+  ],
+  "related": [
+   "page-lsn",
+   "flush-lsn",
+   "replay-lsn",
+   "restart-lsn"
+  ]
+ },
+ {
+  "id": "page-lsn",
+  "term": "Page LSN",
+  "short": "The WAL position associated with the most recent WAL-logged change reflected in a page.",
+  "detail": "The page header stores the LSN. For an ordinary delta, redo can skip work if the page already has an equal or higher LSN. Applicable full-page images can restore a damaged page without trusting its header.",
+  "design": "Page LSN checks make replay of ordinary deltas safe across pages that were flushed at different times.",
+  "match": [
+   "page LSN",
+   "page LSNs"
+  ],
+  "related": [
+   "lsn",
+   "redo",
+   "full-page-image",
+   "write-ahead-rule"
+  ]
+ },
+ {
+  "id": "fsync",
+  "term": "WAL fsync",
+  "short": "A storage synchronization operation that makes already-written WAL durable.",
+  "detail": "A regular write can finish while bytes remain in the OS cache. PostgreSQL’s wal_sync_method chooses the mechanism for making them persistent. The lab calls the simulated flush fsync.",
+  "design": "Commit tail latency reflects the durability cost of the storage stack. Measure it separately from ordinary write throughput.",
+  "match": [
+   "fsync",
+   "WAL flush",
+   "wal_sync_method"
+  ],
+  "related": [
+   "flush-lsn",
+   "group-commit",
+   "synchronous-commit"
+  ]
+ },
+ {
+  "id": "commit-record",
+  "term": "Commit record",
+  "short": "A WAL entry recording successful completion of a transaction.",
+  "detail": "The commit record can be later in WAL than the records for the pages the transaction changed. On restart, the durable commit record lets redo recover committed status.",
+  "design": "An observed heap change does not prove a durable transaction. Anchor guarantees and failure analysis to the commit record and client acknowledgement.",
+  "match": [
+   "commit record",
+   "commit records",
+   "commit LSN"
+  ],
+  "related": [
+   "synchronous-commit",
+   "asynchronous-commit",
+   "pg-xact"
+  ]
+ },
+ {
+  "id": "synchronous-commit",
+  "term": "synchronous_commit",
+  "short": "The transaction setting that decides how much WAL progress must occur before client OK.",
+  "detail": "local requires primary flush. With a configured synchronous standby, on also requires standby flush and remote_apply waits for replay. The off setting permits early acknowledgement.",
+  "design": "Choose guarantees per transaction where appropriate. Standby health becomes a write-latency dependency when its feedback is required.",
+  "match": [
+   "synchronous_commit",
+   "synchronous commit",
+   "synchronous COMMIT",
+   "remote_apply"
+  ],
+  "related": [
+   "asynchronous-commit",
+   "commit-record",
+   "synchronous-standby-names",
+   "flush-lsn",
+   "replay-lsn"
+  ]
+ },
+ {
+  "id": "asynchronous-commit",
+  "term": "Asynchronous commit",
+  "short": "Returning client OK before the primary has flushed the commit record.",
+  "detail": "With synchronous_commit off, a crash can lose some recent acknowledged transactions. The write-ahead rule still holds, and redo ignores transactions whose commit records did not survive.",
+  "design": "Reserve this durability trade-off for data that can be regenerated or lost within an explicit budget.",
+  "match": [
+   "asynchronous commit",
+   "asynchronous commits",
+   "async commit",
+   "async commits"
+  ],
+  "related": [
+   "synchronous-commit",
+   "walwriter",
+   "write-ahead-rule",
+   "pg-xact"
+  ]
+ },
+ {
+  "id": "group-commit",
+  "term": "Group commit and throughput",
+  "short": "One WAL flush makes more than one concurrent commit durable.",
+  "detail": "Several backends can wait for locations covered by the same flush. Commits/s is the average client OK rate through the last acknowledgement in the run, with a 100 ms minimum timing window in this lab.",
+  "design": "Fsync latency and commits/s can move independently. Moderate concurrency can amortize a flush while single-request latency remains bound by storage.",
+  "match": [
+   "group commit",
+   "commits/s",
+   "commit throughput",
+   "Peak group"
+  ],
+  "related": [
+   "fsync",
+   "synchronous-commit",
+   "backend"
+  ]
+ },
+ {
+  "id": "clock-sweep",
+  "term": "Clock sweep and usage count",
+  "short": "A buffer replacement algorithm that gives recently used frames a second chance.",
+  "detail": "The clock hand passes through frames. Unpinned frames with positive usage are aged by decrementing their count. An unpinned frame at zero can be reused after writing it if dirty.",
+  "design": "Foreground writes under churn can inflate tail latency. Compare the active working set with the buffer footprint and examine reuse and write counters.",
+  "match": [
+   "clock sweep",
+   "clock-sweep",
+   "clock hand",
+   "usage count",
+   "usage counts",
+   "dirty eviction victim"
+  ],
+  "related": [
+   "shared-buffers",
+   "heap-page",
+   "bgwriter",
+   "backend"
+  ]
+ },
+ {
+  "id": "redo-point",
+  "term": "REDO point",
+  "short": "The WAL position at which recovery starts scanning for a completed checkpoint.",
+  "detail": "An online checkpoint chooses this position when it starts. Its durable checkpoint record comes later, after writing and syncing the necessary data.",
+  "design": "A server can crash during a checkpoint and still need all WAL from the previous REDO point. Keep enough storage for that overlap.",
+  "match": [
+   "REDO point",
+   "redo pointer"
+  ],
+  "related": [
+   "checkpoint",
+   "pg-control",
+   "redo"
+  ]
+ },
+ {
+  "id": "full-page-image",
+  "term": "Full-page image (full_page_writes)",
+  "short": "A copy of a page in WAL that recovery can use to replace an incomplete disk write.",
+  "detail": "With full_page_writes enabled, the first WAL-logged change to an ordinary page after a new REDO point usually records an image. PostgreSQL can omit unused space or compress images.",
+  "design": "Leave torn-page protection enabled unless the storage stack guarantees atomic page writes. Watch image bytes when increasing checkpoint frequency.",
+  "match": [
+   "full-page image",
+   "full-page images",
+   "full_page_writes",
+   "FPI",
+   "torn page",
+   "torn-page protection"
+  ],
+  "related": [
+   "heap-page",
+   "page-lsn",
+   "redo-point",
+   "max-wal-size"
+  ]
+ },
+ {
+  "id": "checkpoint-timeout",
+  "term": "checkpoint_timeout",
+  "short": "The elapsed-time trigger for automatic WAL checkpoints.",
+  "detail": "Automatic checkpoints can also start earlier due to WAL volume. Production PostgreSQL uses seconds or minutes. The lab uses subsecond intervals to make the sequence easy to observe.",
+  "design": "Set the interval with recovery-time goals and steady-state I/O in mind. Shorter intervals can increase full-page image frequency.",
+  "match": [
+   "checkpoint_timeout",
+   "checkpoint timeout"
+  ],
+  "related": [
+   "checkpoint",
+   "max-wal-size",
+   "checkpoint-completion-target"
+  ]
+ },
+ {
+  "id": "max-wal-size",
+  "term": "max_wal_size and WAL volume",
+  "short": "A soft WAL-volume limit used to trigger automatic checkpoints.",
+  "detail": "PostgreSQL can exceed it while a checkpoint runs, during spikes, or when slots and archiving retain old files. The chart displays generated record sizes. The disk meter measures reserved segment bytes.",
+  "design": "Tune checkpoint pressure with max_wal_size, and alert separately on actual pg_wal disk usage and retention blockers.",
+  "match": [
+   "max_wal_size",
+   "WAL bytes",
+   "WAL volume",
+   "WAL generation"
+  ],
+  "related": [
+   "checkpoint-timeout",
+   "full-page-image",
+   "pg-wal",
+   "replication-slot"
+  ]
+ },
+ {
+  "id": "checkpoint-completion-target",
+  "term": "checkpoint_completion_target",
+  "short": "The fraction of the checkpoint interval used as a pacing target for automatic checkpoint writes.",
+  "detail": "A value near 0.9 spreads the writes across most of the expected interval. A smaller value concentrates work. Changes in WAL generation or I/O pressure can alter actual progress.",
+  "design": "A smoother write profile reduces spikes in foreground I/O contention. Track checkpoint write and sync time under realistic load.",
+  "match": [
+   "checkpoint_completion_target",
+   "completion target",
+   "checkpoint pacing"
+  ],
+  "related": [
+   "checkpoint",
+   "checkpoint-timeout",
+   "max-wal-size"
+  ]
+ },
+ {
+  "id": "transfer-lsn",
+  "term": "Sent LSN and write LSN",
+  "short": "The positions the primary has sent and the standby has written to its OS.",
+  "detail": "sent_lsn is reported by the sender. write_lsn is the position reported written by the standby. Locally, write LSN similarly refers to WAL delivered to the OS before a durable flush.",
+  "design": "Compare sent and write positions to isolate network and receive-side delays before looking at flush latency or replay.",
+  "match": [
+   "sent LSN",
+   "write LSN",
+   "sent_lsn",
+   "write_lsn"
+  ],
+  "related": [
+   "walsender",
+   "walreceiver",
+   "flush-lsn",
+   "replication-lag"
+  ]
+ },
+ {
+  "id": "flush-lsn",
+  "term": "Flush LSN",
+  "short": "The WAL endpoint made durable by a storage synchronization operation.",
+  "detail": "The primary and standby have separate flush positions. For a synchronous standby, synchronous_commit on waits for the standby’s reported flush.",
+  "design": "A received or written record may still be lost if the standby itself crashes. Use the flush position for remote durability guarantees.",
+  "match": [
+   "flush LSN",
+   "flush_lsn",
+   "flushed WAL"
+  ],
+  "related": [
+   "fsync",
+   "transfer-lsn",
+   "replay-lsn",
+   "synchronous-commit"
+  ]
+ },
+ {
+  "id": "replay-lsn",
+  "term": "Replay LSN",
+  "short": "The position up to which the standby has applied WAL to its database state.",
+  "detail": "Replay can lag behind receipt and durable flush. remote_apply requires the standby to replay the commit record before the primary acknowledges the commit.",
+  "design": "Monitor replay progress when serving reads on standby. Receipt and storage metrics alone cannot quantify stale reads.",
+  "match": [
+   "replay LSN",
+   "replay_lsn",
+   "replay progress"
+  ],
+  "related": [
+   "flush-lsn",
+   "replication-lag",
+   "synchronous-commit",
+   "redo"
+  ]
+ },
+ {
+  "id": "restart-lsn",
+  "term": "restart_lsn",
+  "short": "The oldest WAL position that the replication slot’s consumer may still need.",
+  "detail": "Physical standby feedback advances it with durable receive progress in this lab. A logical slot’s restart_lsn can lag its confirmed_flush_lsn because decoding needs earlier WAL.",
+  "design": "Use the byte distance from current WAL to restart_lsn to size retention exposure. An active consumer can still pin substantial history.",
+  "match": [
+   "restart_lsn",
+   "restart LSN",
+   "confirmed_flush_lsn"
+  ],
+  "related": [
+   "replication-slot",
+   "logical-decoding",
+   "max-slot-wal-keep-size",
+   "flush-lsn"
+  ]
+ },
+ {
+  "id": "replication-lag",
+  "term": "Replication lag",
+  "short": "How far a standby is behind the primary at a chosen stage of replication.",
+  "detail": "This lab reports the byte gap between primary flush and standby replay. Sent, write and flush positions help locate where the gap is accumulating.",
+  "design": "Use byte lag for backlog size and elapsed lag for user-facing staleness. Alert on the stage tied to the guarantee your application needs.",
+  "match": [
+   "replication lag",
+   "replay lag",
+   "standby lag"
+  ],
+  "related": [
+   "transfer-lsn",
+   "flush-lsn",
+   "replay-lsn"
+  ]
+ },
+ {
+  "id": "synchronous-standby-names",
+  "term": "synchronous_standby_names",
+  "short": "The setting that selects which connected standbys may be required for synchronous commit.",
+  "detail": "It can choose prioritized or quorum acknowledgement. The lab uses one named standby. If it is unavailable, commits requiring remote acknowledgement can wait.",
+  "design": "Make the availability and durability trade-off explicit. A synchronous topology needs enough reachable standbys to satisfy its acknowledgement rule.",
+  "match": [
+   "synchronous_standby_names",
+   "synchronous standby",
+   "synchronous standbys"
+  ],
+  "related": [
+   "synchronous-commit",
+   "flush-lsn",
+   "replay-lsn"
+  ]
+ },
+ {
+  "id": "max-slot-wal-keep-size",
+  "term": "max_slot_wal_keep_size",
+  "short": "A checkpoint-time limit on how much WAL a slot can retain.",
+  "detail": "The default of −1 permits unlimited slot retention. When the limit leaves required segments eligible for removal, an affected slot can become unusable. Other retention requirements can still keep files on disk.",
+  "design": "Set a budget with outage and recovery windows in mind. A cap trades automatic catch-up for primary disk headroom and must be paired with lag monitoring.",
+  "match": [
+   "max_slot_wal_keep_size",
+   "slot retention cap",
+   "slot budget"
+  ],
+  "related": [
+   "replication-slot",
+   "restart-lsn",
+   "pg-wal",
+   "checkpoint"
+  ]
+ },
+ {
+  "id": "pitr",
+  "term": "Point-in-time recovery (PITR)",
+  "short": "Restoring a base backup and replaying archived WAL up to a chosen point.",
+  "detail": "Recovery requires a continuous WAL chain from the backup to the target and the correct timeline. The base backup is the initial physical copy, and the archive fills in later changes.",
+  "design": "PITR can recover from logical mistakes that immediately replicate. Validate archive continuity and practice a timed restore.",
+  "match": [
+   "point-in-time recovery",
+   "PITR",
+   "base backup",
+   "archive chain"
+  ],
+  "related": [
+   "archive-command",
+   "pg-wal",
+   "redo"
+  ]
+ },
+ {
+  "id": "logical-decoding",
+  "term": "Logical decoding and CDC",
+  "short": "Turning WAL into a stream of logical changes that downstream applications can consume.",
+  "detail": "Logical decoding assembles committed changes from WAL, and CDC means change data capture. A logical slot retains WAL needed to restart decoding after a disconnect.",
+  "design": "Plan for consumer backpressure and replay. A stalled CDC pipeline can threaten the primary’s disk even when its physical standbys are healthy.",
+  "match": [
+   "logical decoding",
+   "CDC",
+   "change data capture",
+   "WAL consumer"
+  ],
+  "related": [
+   "replication-slot",
+   "restart-lsn",
+   "max-slot-wal-keep-size"
+  ]
+ }
+]

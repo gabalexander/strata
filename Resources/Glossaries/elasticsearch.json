@@ -1,0 +1,702 @@
+[
+ {
+  "id": "document",
+  "term": "Document",
+  "short": "A JSON record that Elasticsearch indexes and retrieves as one unit.",
+  "detail": "An index identifies each document by its _id. Updating a field creates a new Lucene document version under that logical ID.",
+  "design": "Model documents around read patterns. Denormalizing related data speeds some reads but makes the application responsible for refreshing duplicated values.",
+  "match": [
+   "JSON document",
+   "Lucene document version"
+  ],
+  "related": [
+   "mapping",
+   "tombstone",
+   "routing"
+  ]
+ },
+ {
+  "id": "mapping",
+  "term": "Index and mapping",
+  "short": "An index is a named collection of documents, and its mapping defines how Elasticsearch interprets its fields.",
+  "detail": "Mappings specify field types and options such as the analyzer. An index is partitioned into primary shards at creation.",
+  "design": "Version mappings and plan reindexing when changing field types. Keep an authoritative copy of the source data so a new index can be rebuilt.",
+  "match": [
+   "field mapping",
+   "index mapping",
+   "version mappings",
+   "reindexing"
+  ],
+  "related": [
+   "document",
+   "text",
+   "keyword",
+   "primary"
+  ]
+ },
+ {
+  "id": "text",
+  "term": "Text field",
+  "short": "A field analyzed into terms for full-text search.",
+  "detail": "The mapping chooses an analyzer, which usually produces multiple tokens from one string. A match query normally analyzes input with the field’s search analyzer.",
+  "design": "Choose text for relevance search. Give the same source string a keyword multi-field when queries also need exact equality or sorting.",
+  "match": [
+   "text field",
+   "full-text search"
+  ],
+  "related": [
+   "keyword",
+   "analyzer",
+   "match-query"
+  ]
+ },
+ {
+  "id": "keyword",
+  "term": "Keyword field",
+  "short": "A field that indexes an entire string as one term.",
+  "detail": "Without a configured normalizer, indexing and exact lookup preserve case and spaces. The keyword multi-field in this sim uses that default.",
+  "design": "Use keyword for identifiers, labels and exact filters. Sorting or grouping by an analyzed title would group individual tokens instead of the intended values.",
+  "match": [
+   "keyword field",
+   "keyword multi-field",
+   "exact keyword term"
+  ],
+  "related": [
+   "text",
+   "mapping",
+   "term-query",
+   "aggregation"
+  ]
+ },
+ {
+  "id": "analyzer",
+  "term": "Analyzer",
+  "short": "A pipeline that turns text into the tokens an index or query uses.",
+  "detail": "An analyzer contains one tokenizer, optional character filters, and zero or more token filters. Index and query can use different analyzers deliberately.",
+  "design": "Use the Analyze API on representative product names and queries. Accidental differences in normalization can make a healthy index appear to have missing data.",
+  "match": [
+   "analysis pipeline",
+   "search analyzer",
+   "Analyze API",
+   "analyzer output"
+  ],
+  "related": [
+   "tokenizer",
+   "token-filter",
+   "match-query"
+  ]
+ },
+ {
+  "id": "tokenizer",
+  "term": "Tokenizer",
+  "short": "The analysis step that splits one string into ordered tokens.",
+  "detail": "A tokenizer also tracks token positions and character offsets. Lucene’s standard tokenizer uses Unicode word boundaries. This demo splits into runs of letters and digits.",
+  "design": "Check boundary behavior on hyphenated SKUs, punctuation, and the languages you support. Boundaries affect both retrieval and highlighting.",
+  "match": [
+   "standard tokenizer",
+   "tokenizer",
+   "word boundaries"
+  ],
+  "related": [
+   "analyzer",
+   "token-filter",
+   "term"
+  ]
+ },
+ {
+  "id": "token-filter",
+  "term": "Token filter",
+  "short": "A step that transforms, removes, or inserts tokens after tokenization.",
+  "detail": "Lowercasing, stop word removal and stemming are three examples. The result of each step feeds the next step.",
+  "design": "Order filters intentionally. Lowercasing before stop word removal makes The and the behave consistently.",
+  "match": [
+   "token filters",
+   "token filter",
+   "lowercase filter"
+  ],
+  "related": [
+   "analyzer",
+   "stop-words",
+   "stemming"
+  ]
+ },
+ {
+  "id": "stemming",
+  "term": "Stemming",
+  "short": "Reducing related word forms to a common searchable stem.",
+  "detail": "A stemmer may turn running and runs into run. The simulator uses a small explicit table for the example vocabulary.",
+  "design": "Stemming improves recall for prose but can conflate product names and distinct terms. Protect identifiers with a keyword field or an analyzer exclusion.",
+  "match": [
+   "stemming",
+   "stemmer",
+   "stemmed tokens"
+  ],
+  "related": [
+   "analyzer",
+   "token-filter",
+   "keyword"
+  ]
+ },
+ {
+  "id": "stop-words",
+  "term": "Stop words",
+  "short": "Common tokens a configured filter removes from the token stream.",
+  "detail": "An English analyzer may remove words such as the and and. If a match query analyzes to zero tokens, its default behavior is to return no documents.",
+  "design": "Removing common tokens can reduce index noise, but particles and common words can carry meaning in names or phrases. Verify zero-token inputs in the application.",
+  "match": [
+   "stop words",
+   "stop word removal",
+   "zero-token"
+  ],
+  "related": [
+   "analyzer",
+   "token-filter",
+   "match-query"
+  ]
+ },
+ {
+  "id": "inverted-index",
+  "term": "Inverted index",
+  "short": "A lookup from each indexed term to the documents that contain it.",
+  "detail": "Each term has a postings list. Queries combine the lists to find candidate documents without scanning every title string.",
+  "design": "The index buys fast lookups by doing analysis and storing extra structures at write time. Adding analyzers or fields increases write and storage work.",
+  "match": [
+   "inverted index",
+   "inverted indexes"
+  ],
+  "related": [
+   "term",
+   "postings",
+   "segment"
+  ]
+ },
+ {
+  "id": "term",
+  "term": "Indexed term",
+  "short": "The exact value Elasticsearch looks up in a field’s inverted index.",
+  "detail": "A term may be a word, a stem, or an entire keyword. It is scoped to the field where it was indexed.",
+  "design": "Inspect indexed terms when debugging missing hits. The original string in _source may look nothing like the searchable representation.",
+  "match": [
+   "indexed term",
+   "indexed token",
+   "searchable terms"
+  ],
+  "related": [
+   "inverted-index",
+   "term-query",
+   "tokenizer"
+  ]
+ },
+ {
+  "id": "postings",
+  "term": "Postings list",
+  "short": "The list of documents containing a particular term.",
+  "detail": "For analyzed text, postings can store a document ID, term frequency, and token positions. Intersection requires membership in all lists, while union needs any.",
+  "design": "Query cost depends on the lengths and combinations of postings. Broad terms can expand candidate work even when the response returns only a few hits.",
+  "match": [
+   "postings lists",
+   "postings list",
+   "matching postings"
+  ],
+  "related": [
+   "inverted-index",
+   "term-frequency",
+   "bool-query"
+  ]
+ },
+ {
+  "id": "term-frequency",
+  "term": "Term frequency",
+  "short": "How many times a term occurs in a particular document field.",
+  "detail": "BM25 applies a saturating function to frequency. Increasing a term from once to twice usually matters more than increasing it from ten to eleven.",
+  "design": "Compare frequency with field length when a repetitive title outranks cleaner copy. Raw occurrence count alone is an incomplete relevance signal.",
+  "match": [
+   "term frequency",
+   "term frequencies"
+  ],
+  "related": [
+   "postings",
+   "idf",
+   "bm25",
+   "field-norm"
+  ]
+ },
+ {
+  "id": "idf",
+  "term": "Inverse document frequency (IDF)",
+  "short": "A scoring weight that gives rare terms more influence.",
+  "detail": "Lucene’s BM25 uses log(1 + (N − df + 0.5) / (df + 0.5)). N counts documents with the field, and df counts documents containing the term.",
+  "design": "An unchanged document can move in rank as the corpus changes. With shard-local statistics, small or skewed shards can also make scores less comparable.",
+  "match": [
+   "inverse document frequency",
+   "IDF",
+   "shard-local statistics"
+  ],
+  "related": [
+   "term-frequency",
+   "bm25",
+   "shard"
+  ]
+ },
+ {
+  "id": "bm25",
+  "term": "BM25",
+  "short": "The default relevance scoring method for analyzed Elasticsearch text fields.",
+  "detail": "It combines term rarity, saturating frequency, and field-length normalization. This demo sums Lucene-style unit-boost contributions with k1 = 1.2 and b = 0.75.",
+  "design": "Use score explanations and judged query examples when tuning relevance. A score is relative to the query, field, and search corpus.",
+  "match": [
+   "BM25",
+   "relevance scoring",
+   "score explanations"
+  ],
+  "related": [
+   "idf",
+   "term-frequency",
+   "field-norm"
+  ]
+ },
+ {
+  "id": "field-norm",
+  "term": "Field-length norm",
+  "short": "A scoring adjustment based on a field’s token count relative to its average.",
+  "detail": "For the same term frequency, a longer field increases the BM25 denominator. The demo uses exact token counts instead of Lucene’s compact stored norms.",
+  "design": "Compare titles with titles and descriptions with descriptions. Combining both into one field can make useful matches behave differently than you expect.",
+  "match": [
+   "field-length norm",
+   "field-length normalization"
+  ],
+  "related": [
+   "bm25",
+   "term-frequency"
+  ]
+ },
+ {
+  "id": "match-query",
+  "term": "Match query",
+  "short": "A query that analyzes input before looking up terms in an analyzed field.",
+  "detail": "With multiple terms, the default operator is OR. Set operator to AND to require every analyzed term. Adjacent words need a phrase query when exact order matters.",
+  "design": "Start with match for user-entered search text. Test recall before tightening the operator, especially when users type adjectives or alternate spellings.",
+  "match": [
+   "match query",
+   "match queries",
+   "operator to AND"
+  ],
+  "related": [
+   "text",
+   "term-query",
+   "bool-query"
+  ]
+ },
+ {
+  "id": "term-query",
+  "term": "Term query",
+  "short": "A query that looks up one value without the text analysis pipeline.",
+  "detail": "Running shoes is one literal lookup, while analyzed text usually indexes separate terms. Looking up the actual indexed term run can match a text field.",
+  "design": "Use term queries for exact IDs and keyword values. A term query sent to the wrong mapping can return zero hits with a successful response.",
+  "match": [
+   "term query",
+   "term queries",
+   "exact term lookup"
+  ],
+  "related": [
+   "term",
+   "match-query",
+   "keyword"
+  ]
+ },
+ {
+  "id": "bool-query",
+  "term": "Bool query and term matching",
+  "short": "Combines query clauses using required, optional, excluded, or filter semantics.",
+  "detail": "In this demo, AND requires every analyzed term and intersects postings. OR allows any term and unions postings.",
+  "design": "Use boolean structure to separate hard filters, such as tenant authorization, from score-producing optional clauses that improve ranking.",
+  "match": [
+   "bool query",
+   "boolean clauses",
+   "intersection of postings",
+   "union of postings"
+  ],
+  "related": [
+   "postings",
+   "match-query",
+   "bm25"
+  ]
+ },
+ {
+  "id": "buffer",
+  "term": "Indexing buffer",
+  "short": "Memory holding writes that Lucene has yet to publish to search.",
+  "detail": "A refresh can write buffered data into a new segment and open it for search. The translog separately records operations for crash recovery.",
+  "design": "Size concurrent indexing to avoid excessive memory pressure. More frequent refreshes can reduce the amount of data amortized across each segment.",
+  "match": [
+   "indexing buffer",
+   "buffered writes",
+   "buffered operations"
+  ],
+  "related": [
+   "refresh",
+   "translog",
+   "segment"
+  ]
+ },
+ {
+  "id": "segment",
+  "term": "Lucene segment",
+  "short": "An immutable piece of a shard’s index.",
+  "detail": "A segment stores its own term dictionary and postings. Deletions are tracked outside the immutable indexed content, and merges rewrite that content into new segments.",
+  "design": "Many small segments raise search and merge overhead. Batch ingestion and choose refresh settings that match your freshness target.",
+  "match": [
+   "Lucene segment",
+   "immutable segment",
+   "searchable segments",
+   "small segments"
+  ],
+  "related": [
+   "inverted-index",
+   "refresh",
+   "merge",
+   "tombstone"
+  ]
+ },
+ {
+  "id": "refresh",
+  "term": "Refresh",
+  "short": "Publishes recent operations to a new search view.",
+  "detail": "Lucene can open newly written segments and apply delete markers without a durable Lucene commit. A refresh with only deletes can change visibility without adding indexed documents.",
+  "design": "Use refresh=wait_for when search must see a just-written change. Forcing refresh on individual writes can generate many tiny segments.",
+  "match": [
+   "refresh=wait_for",
+   "manual refresh",
+   "automatic refresh",
+   "after refresh"
+  ],
+  "related": [
+   "segment",
+   "refresh-interval",
+   "near-real-time",
+   "flush"
+  ]
+ },
+ {
+  "id": "refresh-interval",
+  "term": "Refresh interval",
+  "short": "The configured cadence for automatic search visibility.",
+  "detail": "Elastic Stack normally refreshes a searched index about once per second. Default search-idle behavior and Serverless settings can differ. Setting refresh_interval to -1 disables periodic refresh.",
+  "design": "Treat search freshness as a budget. A longer interval batches indexing work while letting readers observe older data for longer.",
+  "match": [
+   "refresh interval",
+   "refresh_interval",
+   "refresh cadence"
+  ],
+  "related": [
+   "refresh",
+   "near-real-time",
+   "merge"
+  ]
+ },
+ {
+  "id": "near-real-time",
+  "term": "Near real-time search",
+  "short": "Search observes write changes after a short refresh delay.",
+  "detail": "An acknowledged index request does not itself refresh the search reader. A real-time GET by ID is a separate read path.",
+  "design": "Define what the user should see immediately after a write. Showing their saved record from the write response can avoid forcing a refresh for every search.",
+  "match": [
+   "near real-time",
+   "search visibility",
+   "search reader",
+   "real-time GET"
+  ],
+  "related": [
+   "refresh",
+   "refresh-interval",
+   "translog"
+  ]
+ },
+ {
+  "id": "translog",
+  "term": "Transaction log (translog)",
+  "short": "The operation log Lucene shard recovery can replay after its last durable commit.",
+  "detail": "Index, update, and delete operations enter a translog. Request durability syncs it before acknowledgement. Async durability syncs it on a timer and can lose unsynced writes.",
+  "design": "Budget for replay time as well as write throughput. With async durability, decide how the source system will detect and repair acknowledged writes lost in a crash.",
+  "match": [
+   "translog",
+   "request durability",
+   "async durability",
+   "durable translog"
+  ],
+  "related": [
+   "fsync",
+   "flush",
+   "near-real-time"
+  ]
+ },
+ {
+  "id": "fsync",
+  "term": "Fsync",
+  "short": "A request to persist pending file changes to durable storage.",
+  "detail": "Request durability coordinates a translog fsync on the primary and allocated replicas before success. With async durability the regular default sync interval is five seconds.",
+  "design": "Batching can amortize disk barriers, but asynchronous acknowledgement gives up some durability. Measure the write latency cost against the loss window the product can tolerate.",
+  "match": [
+   "fsync",
+   "synced translog",
+   "disk barriers"
+  ],
+  "related": [
+   "translog",
+   "flush",
+   "replica"
+  ]
+ },
+ {
+  "id": "flush",
+  "term": "Flush and Lucene commit",
+  "short": "Commits Lucene index state to durable storage and rolls the translog generation.",
+  "detail": "After the commit, operations it contains no longer need replay from the old translog. Elasticsearch normally flushes automatically as needed.",
+  "design": "Flush controls the recovery checkpoint and replay size. Use refresh controls when the requirement is immediate search visibility.",
+  "match": [
+   "flush commit",
+   "Lucene commit",
+   "translog generation",
+   "flush"
+  ],
+  "related": [
+   "translog",
+   "fsync",
+   "refresh"
+  ]
+ },
+ {
+  "id": "merge",
+  "term": "Segment merge",
+  "short": "Rewrites older segments into fewer segments and can reclaim eligible deleted versions.",
+  "detail": "Search keeps using its existing view while a merge builds output. Merge policy decides which segments to combine and which retained records must survive.",
+  "design": "Budget I/O and temporary disk headroom for merges. Forcing large merges on a live write-heavy index can make throughput and latency worse.",
+  "match": [
+   "segment merge",
+   "background merge",
+   "merge pressure",
+   "merge policy"
+  ],
+  "related": [
+   "segment",
+   "tombstone",
+   "refresh-interval"
+  ]
+ },
+ {
+  "id": "tombstone",
+  "term": "Tombstone",
+  "short": "A marker that hides a deleted or superseded document version.",
+  "detail": "An update indexes a replacement and marks the earlier version deleted. Search stops returning the old version after refresh. Eligible dead data can be reclaimed at merge.",
+  "design": "Expect churn-heavy workloads to consume more disk than the live document size suggests. Retention leases can keep operation history for replica recovery.",
+  "match": [
+   "tombstones",
+   "tombstone",
+   "superseded version",
+   "retention leases"
+  ],
+  "related": [
+   "segment",
+   "merge",
+   "replica"
+  ]
+ },
+ {
+  "id": "shard",
+  "term": "Shard",
+  "short": "A partition of an Elasticsearch index, backed by a Lucene index.",
+  "detail": "Each shard has one primary and can have replica copies. Full-index search runs against one active copy of each requested shard.",
+  "design": "Shard count governs placement, recovery units, and full-query fan-out. Size shards from measured data volume, indexing, and search load.",
+  "match": [
+   "shard copies",
+   "shard allocation",
+   "shard fan-out",
+   "shard targets"
+  ],
+  "related": [
+   "primary",
+   "replica",
+   "routing",
+   "oversharding"
+  ]
+ },
+ {
+  "id": "primary",
+  "term": "Primary shard",
+  "short": "The authoritative copy of a shard that accepts and sequences writes.",
+  "detail": "An index’s primary count is fixed for its current layout. A new index, reindex, split, or shrink can produce a different layout. An in-sync replica can take over as primary.",
+  "design": "Estimate how data and write traffic distribute across primaries before creation. Adding replicas increases copies and read capacity, while write routing still follows the primaries.",
+  "match": [
+   "primary shards",
+   "primary shard",
+   "active primary"
+  ],
+  "related": [
+   "replica",
+   "routing",
+   "cluster-health",
+   "oversharding"
+  ]
+ },
+ {
+  "id": "replica",
+  "term": "Replica shard",
+  "short": "A copy of one primary shard on a different node.",
+  "detail": "Replicas handle reads and an in-sync replica can be promoted after primary failure. Recovery creates a new ready replica by copying missing shard data.",
+  "design": "Place replicas across failure domains where possible. Their storage and write replication costs buy higher availability and additional search capacity.",
+  "match": [
+   "replica shard",
+   "replica count",
+   "in-sync replica",
+   "replica recovery"
+  ],
+  "related": [
+   "primary",
+   "cluster-health",
+   "query-fetch"
+  ]
+ },
+ {
+  "id": "routing",
+  "term": "Document routing and hot shards",
+  "short": "A hash of the routing key decides which primary receives a document.",
+  "detail": "Document ID is the usual key. A shared tenant key sends the tenant’s writes to one shard in the ordinary unpartitioned layout. Older index versions can use a routing-shard factor.",
+  "design": "Tenant routing can reduce targeted search fan-out at the cost of hotspot risk. Check tenant skew and carry the same key through reads, updates, and deletes.",
+  "match": [
+   "custom routing",
+   "hot shard",
+   "tenant routing",
+   "write routing",
+   "_routing"
+  ],
+  "related": [
+   "primary",
+   "shard",
+   "oversharding"
+  ]
+ },
+ {
+  "id": "coordinator",
+  "term": "Coordinating node",
+  "short": "The node that receives a search request and combines the shard responses.",
+  "detail": "It dispatches query work to one copy per requested shard, merges the returned candidates, and fetches the winning documents.",
+  "design": "Count the coordinator’s heap and network budget separately from shard work. Large result windows and wide fan-out can overload a coordinator while data nodes look healthy.",
+  "match": [
+   "coordinating node",
+   "search coordinator"
+  ],
+  "related": [
+   "query-fetch",
+   "deep-pagination",
+   "shard"
+  ]
+ },
+ {
+  "id": "query-fetch",
+  "term": "Query then fetch",
+  "short": "Search first collects ranked candidates, then retrieves the winning documents.",
+  "detail": "Shard copies send IDs with scores or sort values in the query phase. The coordinator chooses the global page and requests its document bodies during the fetch phase.",
+  "design": "Returning five documents can still require a large distributed top-K. Inspect query and fetch costs separately when debugging latency.",
+  "match": [
+   "query then fetch",
+   "query phase",
+   "fetch phase",
+   "distributed top-K"
+  ],
+  "related": [
+   "coordinator",
+   "deep-pagination",
+   "search-after"
+  ]
+ },
+ {
+  "id": "deep-pagination",
+  "term": "Deep pagination",
+  "short": "Fetching late pages by specifying a large offset.",
+  "detail": "Each shard can collect up to from + size candidates, since it cannot know how many earlier hits other shards contain. The coordinator merges and discards the prefix.",
+  "design": "Cap arbitrary offsets in public APIs. Use a cursor for browsing and avoid turning a small response into large cross-shard sort and heap work.",
+  "match": [
+   "deep pagination",
+   "offset pagination",
+   "from + size",
+   "result window"
+  ],
+  "related": [
+   "search-after",
+   "query-fetch",
+   "coordinator"
+  ]
+ },
+ {
+  "id": "search-after",
+  "term": "Search after",
+  "short": "A cursor based on the last result’s sort values.",
+  "detail": "On the next request, shards collect competitive hits after the supplied sort values. A stable tie-breaker keeps ordering unambiguous. A point in time keeps the view consistent across refreshes.",
+  "design": "Use it for sequential browsing past the result window. Cursor pagination limits candidate state, while the query may still need to evaluate many matching documents.",
+  "match": [
+   "search_after",
+   "Search after",
+   "point in time",
+   "stable tie-breaker"
+  ],
+  "related": [
+   "deep-pagination",
+   "query-fetch",
+   "refresh"
+  ]
+ },
+ {
+  "id": "cluster-health",
+  "term": "Cluster health",
+  "short": "A summary of whether configured primary and replica copies are assigned.",
+  "detail": "Green means all copies are assigned. Yellow means all primaries are assigned but replicas are missing. Red means at least one primary is missing.",
+  "design": "Alert on yellow for lost redundancy. At red, inspect per-shard failures and decide whether clients can use partial results for the request they made.",
+  "match": [
+   "cluster health",
+   "partial results",
+   "missing replicas",
+   "missing primary"
+  ],
+  "related": [
+   "primary",
+   "replica",
+   "shard"
+  ]
+ },
+ {
+  "id": "oversharding",
+  "term": "Shard sizing",
+  "short": "Choosing a shard count that balances fan-out with placement and recovery.",
+  "detail": "Oversharding leaves many small shards whose fixed costs can dominate. Too few shards can create large recovery units, limited placement, or hot primaries.",
+  "design": "Test shard sizing at actual query and ingestion rates. Include node failure and the time required to rebuild replicas when comparing layouts.",
+  "match": [
+   "oversharding",
+   "undersharding",
+   "shard sizing",
+   "shard overhead"
+  ],
+  "related": [
+   "shard",
+   "routing",
+   "merge"
+  ]
+ },
+ {
+  "id": "aggregation",
+  "term": "Terms aggregation and shard_size",
+  "short": "A distributed count of common values, built by combining each shard’s leading buckets.",
+  "detail": "shard_size controls how many candidate buckets a shard sends. For the default descending count order, reported doc_count_error_upper_bound bounds possible missing counts.",
+  "design": "Raising shard_size can improve top-bucket accuracy at a network and heap cost. Consider composite aggregation for deterministic enumeration of all buckets.",
+  "match": [
+   "terms aggregation",
+   "terms aggregations",
+   "shard_size",
+   "doc_count_error_upper_bound"
+  ],
+  "related": [
+   "keyword",
+   "shard",
+   "coordinator"
+  ]
+ }
+]

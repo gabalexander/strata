@@ -1,0 +1,593 @@
+[
+ {
+  "id": "consensus",
+  "term": "Consensus",
+  "short": "Getting several machines to agree on one value, or one sequence of values, even when some of them crash or the network splits.",
+  "detail": "Raft, Paxos and Zab solve it for a log: every server ends up with the same entries in the same order. Agreement needs a majority to answer, so a consensus group of n machines survives ⌊(n−1)/2⌋ failures.",
+  "design": "Use consensus for the small amount of state that must never disagree: who the leader is, configuration, locks, metadata. Don't push bulk data through it; every write costs a majority round trip.",
+  "match": [
+   "consensus"
+  ],
+  "related": [
+   "replicated-state-machine",
+   "quorum",
+   "raft-in-practice"
+  ]
+ },
+ {
+  "id": "replicated-state-machine",
+  "term": "Replicated state machine",
+  "short": "Every server applies the same commands in the same order to the same starting state, so they all end in the same state.",
+  "detail": "The commands live in the replicated log; the state machine here is a tiny key-value map. Consensus only has to agree on the log; determinism does the rest.",
+  "design": "Commands must be deterministic: no reading the clock, random numbers or local files inside apply. Put such values in the command itself before it is logged.",
+  "match": [
+   "replicated state machine",
+   "state machine",
+   "state machines"
+  ],
+  "related": [
+   "log",
+   "last-applied",
+   "consensus"
+  ]
+ },
+ {
+  "id": "term",
+  "term": "Term (currentTerm)",
+  "short": "A numbered period of time with at most one leader. Every message carries the sender's term.",
+  "detail": "A node that sees a higher term adopts it immediately and becomes a follower; a message with a lower term is rejected. Terms act as a logical clock that exposes stale leaders. `currentTerm` is persisted to disk.",
+  "design": "When you debug a Raft cluster, terms going up fast mean elections are churning: timeouts too tight for your network, an overloaded node, or a flapping link.",
+  "match": [
+   "term",
+   "terms",
+   "currentTerm"
+  ],
+  "related": [
+   "leader",
+   "voted-for",
+   "split-brain"
+  ]
+ },
+ {
+  "id": "leader",
+  "term": "Leader",
+  "short": "The one node that accepts client writes, appends them to its log and replicates them to the others.",
+  "detail": "Data only flows from leader to followers. A leader never overwrites or deletes its own entries; it sends heartbeats so followers know it is alive.",
+  "design": "A single leader makes reasoning simple but caps write throughput at one machine. Systems scale out by running many Raft groups (one per shard), like CockroachDB and TiKV do.",
+  "match": [
+   "leader",
+   "leaders"
+  ],
+  "related": [
+   "follower",
+   "candidate",
+   "heartbeat",
+   "term"
+  ]
+ },
+ {
+  "id": "follower",
+  "term": "Follower",
+  "short": "A passive node: it answers the leader's AppendEntries and candidates' vote requests, and redirects clients to the leader.",
+  "detail": "Every node starts as a follower. If it hears nothing from a leader for an election timeout, it becomes a candidate.",
+  "match": [
+   "follower",
+   "followers"
+  ],
+  "related": [
+   "leader",
+   "candidate",
+   "election-timeout"
+  ]
+ },
+ {
+  "id": "candidate",
+  "term": "Candidate",
+  "short": "A node trying to become leader: it bumped its term, voted for itself and asked everyone else for votes.",
+  "detail": "It wins with votes from a majority, steps back to follower if it hears from a leader with a term at least as high, or starts over in a new term if its election timer runs out first (a split vote).",
+  "match": [
+   "candidate",
+   "candidates",
+   "candidacy"
+  ],
+  "related": [
+   "request-vote",
+   "split-vote",
+   "up-to-date"
+  ]
+ },
+ {
+  "id": "election-timeout",
+  "term": "Election timeout",
+  "short": "How long a follower waits without hearing from a leader before it starts an election. The ring around each node drains as it runs.",
+  "detail": "The paper suggests 150–300 ms. It resets when a heartbeat from the current leader arrives or when the node grants a vote. Here time is slowed 20× so you can watch it.",
+  "design": "Rule of thumb: network round trip ≪ election timeout ≪ time between failures. Too short and a GC pause or a slow disk triggers needless elections; too long and failover takes ages. etcd defaults to 100 ms heartbeats and a 1 s election timeout.",
+  "match": [
+   "election timeout",
+   "election timeouts",
+   "election timer",
+   "election timers"
+  ],
+  "related": [
+   "randomized-timeout",
+   "heartbeat",
+   "follower"
+  ]
+ },
+ {
+  "id": "randomized-timeout",
+  "term": "Randomized timeouts",
+  "short": "Each node picks its election timeout at random from a range, so usually one node wakes up well before the others and wins alone.",
+  "detail": "With identical timeouts, followers that lose their leader at the same moment all become candidates together, vote for themselves and split the vote, again and again.",
+  "design": "Raft's answer to livelock is jitter, the same trick as randomized exponential backoff for retries. Whenever many actors react to the same event, desynchronize them.",
+  "match": [
+   "randomized timeouts",
+   "random timeout",
+   "randomized",
+   "randomizes",
+   "randomization"
+  ],
+  "related": [
+   "election-timeout",
+   "split-vote"
+  ]
+ },
+ {
+  "id": "heartbeat",
+  "term": "Heartbeat",
+  "short": "An AppendEntries with no entries, sent by the leader every heartbeat interval so followers know it is still alive.",
+  "detail": "Heartbeats also carry the leader's commit index, which is how followers learn what to apply. A heartbeat goes through the same consistency check as any AppendEntries.",
+  "design": "Heartbeat interval sets how fast followers learn commits and how much idle traffic a cluster makes. With thousands of Raft groups per node, systems coalesce heartbeats per node pair.",
+  "match": [
+   "heartbeat",
+   "heartbeats"
+  ],
+  "related": [
+   "append-entries",
+   "election-timeout",
+   "commit-index"
+  ]
+ },
+ {
+  "id": "request-vote",
+  "term": "RequestVote",
+  "short": "The message a candidate sends to ask for a vote. It carries the candidate's term and the index and term of its last log entry.",
+  "detail": "A node grants at most one vote per term, first come first served, and only to a candidate whose log is at least as up to date as its own. Granting a vote resets its election timer.",
+  "match": [
+   "RequestVote",
+   "vote request",
+   "vote requests"
+  ],
+  "related": [
+   "candidate",
+   "voted-for",
+   "up-to-date"
+  ]
+ },
+ {
+  "id": "append-entries",
+  "term": "AppendEntries",
+  "short": "The leader's replication message: new entries, the index and term of the entry just before them, and the leader's commit index.",
+  "detail": "The follower accepts only if its log has an entry at `prevLogIndex` with term `prevLogTerm`; otherwise it rejects and the leader backs off. Accepted entries overwrite anything that conflicts.",
+  "design": "One RPC does replication, heartbeats and commit propagation. Real systems pipeline several AppendEntries per follower and batch entries to amortize the fsync.",
+  "match": [
+   "AppendEntries"
+  ],
+  "related": [
+   "prev-log",
+   "heartbeat",
+   "next-index",
+   "log-matching"
+  ]
+ },
+ {
+  "id": "quorum",
+  "term": "Majority (quorum)",
+  "short": "More than half of the nodes: 2 of 3, 3 of 4, 3 of 5. Electing a leader and committing an entry both need one.",
+  "detail": "Any two majorities of the same cluster share at least one node. That overlap is what carries a committed entry or a granted vote from one decision to the next.",
+  "design": "A commit waits for the fastest majority, not for everyone, so one slow or distant replica does not slow writes, but the median replica's latency does.",
+  "match": [
+   "majority",
+   "quorum",
+   "quorums"
+  ],
+  "related": [
+   "fault-tolerance",
+   "commit-index",
+   "membership-change"
+  ]
+ },
+ {
+  "id": "voted-for",
+  "term": "votedFor",
+  "short": "Who this node voted for in its current term, if anyone. Persisted to disk before the vote is sent.",
+  "detail": "It resets when the node moves to a new term. Persisting it means a node that crashes and restarts cannot vote twice in the same term.",
+  "design": "Raft's durable state is tiny: `currentTerm`, `votedFor` and the log. Losing it (a wiped disk rejoining under the same identity) can break safety, which is why replacing a node means a membership change.",
+  "match": [
+   "votedFor",
+   "one vote per term"
+  ],
+  "related": [
+   "term",
+   "request-vote"
+  ]
+ },
+ {
+  "id": "log",
+  "term": "Log entry",
+  "short": "One command in the replicated log, tagged with the term of the leader that created it. Cells show the term on top and the command below.",
+  "detail": "Entries are identified by index (their position) and term. A dashed outline means the node does not yet know the entry is committed.",
+  "design": "The log is the source of truth; the state machine is a cache of it. Without snapshots the log grows forever, so real systems snapshot the state and truncate the prefix.",
+  "match": [
+   "log entry",
+   "log entries",
+   "replicated log"
+  ],
+  "related": [
+   "commit-index",
+   "log-matching",
+   "replicated-state-machine"
+  ]
+ },
+ {
+  "id": "commit-index",
+  "term": "Commit index",
+  "short": "The highest log index known to be committed: stored on a majority by the leader of its term, so it can never be lost.",
+  "detail": "The leader advances it when a majority has an entry from its current term, and sends it to followers in AppendEntries. An older-term entry is never committed by counting replicas alone (Figure 8 in the paper); it commits when a newer entry after it does.",
+  "design": "Only acknowledge a client after commit. Acknowledging after the leader's local write (like Kafka's acks=1) is faster but loses acknowledged writes when the leader dies.",
+  "match": [
+   "commitIndex",
+   "commit index",
+   "committed",
+   "commits"
+  ],
+  "related": [
+   "last-applied",
+   "quorum",
+   "safety"
+  ]
+ },
+ {
+  "id": "last-applied",
+  "term": "lastApplied",
+  "short": "The highest log index this node has applied to its state machine. It trails the commit index briefly.",
+  "detail": "Applying is local and in order. After a restart it starts at 0 and the node replays its log once it learns the commit index from a leader.",
+  "design": "Reads must wait for the state machine to catch up to the read point, otherwise even the leader can return old data right after a commit.",
+  "match": [
+   "lastApplied",
+   "applied",
+   "applies",
+   "apply"
+  ],
+  "related": [
+   "commit-index",
+   "replicated-state-machine"
+  ]
+ },
+ {
+  "id": "log-matching",
+  "term": "Log Matching property",
+  "short": "If two logs have an entry with the same index and term, the logs are identical up to and including that entry.",
+  "detail": "It holds because a leader creates at most one entry per index in its term, and every AppendEntries checks the entry right before the new ones. So one successful check proves the whole prefix matches.",
+  "design": "This is why repair is cheap: the leader only has to find the last point of agreement, then overwrite everything after it.",
+  "match": [
+   "Log Matching",
+   "log matching"
+  ],
+  "related": [
+   "prev-log",
+   "append-entries",
+   "next-index"
+  ]
+ },
+ {
+  "id": "prev-log",
+  "term": "prevLogIndex / prevLogTerm",
+  "short": "The index and term of the entry just before the new ones in an AppendEntries. The follower must have exactly that entry to accept.",
+  "detail": "This is the consistency check. A missing entry (the follower is behind) or a different term at that index (the follower has stale entries) makes it reject.",
+  "match": [
+   "prevLogIndex",
+   "prevLogTerm",
+   "consistency check"
+  ],
+  "related": [
+   "append-entries",
+   "log-matching",
+   "next-index"
+  ]
+ },
+ {
+  "id": "next-index",
+  "term": "nextIndex and matchIndex",
+  "short": "The leader's view of each follower: nextIndex is the next entry to send it (▲ in the table), matchIndex the highest entry known to be stored there (green line).",
+  "detail": "A new leader sets nextIndex to its own log end and backs off one entry at a time on each rejection until the logs match. With fast backup on, the follower returns the conflicting term and its first index, so the leader skips a whole term per round trip.",
+  "design": "Basic backoff is one round trip per missing entry. Production systems (etcd, the dissertation) use conflict hints so a far-behind follower catches up in a few round trips, or send a snapshot instead.",
+  "match": [
+   "nextIndex",
+   "matchIndex",
+   "fast backup"
+  ],
+  "related": [
+   "prev-log",
+   "commit-index",
+   "log-matching"
+  ]
+ },
+ {
+  "id": "up-to-date",
+  "term": "Up-to-date check (election restriction)",
+  "short": "A node only votes for a candidate whose log is at least as up to date as its own: a higher last term, or the same last term and at least as long.",
+  "detail": "Every committed entry is on a majority, and a winner needs votes from a majority, so at least one voter has every committed entry and will refuse a candidate that lacks one. Hence a new leader always has every committed entry (Leader Completeness).",
+  "design": "Raft never copies entries to a new leader; it just refuses to elect a leader that is missing any. That keeps data flowing one way only, which is much of why Raft is easier than Paxos.",
+  "match": [
+   "up to date",
+   "up-to-date",
+   "election restriction"
+  ],
+  "related": [
+   "request-vote",
+   "safety",
+   "candidate"
+  ]
+ },
+ {
+  "id": "split-vote",
+  "term": "Split vote",
+  "short": "An election where votes divide between candidates and nobody reaches a majority. Everyone waits for another timeout and tries again with a higher term.",
+  "detail": "It happens when two or more timers expire within about one network delay of each other. Randomized timeouts make that rare.",
+  "design": "Each split vote costs a whole election timeout of unavailability. Even cluster sizes make ties easier; frequent split votes mean the timeout range is too narrow for your latency.",
+  "match": [
+   "split vote",
+   "split votes"
+  ],
+  "related": [
+   "randomized-timeout",
+   "candidate",
+   "quorum"
+  ]
+ },
+ {
+  "id": "split-brain",
+  "term": "Split brain",
+  "short": "Two nodes both acting as leader and both accepting writes that the other never sees.",
+  "detail": "Raft allows two nodes to believe they lead at the same time, but only in different terms, and only the one with a majority can commit. The stale one learns of the higher term the moment it can talk to anyone.",
+  "design": "Majorities prevent split-brain commits, not split-brain beliefs. Anything a deposed leader does without a quorum check (local reads, side effects, expiring locks) can still be wrong; fence with the term number.",
+  "match": [
+   "split brain",
+   "split-brain",
+   "two leaders"
+  ],
+  "related": [
+   "partition",
+   "term",
+   "stale-read",
+   "check-quorum"
+  ]
+ },
+ {
+  "id": "partition",
+  "term": "Network partition",
+  "short": "The network splits into groups that cannot reach each other, though every node is still running.",
+  "detail": "Here, messages across the gap are dropped. Clients `c1` and `c2` sit on the left and right side. The side with a majority keeps working; the minority side can elect nobody and commit nothing.",
+  "design": "CAP in practice: during a partition Raft picks consistency, so the minority side is unavailable for writes and for linearizable reads. Place nodes across failure domains so a single cut leaves a majority somewhere.",
+  "match": [
+   "partition",
+   "partitions",
+   "network partition",
+   "network split",
+   "split the network"
+  ],
+  "related": [
+   "split-brain",
+   "quorum",
+   "stale-read"
+  ]
+ },
+ {
+  "id": "stale-read",
+  "term": "Stale read",
+  "short": "A read that returns a value older than one the cluster had already committed when the read started.",
+  "detail": "It happens when a node answers from its own copy without proving it is current: a lagging follower, or a deposed leader cut off on the minority side. The `local` read mode does exactly that.",
+  "design": "Follower or local reads (etcd serializable reads, Consul stale mode) are cheap and scale, and fine for caches and dashboards. Never use them for read-modify-write or anything that checks a condition before acting.",
+  "match": [
+   "stale read",
+   "stale reads",
+   "stale data"
+  ],
+  "related": [
+   "linearizability",
+   "read-index",
+   "lease-read",
+   "split-brain"
+  ]
+ },
+ {
+  "id": "linearizability",
+  "term": "Linearizability",
+  "short": "The system behaves as if there were one copy of the data: once a write is acknowledged, every later read sees it or something newer.",
+  "detail": "Committing writes through Raft is not enough; reads must also be ordered after the latest commit. ReadIndex, leases and reading through the log are three ways to do that.",
+  "design": "Linearizable reads cost a quorum round trip (ReadIndex) or a clock assumption (leases). Decide per read path which guarantee you need instead of paying everywhere.",
+  "match": [
+   "linearizable",
+   "linearizability",
+   "read modes",
+   "read mode"
+  ],
+  "related": [
+   "stale-read",
+   "read-index",
+   "lease-read",
+   "request-id"
+  ]
+ },
+ {
+  "id": "read-index",
+  "term": "ReadIndex",
+  "short": "A linearizable read without a log write: the leader notes its commit index, confirms it is still leader with one heartbeat round, waits until it has applied that far, then answers.",
+  "detail": "The heartbeat round proves no newer leader existed at the moment the read started. A new leader first commits its no-op, since until then it does not know the real commit index.",
+  "design": "The default for linearizable reads in etcd. One extra round trip, no disk write; followers can serve it too by asking the leader for the index.",
+  "match": [
+   "ReadIndex",
+   "readIndex",
+   "read index"
+  ],
+  "related": [
+   "linearizability",
+   "lease-read",
+   "no-op"
+  ]
+ },
+ {
+  "id": "lease-read",
+  "term": "Lease read",
+  "short": "The leader answers reads locally while its lease holds: for a little under an election timeout after a majority last acknowledged its heartbeat.",
+  "detail": "Followers that just heard from the leader will not time out before the lease ends, so no other leader can exist yet. That reasoning depends on clocks running at roughly the same rate.",
+  "design": "Fastest linearizable read, but its safety rests on bounded clock drift and pauses (a GC pause or a VM freeze can outlast the lease). etcd only allows it with check quorum on. Prefer ReadIndex unless read latency truly matters.",
+  "match": [
+   "lease read",
+   "lease reads",
+   "lease",
+   "leases"
+  ],
+  "related": [
+   "read-index",
+   "check-quorum",
+   "linearizability"
+  ]
+ },
+ {
+  "id": "fault-tolerance",
+  "term": "Fault tolerance",
+  "short": "How many nodes can fail while the cluster keeps working: f = ⌊(n−1)/2⌋. 3 nodes tolerate 1, 5 tolerate 2, 7 tolerate 3.",
+  "detail": "A 4-node cluster needs 3 for a majority, so it also tolerates only 1, with more machines that can fail and a larger quorum to wait for.",
+  "design": "Use odd sizes. 3 is the usual minimum, 5 lets you lose one node during maintenance and still survive another failure. Beyond 7, writes get slower without much benefit; add non-voting replicas for read scale instead.",
+  "match": [
+   "fault tolerance",
+   "tolerates",
+   "tolerate"
+  ],
+  "related": [
+   "quorum",
+   "membership-change"
+  ]
+ },
+ {
+  "id": "membership-change",
+  "term": "Membership change",
+  "short": "Adding or removing voting members while the cluster keeps running.",
+  "detail": "Switching straight from an old to a new configuration can create two disjoint majorities (one of the old set, one of the new) and two leaders in one term. Raft avoids that with joint consensus (decisions need majorities of both sets) or by changing one server at a time, where any two majorities always overlap.",
+  "design": "Replace a failed node by adding the new one first (as a learner that catches up), then removing the old one, never both at once. etcd, Consul and KRaft all expose these steps; this sim fixes the size when a scenario loads.",
+  "match": [
+   "membership change",
+   "membership changes",
+   "joint consensus",
+   "single-server change"
+  ],
+  "related": [
+   "quorum",
+   "fault-tolerance"
+  ]
+ },
+ {
+  "id": "raft-in-practice",
+  "term": "Raft in production",
+  "short": "etcd (Kubernetes' datastore), Consul, CockroachDB, TiKV, Kafka's KRaft controller and RabbitMQ quorum queues all run Raft.",
+  "detail": "They add what the core paper leaves out: snapshots, pre-vote, check quorum, leadership transfer, learners, batching and pipelining, and many Raft groups per node.",
+  "design": "You will rarely implement Raft, but you will size, place and tune these clusters. Know their failure modes: lost quorum, election churn, slow disks stretching fsync, and large values bloating the log.",
+  "match": [
+   "etcd",
+   "Consul",
+   "KRaft",
+   "CockroachDB",
+   "TiKV"
+  ],
+  "related": [
+   "consensus",
+   "pre-vote",
+   "check-quorum"
+  ]
+ },
+ {
+  "id": "no-op",
+  "term": "No-op entry",
+  "short": "An empty entry a new leader appends at the start of its term.",
+  "detail": "A leader may only commit entries of its own term by counting replicas. Committing the no-op also commits everything before it, and tells the leader its real commit index, which ReadIndex needs.",
+  "design": "A small detail with big consequences: without it, a leader that receives no writes could leave earlier entries uncommitted indefinitely, and could not serve linearizable reads.",
+  "match": [
+   "no-op"
+  ],
+  "related": [
+   "commit-index",
+   "read-index",
+   "safety"
+  ]
+ },
+ {
+  "id": "pre-vote",
+  "term": "Pre-vote",
+  "short": "Before bumping its term, a would-be candidate asks whether a majority would vote for it. Only if so does it start a real election.",
+  "detail": "Nodes refuse pre-votes while they hear from a live leader or if the asker's log is behind. A node isolated by a partition keeps failing pre-votes, so its term does not climb, and it cannot depose a healthy leader when it reconnects.",
+  "design": "Turn it on (etcd and many others do). Without it, a single node with a flaky link can repeatedly force leader elections across the whole cluster.",
+  "match": [
+   "pre-vote",
+   "pre-votes",
+   "pre-candidate"
+  ],
+  "related": [
+   "term",
+   "check-quorum",
+   "partition"
+  ]
+ },
+ {
+  "id": "check-quorum",
+  "term": "Check quorum",
+  "short": "A leader steps down if it has not heard from a majority within an election timeout, and followers that hear from a live leader ignore vote requests.",
+  "detail": "A leader cut off on the minority side stops accepting writes after about one election timeout instead of holding them until the partition heals.",
+  "design": "It bounds how long a deposed leader keeps acting as one, which is what makes lease reads safe in etcd. Pair it with pre-vote.",
+  "match": [
+   "check quorum",
+   "CheckQuorum"
+  ],
+  "related": [
+   "lease-read",
+   "pre-vote",
+   "split-brain"
+  ]
+ },
+ {
+  "id": "safety",
+  "term": "Raft's safety properties",
+  "short": "At most one leader per term; logs that agree at an entry agree before it; a committed entry is in every later leader's log; no two nodes apply different commands at the same index.",
+  "detail": "Election Safety, Log Matching, Leader Completeness and State Machine Safety. Leader Completeness relies on the up-to-date check and on Figure 8's rule that only current-term entries are committed by counting.",
+  "design": "Safety never depends on timing; only availability does. Slow networks or skewed clocks can stop a Raft cluster, but they cannot make it lose a committed write (lease reads being the exception you opt into).",
+  "match": [
+   "Leader Completeness",
+   "State Machine Safety",
+   "Election Safety",
+   "Figure 8"
+  ],
+  "related": [
+   "up-to-date",
+   "log-matching",
+   "commit-index"
+  ]
+ },
+ {
+  "id": "request-id",
+  "term": "Request id (exactly-once)",
+  "short": "A unique id the client attaches to each command so the cluster can recognize a retry and skip the duplicate.",
+  "detail": "A client that times out cannot tell whether its write was lost, is still pending, or already committed. The Raft dissertation keeps a session per client with the last id applied.",
+  "design": "Any client of a replicated system must retry, so make writes idempotent or deduplicated. Without ids, \"retry on timeout\" quietly becomes \"apply twice\".",
+  "match": [
+   "request id",
+   "request ids",
+   "idempotent",
+   "blind retry"
+  ],
+  "related": [
+   "linearizability",
+   "commit-index"
+  ]
+ }
+]
