@@ -1,0 +1,84 @@
+strata: 1
+id: queueing-latency
+title: Queueing latency near saturation
+kind: sim
+category: distributed
+summary: Raise traffic through an M/M/c service and compare tail latency before and after adding capacity.
+glossaries: [queueing, scaling]
+narration: "Watch request p99 as we raise offered utilization from 10% to 95%. Compare it with service time and the number of requests waiting."
+
+nodes:
+  - id: clients
+    kind: client
+    label: Request source
+    at: [0, 0]
+    term: queueing/poisson
+    doc: |
+      Generates independent arrivals at an average rate you choose.
+      Even at a constant average, requests can arrive close together and start a queue.
+  - id: server
+    kind: service
+    label: Request service
+    at: [1.6, 0]
+    latency: exp 40ms
+    concurrency: 4
+    queue: 400
+    term: queueing/mmc
+    doc: |
+      Uses four service slots per replica, with a mean service time of 40 ms.
+      Near capacity, new arrivals can wait behind several bursts before a slot opens.
+
+edges:
+  - { from: clients, to: server, label: Poisson, latency: fixed 1ms }
+
+flows:
+  - { id: requests, label: Requests, from: clients, rate: 10/s, steps: [{ call: server }] }
+
+controls:
+  - label: Arrival rate
+    bind: requests.rate
+    options: [10, 50, 80, 95]
+    unit: /s
+    term: queueing/utilization
+    insights:
+      - when: "== 10"
+        text: At 10% offered utilization with one replica, almost every request starts service on arrival.
+        effects: [{ metric: Queued requests, dir: down, good: true }]
+      - when: "== 50"
+        text: At 50%, a short burst can fill all four slots. The queue usually drains between bursts.
+        effects: [{ metric: Queued requests, dir: up, good: false }]
+      - when: "== 80"
+        text: At 80%, spare capacity drops to 20 requests per second. The tail includes more time in the queue.
+        effects: [{ metric: Request p99, dir: up, good: false }]
+      - text: At 95%, spare capacity drops to five requests per second. A burst can leave many of the next arrivals waiting.
+        effects: [{ metric: Request p99, dir: up, good: false }, { metric: Queued requests, dir: up, good: false }]
+  - label: Service replicas
+    bind: server.replicas
+    options: [1, 2, 3]
+    insights:
+      - when: "== 1"
+        text: Four slots at 40 ms per request give a mean capacity of 100 requests per second.
+        effects: [{ metric: Service capacity, dir: down }]
+      - when: "== 2"
+        text: Eight slots double mean capacity to 200 requests per second. At 95 arrivals per second, offered utilization is about 48%.
+        effects: [{ metric: Queued requests, dir: down, good: true }, { metric: Request p99, dir: down, good: true }]
+      - text: Twelve slots give a mean capacity of 300 requests per second. The p99 approaches the tail of service time as queueing becomes rare.
+        effects: [{ metric: Queueing delay, dir: down, good: true }]
+
+scenarios:
+  - id: approach-saturation
+    label: Approach saturation
+    goal: How does p99 change as one replica goes from 10% to 95% offered utilization?
+    steps:
+      - { at: 6s, do: "rate requests 50/s", say: "At 50%, look for short waits when all four slots are busy." }
+      - { at: 11s, do: "rate requests 80/s", say: "At 80%, check how often new requests must wait." }
+      - { at: 16s, do: "rate requests 95/s", say: "At 95%, watch p99 rise as waiting time adds to the same 40 ms mean service time." }
+    watch: [server.util, server.queued, requests.p50, requests.p99]
+  - id: add-capacity
+    label: Add capacity at the same rate
+    goal: What happens to tail latency when we double the number of service slots?
+    setup: "rate requests 95/s"
+    steps:
+      - { at: 5s, say: "At 95 requests per second, watch the queue and p99 build on one replica." }
+      - { at: 16s, do: "scale server 2", say: "Watch the queue drain. Give p99 ten seconds to shed samples from before scaling." }
+    watch: [requests.rate, server.queued, server.util, requests.p99]

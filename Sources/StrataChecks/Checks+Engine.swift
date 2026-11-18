@@ -425,6 +425,15 @@ private func measure(_ format: String, _ values: CVarArg...) {
             check(after.started == 0 && after.p99 == nil && sim.series(.flow("requests", .rate)).count == 240,
                   "window did not expire old activity or retain exactly 240 samples")
         },
+        CheckCase(name: "engine scenario commands apply durations and percentages") {
+            let model = manifest([node("api", .service), node("cache", .cache)], [])
+            let sim = Simulation(manifest: model)
+            sim.perform(try ["set api.timeout 250ms", "set api.backoff 500ms", "set cache.hitRate 50%"]
+                .map { try ManifestParser.parseCommand($0).get() })
+            check(sim.effective("api").timeout == 0.25, "timeout command did not set 250 ms")
+            check(sim.effective("api").backoff == 0.5, "backoff command did not set 500 ms")
+            check(sim.effective("cache").hitRate == 0.5, "hit rate command did not set 50%")
+        },
         CheckCase(name: "engine queue overflow, purge and topic retry") {
             let queue = sim([node("queue", .queue) { $0.capacity = 2 }],
                             [source(.manual, [Step(.publish(target: "queue"))])])

@@ -1,0 +1,138 @@
+strata: 1
+id: cache-stampede
+title: Cache stampede and database isolation
+kind: sim
+category: data
+summary: Flush a hot read-through cache and watch a concurrency limit contain the load on Postgres.
+glossaries: [redis, postgres, scaling, resilience]
+narration: "Watch Postgres arrivals and queue depth when Redis goes down. Compare Flush the cache with Bulkhead the database."
+
+nodes:
+  - id: clients
+    kind: client
+    label: Readers
+    at: [0, 1]
+    doc: |
+      Requests hot objects at 5,000 reads per second across all clients.
+      Errors become visible here when the database read path rejects requests.
+  - id: reader
+    kind: service
+    label: Read API
+    at: [1.2, 1]
+    latency: fixed 1ms
+    concurrency: 64
+    async: true
+    term: scaling/read-through
+    doc: |
+      Reads through Redis and calls the miss handler when Redis has no usable value.
+      When Redis is down, every request takes the database path.
+  - id: cache
+    kind: cache
+    label: Hot object cache
+    tech: Redis
+    at: [2.55, 0]
+    latency: fixed 500us
+    concurrency: 100
+    hitRate: 99%
+    doc: |
+      Answers hot reads in 0.5 ms and serves 99% of reads in steady state.
+      Taking it down models a cold cache with zero hits. Restoring it brings back the warm hit rate.
+  - id: gate
+    kind: service
+    label: DB read bulkhead
+    at: [2.55, 1]
+    latency: fixed 200us
+    concurrency: 80
+    queue: 32
+    term: resilience/bulkhead
+    doc: |
+      Holds one slot for each database read until Postgres replies.
+      It sheds excess misses when its own waiting room fills, keeping that work away from Postgres.
+  - id: db
+    kind: database
+    label: Postgres
+    at: [3.9, 1]
+    latency: fixed 5ms
+    concurrency: 20
+    queue: 200
+    doc: |
+      Fetches missed objects through 20 database connections.
+      Each read takes 5 ms, so sustained arrivals above 4,000 per second fill the queue.
+
+edges:
+  - { from: clients, to: reader, protocol: https, latency: fixed 10ms }
+  - { from: reader, to: cache, protocol: redis, latency: fixed 1ms }
+  - { from: reader, to: gate, label: On miss, latency: fixed 1ms }
+  - { from: gate, to: db, protocol: sql, latency: fixed 1ms }
+
+flows:
+  - id: read
+    label: Object read
+    from: clients
+    rate: 5000/s
+    steps:
+      - call: reader
+        steps:
+          - call: cache
+            label: Look up object
+            miss:
+              - call: gate
+                steps:
+                  - { call: db, label: Fetch object }
+
+controls:
+  - label: Redis hit rate
+    bind: cache.hitRate
+    options: [0, 0.5, 0.9, 0.99]
+    term: scaling/hit-ratio
+    insights:
+      - when: "== 0"
+        text: Every read takes the database path. At the default traffic rate, 5,000 misses per second exceed the database's capacity.
+        effects: [{ metric: Database arrivals, dir: up, good: false }, { metric: Read errors, dir: up, good: false }]
+      - when: "== 0.5"
+        text: Half the reads miss, sending about 2,500 requests per second to Postgres at default traffic.
+        effects: [{ metric: Database arrivals, dir: down, good: true }]
+      - when: "== 0.9"
+        text: One in ten reads misses. The database receives about 500 requests per second at default traffic.
+        effects: [{ metric: Database arrivals, dir: down, good: true }]
+      - text: One in 100 reads misses. At default traffic, about 50 requests per second reach the database.
+        effects: [{ metric: Database arrivals, dir: down, good: true }]
+  - label: Read bulkhead slots
+    bind: gate.concurrency
+    options: [16, 20, 80]
+    term: resilience/bulkhead
+    insights:
+      - when: "== 16"
+        text: At most 16 calls can contend for 20 database connections. During a flush, the bulkhead rejects the excess.
+        effects: [{ metric: Database queue, dir: down, good: true }, { metric: Bulkhead errors, dir: up }]
+      - when: "== 20"
+        text: Twenty slots match the size of the database pool. A full bulkhead rejects new misses before the database builds a queue.
+        effects: [{ metric: Database queue, dir: down, good: true }, { metric: Bulkhead errors, dir: up }]
+      - text: Eighty slots let misses contend for only 20 connections. The database queues work and callers hold the bulkhead slots longer.
+        effects: [{ metric: Database queue, dir: up, good: false }, { metric: Read p99, dir: up, good: false }]
+
+scenarios:
+  - id: hit-rate-sweep
+    label: Change cache hit rate
+    goal: How much database traffic does each increase in hit rate remove?
+    setup: ["rate read 1000/s", "set cache.hitRate 0%"]
+    steps:
+      - { at: 2s, say: "At zero hits, compare Postgres throughput with client starts. Every object comes from Postgres." }
+      - { at: 8s, do: "set cache.hitRate 50%", say: "About half the reads reach Postgres. Compare its throughput with the previous interval." }
+      - { at: 15s, do: "set cache.hitRate 90%", say: "Watch about one in ten reads reach Postgres." }
+      - { at: 22s, do: "set cache.hitRate 99%", say: "One in 100 reads reaches Postgres. Check that the client rate stayed near 1,000 per second." }
+    watch: [read.rate, db.throughput, db.util, read.errors]
+  - id: flush
+    label: Flush the cache
+    goal: What happens to Postgres when the entire hot workload arrives as misses?
+    steps:
+      - { at: 8s, do: "kill cache", say: "Every read now misses. Watch Postgres reach full utilization, then watch its queue and read errors." }
+      - { at: 19s, say: "Look at the read bulkhead's queue too. Its 80 slots allow many more outstanding reads than the 20 connections can serve." }
+    watch: [db.throughput, db.util, db.queued, read.errors]
+  - id: bulkhead
+    label: Bulkhead the database
+    goal: Can rejecting misses earlier keep the database queue clear while Redis is down?
+    steps:
+      - { at: 8s, do: "kill cache", say: "Watch the Postgres queue under the same flush as the first run." }
+      - { at: 18s, do: "set gate.concurrency 16", say: "Look at Postgres queue depth and bulkhead errors. The limit keeps the database below capacity by refusing excess misses sooner." }
+    watch: [db.queued, db.util, gate.errors, read.p99]

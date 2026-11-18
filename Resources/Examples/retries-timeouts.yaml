@@ -1,0 +1,153 @@
+strata: 1
+id: retries-timeouts
+title: Retries, timeouts, and circuit breakers
+kind: sim
+category: network
+summary: Watch a slow upstream tie up request slots, then measure how retries and circuit breaking change its load.
+glossaries: [http, resilience, queueing]
+narration: "Compare client p99 with upstream arrivals. Try Retry amplification to see one user request turn into several upstream attempts."
+
+nodes:
+  - id: client
+    kind: client
+    label: API client
+    at: [0, 0]
+    doc: |
+      Sends one user request at a time through the API.
+      A slow response keeps the client waiting. A failed attempt can return an error sooner.
+  - id: api
+    kind: service
+    label: API
+    at: [1.4, 0]
+    latency: fixed 5ms
+    concurrency: 64
+    timeout: 0ms
+    retries: 0
+    backoff: 25ms
+    term: resilience/timeout
+    doc: |
+      Holds a request slot while it calls the upstream and waits between retries.
+      A timeout frees the slot after the retry budget ends. The upstream keeps working on timed-out attempts.
+  - id: vendor
+    kind: external
+    label: Upstream API
+    at: [2.8, 0]
+    latency: fixed 150ms
+    concurrency: 64
+    term: resilience/circuit-breaker
+    doc: |
+      Serves the API's calls in 150 ms in the healthy run.
+      When it slows down, late replies can arrive after the caller already launched a retry.
+
+edges:
+  - { from: client, to: api, protocol: https, latency: fixed 8ms }
+  - { from: api, to: vendor, protocol: https, latency: fixed 10ms }
+
+flows:
+  - id: request
+    label: Unprotected requests
+    from: client
+    rate: 12/s
+    steps:
+      - call: api
+        steps:
+          - { call: vendor, label: Fetch upstream }
+  - id: protected
+    label: Breaker-protected requests
+    from: client
+    rate: manual
+    color: 3
+    steps:
+      - call: api
+        steps:
+          - call: vendor
+            label: Fetch with breaker
+            breaker: { failures: 4, cooldown: 4s }
+
+controls:
+  - label: Upstream timeout
+    bind: api.timeout
+    min: 0
+    max: 1
+    step: 0.25
+    term: resilience/timeout
+    insights:
+      - when: "== 0"
+        text: Zero leaves the timeout disabled. Slow upstream calls hold their API slots until a response arrives.
+        effects: [{ metric: API slots occupied, dir: up, good: false }]
+      - when: "== 0.25"
+        text: A 250 ms timeout covers the healthy 170 ms round trip. During a slowdown it bounds each attempt at the API.
+        effects: [{ metric: API slots occupied, dir: down, good: true }, { metric: Timeout errors, dir: up, good: false }]
+      - text: A 1 s timeout accepts more slow replies and holds API slots for longer while the upstream is slow.
+        effects: [{ metric: API slots occupied, dir: up, good: false }, { metric: Timeout errors, dir: down, good: true }]
+  - label: Upstream retries
+    bind: api.retries
+    options: [0, 2, 5]
+    term: resilience/retry-amplification
+    insights:
+      - when: "== 0"
+        text: The upstream gets one attempt per user request. Any failure returns after that attempt.
+        effects: [{ metric: Upstream attempts, dir: flat, good: true }]
+      - when: "== 2"
+        text: Two retries can triple upstream arrivals while every attempt times out.
+        effects: [{ metric: Upstream arrivals, dir: up, good: false }]
+      - text: Five retries can send six attempts per user request. Each attempt may run to completion even after its caller gives up.
+        effects: [{ metric: Upstream arrivals, dir: up, good: false }, { metric: API slots occupied, dir: up, good: false }]
+  - label: Retry backoff
+    bind: api.backoff
+    min: 0
+    max: 0.5
+    step: 0.025
+    term: resilience/exponential-backoff
+    insights:
+      - when: "== 0"
+        text: Failed requests retry immediately, so a burst can reach the upstream again in one wave.
+        effects: [{ metric: Peak retry arrivals, dir: up, good: false }]
+      - when: "== 0.025"
+        text: The first retry waits about 25 ms with jitter. Each following retry doubles the base delay.
+        effects: [{ metric: Peak retry arrivals, dir: down, good: true }]
+      - text: A longer base delay spreads retries over a wider window and can keep API slots waiting longer.
+        effects: [{ metric: Peak retry arrivals, dir: down, good: true }, { metric: API slots occupied, dir: up, good: false }]
+
+scenarios:
+  - id: bound-the-wait
+    label: Bound the wait
+    goal: Does a timeout free API slots when the upstream takes three seconds?
+    steps:
+      - { at: 4s, do: "slow vendor 20", say: "With no timeout, watch API slots fill while requests wait about three seconds." }
+      - { at: 14s, do: "set api.timeout 250ms", say: "New calls give up after 250 ms. Compare API and upstream utilization. The upstream still finishes its work." }
+    watch: [api.util, vendor.util, request.errors, request.p99]
+  - id: retry-amplification
+    label: Retry amplification
+    goal: How much upstream traffic do zero, two, and five retries create for the same client rate?
+    steps:
+      - at: 4s
+        do: ["slow vendor 4", "set api.timeout 250ms"]
+        say: "The upstream now takes 600 ms. Compare upstream arrivals and client starts with zero retries."
+      - { at: 12s, do: "set api.retries 2", say: "Compare upstream arrivals with client starts again. Each timeout can now create two extra attempts." }
+      - { at: 21s, do: "set api.retries 5", say: "Watch the upstream fill as more attempts survive past the caller's timeout." }
+    watch: [request.rate, request.retries, vendor.util, request.errors]
+  - id: spread-the-burst
+    label: Spread a retry burst
+    goal: What changes when the retry schedule uses jitter and exponential backoff?
+    setup: ["rate request manual", "set api.retries 2", "set api.backoff 0ms"]
+    steps:
+      - at: 12s
+        do: ["fail vendor 100%", "send request 30"]
+        say: "Watch the API-to-upstream edge. Immediate retries appear in closely spaced waves."
+      - at: 27s
+        do: ["set api.backoff 500ms", "send request 30"]
+        say: "Watch retries spread over roughly two seconds. The same requests still fail while the upstream returns errors."
+    watch: [request.retries, request.errors, request.p99, vendor.util]
+  - id: breaker-trips
+    label: Trip the circuit breaker
+    goal: Can the API stop loading a slow upstream without waiting for it to recover?
+    steps:
+      - at: 5s
+        do: ["slow vendor 4", "set api.timeout 250ms", "set api.retries 2"]
+        say: "The unprotected route keeps retrying. Compare upstream arrivals with client starts."
+      - at: 16s
+        do: ["rate request manual", "rate protected 12/s"]
+        say: "Switch to the breaker route. Watch the breaker open and upstream arrivals fall to occasional trial requests."
+      - { at: 25s, say: "Compare API and upstream utilization. Calls fail locally while the upstream gets time to clear its work." }
+    watch: [request.retries, protected.errors, vendor.util, api.util]

@@ -79,6 +79,12 @@ enum NodeConfiguration {
             guard let mode = OnError(rawValue: name) else { return false }
             p.onError = mode
         case ("dlq", .string(let id)): p.dlq = id
+        case ("timeout", .string(let text)), ("backoff", .string(let text)), ("ttl", .string(let text)):
+            guard let seconds = try? Syntax.duration(text) else { return false }
+            return apply(.number(seconds), to: param, in: &p)
+        case ("errors", .string(let text)), ("hitRate", .string(let text)):
+            guard let probability = try? Syntax.probability(text) else { return false }
+            return apply(.number(probability), to: param, in: &p)
         case (_, .number(let number)) where number.isFinite && number >= 0:
             switch param {
             case "latency": p.latency = .fixed(number)

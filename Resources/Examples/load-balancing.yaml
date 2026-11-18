@@ -1,0 +1,133 @@
+strata: 1
+id: load-balancing
+title: Load balancing with a slow replica
+kind: sim
+category: platform
+summary: Compare an even traffic split with routing away from a slow replica, then measure how failover and scaling change capacity.
+glossaries: [http, scaling, resilience, queueing]
+narration: "Compare the two fast replicas with the single slow replica. Watch per-route queues and p99 as we shift traffic away from the busiest target."
+
+groups:
+  - { id: backend, label: Application replicas, kind: cluster }
+
+nodes:
+  - id: clients
+    kind: client
+    label: Web clients
+    at: [0, 1]
+    doc: |
+      Sends requests for the same endpoint over two labeled traffic routes.
+      A route to a down or overloaded replica returns errors to those clients.
+  - id: gateway
+    kind: gateway
+    label: Gateway
+    at: [1.35, 1]
+    async: true
+    term: scaling/load-balancer
+    doc: |
+      Sends each request to its configured route. Experiments adjust the share between the fast pool and the slow replica.
+      Within the fast pool, Strata dispatches to the least busy available replica.
+  - id: fast
+    kind: service
+    label: Fast pool
+    group: backend
+    at: [2.9, 0.3]
+    latency: fixed 40ms
+    concurrency: 4
+    replicas: 2
+    queue: 80
+    term: scaling/least-outstanding
+    doc: |
+      Starts with two 40 ms replicas. The available replica with the fewest occupied slots gets the next request.
+      A saturated pool queues arrivals and rejects them when its shared queue fills.
+  - id: slow
+    kind: service
+    label: Slow replica
+    group: backend
+    at: [2.9, 1.7]
+    latency: fixed 150ms
+    concurrency: 4
+    queue: 80
+    doc: |
+      Models the third replica as a separate target so it can have its own 150 ms service time.
+      Sending one third of a 120 request per second stream here overloads its four slots.
+
+edges:
+  - { from: clients, to: gateway, protocol: https, latency: fixed 5ms }
+  - { from: gateway, to: fast, protocol: http, label: Fast route, latency: fixed 2ms }
+  - { from: gateway, to: slow, protocol: http, label: Slow route, latency: fixed 2ms }
+
+flows:
+  - id: fast-route
+    label: Fast route
+    from: clients
+    rate: 24/s
+    color: 3
+    steps:
+      - call: gateway
+        steps:
+          - { call: fast, label: Serve request }
+  - id: slow-route
+    label: Slow route
+    from: clients
+    rate: 12/s
+    color: 2
+    steps:
+      - call: gateway
+        steps:
+          - { call: slow, label: Serve request }
+
+controls:
+  - label: Fast-pool replicas
+    bind: fast.replicas
+    options: [1, 2, 3]
+    insights:
+      - when: "== 1"
+        text: One 40 ms replica with four slots can do 100 requests per second.
+        effects: [{ metric: Fast-route capacity, dir: down, good: false }]
+      - when: "== 2"
+        text: Two replicas offer 200 requests per second of capacity. Requests go to the available replica with fewer busy slots.
+        effects: [{ metric: Fast-route capacity, dir: up, good: true }]
+      - text: Three replicas offer 300 requests per second of capacity. Adding one at constant traffic lowers load per replica.
+        effects: [{ metric: Fast-route utilization, dir: down, good: true }, { metric: Fast-route queue, dir: down, good: true }]
+  - label: Traffic to the slow replica
+    bind: slow-route.rate
+    options: [0, 8, 12, 40]
+    unit: /s
+    insights:
+      - when: "== 0"
+        text: Turning the slow route off stops new traffic to it. To keep total traffic steady, move those requests to the fast route.
+        effects: [{ metric: Slow-route arrivals, dir: down }]
+      - when: "<= 12"
+        text: At up to 12 requests per second, the slow replica has enough spare capacity for most bursts.
+        effects: [{ metric: Slow-route queue, dir: down, good: true }]
+      - text: At 40 requests per second, arrivals exceed the slow replica's capacity of about 27 per second, so its queue grows.
+        effects: [{ metric: Slow-route p99, dir: up, good: false }, { metric: Slow-route queue, dir: up, good: false }]
+
+scenarios:
+  - id: route-around-the-straggler
+    label: Route around the slow replica
+    goal: What does shifting traffic away from the replica with more outstanding work do at the same total request rate?
+    steps:
+      - at: 5s
+        do: ["rate fast-route 80/s", "rate slow-route 40/s"]
+        say: "An even per-replica split gives one third of requests to the slow replica. Watch its queue grow while the fast pool has spare slots."
+      - at: 12s
+        do: ["rate fast-route 112/s", "rate slow-route 8/s"]
+        say: "Shift the traffic weights toward the less busy pool. Compare queue depth and p99 after the backlog drains."
+    watch: [slow.queued, slow-route.p99, fast.util, fast-route.ok]
+  - id: replica-outage
+    label: Remove a failed replica
+    goal: What happens between a replica dying and the gateway removing its route?
+    steps:
+      - { at: 9s, do: "kill slow", say: "Watch Slow route errors. The gateway still sends requests to the failed replica." }
+      - { at: 20s, do: "redirect slow fast", say: "The gateway shifts that route to the fast pool. Watch slow-route successes return while the slow node stays down." }
+    watch: [slow-route.errors, slow-route.ok, fast.throughput]
+  - id: scale-the-pool
+    label: Scale the fast pool
+    goal: Can another fast replica drain the pool's queue while traffic stays high?
+    setup: ["rate fast-route 215/s", "rate slow-route 8/s"]
+    steps:
+      - { at: 5s, say: "Two fast replicas cannot serve 215 requests per second. Watch the queue grow." }
+      - { at: 17s, do: "scale fast 3", say: "Watch the queue drain after a third replica adds four slots. Compare fast-route p99 once the old samples age out." }
+    watch: [fast.queued, fast-route.errors, fast-route.p99, slow-route.ok]
