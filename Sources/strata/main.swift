@@ -12,6 +12,7 @@ Usage: strata <command>
   open --note <vault-path>                Open a vault note
   simulate <file|id> [--seconds 30] [--scenario id]
                                           Run a simulation and print metrics
+  ops <file|id> [--json]                  List every operation per level and node
   schema                                  Print the manifest reference
   paths                                   Print local data paths
   --help                                  Show this help
@@ -50,6 +51,10 @@ private func run(_ arguments: [String]) throws -> Int32 {
         let args = try Arguments(remaining, options: ["--seconds", "--scenario"])
         try args.require(1, usage: "strata simulate <file|id> [--seconds <number>] [--scenario <id>]")
         return try simulate(args)
+    case "ops":
+        let args = try Arguments(remaining, flags: ["--json"])
+        try args.require(1, usage: "strata ops <file|id> [--json]")
+        return try listOps(args)
     case "schema":
         try Arguments(remaining).require(0, usage: "strata schema")
         guard let url = StrataResources.url("Docs/manifest.md") else { throw CLIError("manifest reference is missing") }
@@ -198,19 +203,7 @@ private func simulate(_ args: Arguments) throws -> Int32 {
     guard let seconds = Double(rawSeconds), seconds.isFinite, seconds >= 0 else {
         throw CLIError("--seconds must be a finite nonnegative number")
     }
-    let library = loadLibrary()
-    let entry: Library.Entry?
-    if let file = fileTarget(target) {
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            throw CLIError("simulate needs a manifest file or id")
-        }
-        entry = library.validate([file]).first
-    } else {
-        entry = library.entry(target)
-    }
-    guard let entry else { throw CLIError("unknown manifest id '\(target)'") }
-    for diagnostic in entry.diagnostics { stderr(Finding(path: entry.url.path, diagnostic: diagnostic).description) }
+    let entry = try loadEntry(target, command: "simulate")
     guard let manifest = entry.manifest else { return 1 }
     let simulation = Simulation(manifest: manifest)
     if let scenario = args.options["--scenario"] {
@@ -224,6 +217,25 @@ private func simulate(_ args: Arguments) throws -> Int32 {
     return simulation.eventLimitReached ? 1 : 0
 }
 
+/// Loads one manifest by file or library id and prints its diagnostics to stderr.
+@MainActor
+func loadEntry(_ target: String, command: String) throws -> Library.Entry {
+    let library = loadLibrary()
+    let entry: Library.Entry?
+    if let file = fileTarget(target) {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            throw CLIError("\(command) needs a manifest file or id")
+        }
+        entry = library.validate([file]).first
+    } else {
+        entry = library.entry(target)
+    }
+    guard let entry else { throw CLIError("unknown manifest id '\(target)'") }
+    for diagnostic in entry.diagnostics { stderr(Finding(path: entry.url.path, diagnostic: diagnostic).description) }
+    return entry
+}
+
 private func fileTarget(_ text: String) -> URL? {
     let url = URL(fileURLWithPath: StrataPaths.expand(text))
     if FileManager.default.fileExists(atPath: url.path) || text.contains("/") || text.hasPrefix(".")
@@ -233,7 +245,7 @@ private func fileTarget(_ text: String) -> URL? {
     return nil
 }
 
-private func printJSON<T: Encodable>(_ value: T) throws {
+func printJSON<T: Encodable>(_ value: T) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     print(String(decoding: try encoder.encode(value), as: UTF8.self))
@@ -243,11 +255,11 @@ private func quote(_ text: String) throws -> String {
     String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
 }
 
-private func stderr(_ message: String) {
+func stderr(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
-private struct CLIError: Error {
+struct CLIError: Error {
     let message: String
     init(_ message: String) { self.message = message }
 }
@@ -283,7 +295,7 @@ private struct Listing: Encodable {
     let warnings: Int
 }
 
-private struct Arguments {
+struct Arguments {
     var positional: [String] = []
     var flags: Set<String> = []
     var options: [String: String] = [:]

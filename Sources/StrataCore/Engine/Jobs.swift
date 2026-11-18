@@ -17,18 +17,20 @@ extension Simulation {
             switch step.action {
             case .work(let duration):
                 let seconds = random.sample(duration)
+                if let op = step.op { recordOp(op, latency: seconds, failed: false) }
                 if seconds > 0 {
                     schedule(.continueJob(id), at: now + seconds)
                     return
                 }
             case .call, .publish:
-                let request = calls.insert(CallRecord(caller: id, step: stepIndex))
+                let request = calls.insert(CallRecord(caller: id, step: stepIndex, started: now))
                 jobs[id]!.call = request
                 suspendLocal(id)
                 startAttempt(request)
                 return
             case .parallel(let program):
                 guard !topology.programs[program].isEmpty else { continue }
+                if let op = step.op { jobs[id]!.parallelOp = (op, now) }
                 beginBranches(id, program: program, parallel: true, optional: step.spec.optional)
                 return
             }
@@ -69,6 +71,10 @@ extension Simulation {
             jobs[parent]!.failure = failure
         }
         guard jobs[parent]!.children.isEmpty else { return }
+        if let pending = jobs[parent]!.parallelOp {
+            jobs[parent]!.parallelOp = nil
+            recordOp(pending.slot, latency: now - pending.started, failed: jobs[parent]!.failure != nil)
+        }
         if let failure = jobs[parent]!.failure { finishJob(parent, failure: failure) }
         else { resumeLocal(parent) }
     }
@@ -123,6 +129,7 @@ extension Simulation {
         let flow = flows[index]
         flow.inFlight -= 1
         flow.latency.add(now - arrived, at: now)
+        if let op = flow.op { recordOp(op, latency: now - arrived, failed: !success) }
         if success {
             flow.totalOK += 1
             flow.ok.add(at: now)

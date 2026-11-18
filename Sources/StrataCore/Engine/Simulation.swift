@@ -48,6 +48,7 @@ public final class Simulation {
     @ObservationIgnored var floodSecond = 0
     @ObservationIgnored var floods: [Flood: FloodBatch] = [:]
     @ObservationIgnored var histories: [MetricKey: SeriesHistory] = [:]
+    @ObservationIgnored var opRuntimes: [OpRuntime] = []
     @ObservationIgnored var narratedSteps: Set<Int> = []
     @ObservationIgnored private var scenarioGeneration = 0
 
@@ -113,6 +114,7 @@ public final class Simulation {
         circuits.removeAll(keepingCapacity: true)
         narratedSteps.removeAll(keepingCapacity: true)
         nodes = level.nodes.enumerated().map { NodeRuntime($1, topicConsumer: topicConsumers.contains($0)) }
+        opRuntimes = topology.ops.map { OpRuntime(referenced: $0.referenced) }
         let countLimits = SimulationLimits.nodeCounts.sorted { $0.key < $1.key }
         for node in nodes {
             for (param, limit) in countLimits {
@@ -233,11 +235,18 @@ public final class Simulation {
         return flowState(index)
     }
 
-    /// Live numbers for an operation on a node of this level (PLACEHOLDER until the ops engine work lands).
-    public func opMetrics(node: String, op: String) -> OpMetrics { OpMetrics() }
+    /// Live numbers for an operation on a node of this level: every step that names it counts.
+    /// Zero, with `referenced == false`, for an op no step names or one that doesn't exist.
+    public func opMetrics(node: String, op: String) -> OpMetrics {
+        opIndex(node: node, op: op).map(opState) ?? OpMetrics()
+    }
 
-    /// Recent samples (one per 0.25 s, up to 240) of an operation's rate, errors, p50 or p99.
-    public func opSeries(node: String, op: String, metric: String) -> [Double] { [] }
+    /// Recent samples (one per 0.25 s, up to 240) of an operation's `rate`, `errors`, `p50` or `p99`.
+    /// Empty for an op no step names.
+    public func opSeries(node: String, op: String, metric: String) -> [Double] {
+        guard let index = opIndex(node: node, op: op), let slot = OpRuntime.metrics.firstIndex(of: metric) else { return [] }
+        return opRuntimes[index].history[slot].ordered
+    }
 
     /// Headless: advance `seconds` of sim time as fast as possible, stopping at safety limits.
     public func run(seconds: Double) {
@@ -245,7 +254,7 @@ public final class Simulation {
         advance(to: now + seconds, eventBudget: 1_000_000)
     }
 
-    /// A plain-text table of per-flow and per-node metrics at `now`, for `strata simulate`.
+    /// A plain-text table of per-flow, per-node and per-op metrics at `now`, for `strata simulate`.
     public func report() -> String {
         func table(_ rows: [[String]]) -> String {
             let widths = rows[0].indices.map { column in rows.map { $0[column].count }.max() ?? 0 }
@@ -273,8 +282,9 @@ public final class Simulation {
                              node.buffer == nil ? "–" : String(state.depth),
                              state.lag.isEmpty ? "–" : String(state.lag.values.reduce(0, +)), number(state.errors)])
         }
+        let opRows = opRows(number: number, ms: ms)
         let recent = log.suffix(10).map { "[\(number($0.t))s] \($0.text)" }.joined(separator: "\n")
-        return ["t = \(number(now))s", table(flowRows), table(nodeRows), recent]
+        return ["t = \(number(now))s", table(flowRows), table(nodeRows), opRows.count > 1 ? table(opRows) : "", recent]
             .filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 

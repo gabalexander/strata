@@ -288,5 +288,6 @@ extension Simulation {
                 histories[.flow(flow.flow.id, metric), default: SeriesHistory()].add(value)
             }
         }
+        sampleOps()
     }
 }

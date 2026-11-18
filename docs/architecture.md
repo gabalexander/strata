@@ -15,7 +15,7 @@ It is Swift 6.3 with SwiftUI and AppKit, built with SwiftPM and the Command Line
 | `StrataCore` | model, YAML parser, validation, layout, engine, library, vault, glossary. No UI imports | Foundation |
 | `StrataUI` | every view, the theme, overlays, the app model | StrataCore |
 | `StrataApp` | the executable: AppKit delegate, hidden windows, hotkey, menu bar, URL scheme | Core, UI |
-| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `schema`, `paths` | Core |
+| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `schema`, `paths` | Core |
 | `StrataSnapshot` | renders scenes with fixture data to PNG, no screen permission needed | Core, UI |
 | `StrataChecks` | assertions, since XCTest is unavailable without Xcode | Core |
 

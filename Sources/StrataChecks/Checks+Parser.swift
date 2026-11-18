@@ -10,6 +10,7 @@ title: Parser check
 
 @MainActor func parserChecks() -> [CheckCase] {
     yamlChecks() + diagnosticChecks() + manifestChecks() + commandChecks() + glossaryChecks() + libraryChecks() + limitChecks()
+        + opChecks()
 }
 
 @MainActor private func limitChecks() -> [CheckCase] {
@@ -470,6 +471,42 @@ private func specManifest(_ snippet: String) -> String {
         text.components(separatedBy: "\n").map { String(repeating: " ", count: width) + $0 }.joined(separator: "\n")
     }
     if text.hasPrefix("  - id: orders") { return header + "nodes:\n" + text }
+    if text.hasPrefix("- id: orders"), text.contains("\n  ops:") {
+        // The operations example: the nodes its ops target, and the inbound op its rpc call reaches.
+        return header + "nodes:\n" + indent(text, 2) + """
+
+              - {id: db, kind: database}
+              - {id: cache, kind: cache}
+              - {id: events, kind: topic}
+              - id: payments
+                kind: service
+                ops: [{id: charge, kind: rpc, label: Charge card, method: payments.v1.Payments/Charge}]
+            edges:
+              - {from: orders, to: db}
+              - {from: orders, to: cache}
+              - {from: orders, to: events}
+              - {from: orders, to: payments}
+            """
+    }
+    if text.hasPrefix("- call:"), text.contains("op: insert-order") {
+        // A step that names an op of the calling node.
+        return header + """
+            nodes:
+              - {id: web, kind: client}
+              - id: orders
+                kind: service
+                ops: [{id: insert-order, kind: sql, target: db, label: INSERT order}]
+              - {id: db, kind: database}
+            edges: [{from: web, to: orders}, {from: orders, to: db}]
+            flows:
+              - id: place-order
+                from: web
+                steps:
+                  - call: orders
+                    steps:
+
+            """ + indent(text, 10)
+    }
     if text.hasPrefix("- id: orders") {
         return header + "groups: [{id: backend}]\n" + term + "nodes:\n" + indent(text, 2) + "\n  - {id: dead-letters, kind: queue}"
     }
@@ -676,4 +713,289 @@ private func writeManifest(_ text: String, at url: URL, atomic: Bool = false) th
     let deadline = Date().addingTimeInterval(4)
     while !condition(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
     return condition()
+}
+
+// MARK: - Operations
+
+/// A level for op diagnostics: `OPS` lands on line 12 (node `api`), `FLOWS` starts on line 15.
+private func opsCase(_ ops: String, flows: String = "") -> String {
+    """
+    nodes:
+      - {id: web, kind: client}
+      - {id: db, kind: database}
+      - {id: q, kind: queue}
+      - {id: t, kind: topic}
+      - {id: cache, kind: cache}
+      - {id: archive, kind: database}
+      - {id: pay, kind: service, ops: [{id: charge, kind: rpc, label: Charge}, {id: settle, kind: http, label: Settle, direction: out}]}
+      - {id: api, kind: service, ops: [\(ops)]}
+    edges: [{from: web, to: api}, {from: api, to: db}, {from: api, to: q}, {from: api, to: t}, {from: api, to: cache},
+            {from: api, to: pay}]
+    """ + (flows.isEmpty ? "" : "\n" + flows)
+}
+
+/// A one-line source flow from web whose steps are `steps`.
+private func opsFlow(_ steps: String) -> String {
+    "flows: [{id: f, from: web, steps: [\(steps)]}]"
+}
+
+@MainActor private func opChecks() -> [CheckCase] {
+    let api = "nodes.api.ops"
+    let step = "flows.f.steps[0]"
+    let nested = "flows.f.steps[0].steps[0]"
+    return [
+        CheckCase(name: "parser decodes every op field, direction and fact order") {
+            guard let manifest = expectClean(load("""
+                nodes:
+                  - {id: web, kind: client}
+                  - {id: db, kind: database}
+                  - {id: cache, kind: cache}
+                  - {id: events, kind: topic}
+                  - id: api
+                    kind: service
+                    ops:
+                      - id: create
+                        kind: http
+                        label: POST /orders
+                        method: POST
+                        path: /orders
+                        request: { sku: A-1, qty: 2, gift: false, note: "say \\"hi\\"" }
+                        response: '{ "id": "o-1" }'
+                        status: [201, "409 duplicate"]
+                        code: api/routes.go:12
+                        risks: one risk
+                        facts: { zeta: 1, alpha: "two", mid: true }
+                      - id: insert
+                        kind: sql
+                        target: db
+                        label: INSERT order
+                        access: read-write
+                        tables: [orders, outbox]
+                        indexes: orders_pkey
+                        tx: true
+                        locks: row
+                        query: |
+                          INSERT INTO orders VALUES ($1);
+                        code: [a.go:1, b.go:2]
+                        risks: [hot rows, lock waits]
+                        tags: [write-path]
+                        inside:
+                          nodes: [{id: lock, kind: service}]
+                      - { id: emit, kind: publish, target: events, label: OrderPlaced, topic: order-events, key: order_id, group: g, payload: { order_id: o-1, total: 4200 } }
+                      - { id: listen, kind: consume, target: events, label: Listen, group: api }
+                      - { id: listen-topic, kind: consume, label: Listen topic, topic: order-events }
+                      - { id: hook, kind: http, label: Webhook, direction: out, method: POST }
+                      - { id: served, kind: rpc, label: Served, streaming: server }
+                      - { id: price, kind: cache, target: cache, label: GET price, command: GET, key: "price:{sku}", ttl: 5m, access: read }
+                      - { id: deep, kind: rpc, label: Deep, detail: other-manifest }
+                edges:
+                  - {from: web, to: api}
+                  - {from: api, to: db}
+                  - {from: api, to: cache}
+                  - {from: api, to: events}
+                  - {from: events, to: api}
+                flows:
+                  - id: f
+                    from: web
+                    steps:
+                      - call: api
+                        op: create
+                        steps:
+                          - { call: db, op: insert }
+                          - { publish: events, op: api/emit }
+                  - { id: g, on: events, by: api, steps: [{ work: 1ms, op: listen }] }
+                """)) else { return }
+            guard let ops = manifest.root.node("api")?.ops else { check(false, "api has no ops"); return }
+            func op(_ id: String) -> StrataCore.Operation? { ops.first { $0.id == id } }
+            check(ops.map(\.id) == ["create", "insert", "emit", "listen", "listen-topic", "hook", "served", "price", "deep"], "op order: \(ops.map(\.id))")
+            let directions = ops.map(\.direction.rawValue)
+            check(directions == ["in", "out", "out", "in", "in", "out", "in", "out", "in"], "direction inference: \(directions)")
+            let create = op("create")
+            check(create?.kind == .http && create?.method == "POST" && create?.path == "/orders", "http fields")
+            check(create?.request == #"{ "sku": "A-1", "qty": 2, "gift": false, "note": "say \"hi\"" }"#, "mapping request as JSON: \(create?.request ?? "nil")")
+            check(create?.response == #"{ "id": "o-1" }"# && create?.status == ["201", "409 duplicate"], "response or status")
+            check(create?.code == ["api/routes.go:12"] && create?.risks == ["one risk"], "code or risks as one string")
+            check(create?.facts.map(\.key) == ["zeta", "alpha", "mid"] && create?.facts.map(\.value) == ["1", "two", "true"],
+                  "facts lost their order: \(create?.facts.map { "\($0.key)=\($0.value)" } ?? [])")
+            let insert = op("insert")
+            check(insert?.target == "db" && insert?.access == .readWrite && insert?.tables == ["orders", "outbox"] &&
+                  insert?.indexes == ["orders_pkey"] && insert?.tx == true && insert?.locks == "row", "sql fields")
+            check(insert?.query == "INSERT INTO orders VALUES ($1);\n" && insert?.code.count == 2 &&
+                  insert?.risks == ["hot rows", "lock waits"] && insert?.tags == ["write-path"], "sql text and lists")
+            check(insert?.inside?.node("lock")?.at != nil, "op inside level was not decoded and laid out")
+            let emit = op("emit")
+            check(emit?.topic == "order-events" && emit?.key == "order_id" && emit?.group == "g" &&
+                  emit?.payload == #"{ "order_id": "o-1", "total": 4200 }"#, "publish fields: \(emit?.payload ?? "nil")")
+            check(op("listen")?.group == "api" && op("listen-topic")?.target == nil, "consume fields")
+            check(op("served")?.streaming == "server", "streaming")
+            let price = op("price")
+            check(price?.ttl == 300 && price?.command == "GET" && price?.key == "price:{sku}" && price?.access == .read, "cache fields")
+            check(op("deep")?.detail == "other-manifest" && op("deep")?.line != nil, "detail or line")
+            let flow = manifest.root.flow("f")?.steps.first
+            check(flow?.op == "create", "step op")
+            if case .call(_, let inner, _)? = flow?.action {
+                check(inner.map(\.op) == ["insert", "api/emit"], "nested step ops")
+            } else {
+                check(false, "flow step is not a call")
+            }
+            check(manifest.root.resolveOp("create", caller: "web", target: "api")?.node == "api", "resolve on the target")
+            check(manifest.root.resolveOp("insert", caller: "api", target: "db")?.op.id == "insert", "resolve on the caller")
+            check(manifest.root.resolveOp("api/emit", caller: nil, target: nil)?.op.kind == .publish, "resolve node/op")
+            check(manifest.root.resolveOp("missing", caller: "api", target: "db") == nil, "resolved a missing op")
+        },
+        CheckCase(name: "parser op direction inference and override") {
+            let cases: [(String, OpDirection)] = [
+                ("{id: a, kind: http, label: A}", .inbound),
+                ("{id: a, kind: rpc, label: A, target: pay}", .outbound),
+                ("{id: a, kind: sql, label: A, target: db}", .outbound),
+                ("{id: a, kind: consume, label: A, target: q}", .inbound),
+                ("{id: a, kind: consume, label: A, topic: jobs}", .inbound),
+                ("{id: a, kind: http, label: A, direction: out}", .outbound),
+                ("{id: a, kind: sql, label: A, direction: out}", .outbound),
+                ("{id: a, kind: publish, label: A, target: q}", .outbound),
+            ]
+            for (op, expected) in cases {
+                let manifest = expectClean(load(opsCase(op)))
+                check(manifest?.root.node("api")?.ops.first?.direction == expected, "\(op) should be \(expected.rawValue)")
+            }
+        },
+        CheckCase(name: "parser resolves step ops on the caller, the target, and node/op") {
+            let manifest = expectClean(load(opsCase(
+                "{id: serve, kind: http, label: Serve}, {id: read, kind: sql, label: Read, target: db}, {id: put, kind: publish, label: Put, target: q}",
+                flows: opsFlow("{call: api, op: serve, steps: [{call: db, op: read}, {publish: q, op: put}, {call: pay, op: pay/charge}, {work: 1ms, op: serve}]}"))))
+            check(manifest != nil, "valid step op references were rejected")
+        },
+        // Errors.
+        finding("op duplicate id", opsCase("{id: a, kind: http, label: A}, {id: a, kind: http, label: B}"),
+                line: 12, path: "\(api).a.id", "duplicate id 'a'"),
+        finding("op unknown kind", opsCase("{id: a, kind: sqll, label: A}"), line: 12, path: "\(api).a.kind", "did you mean 'sql'"),
+        finding("op label required", opsCase("{id: a, kind: sql, target: db}"), line: 12, path: "\(api).a.label", "required value is missing"),
+        finding("op unknown target", opsCase("{id: a, kind: sql, label: A, target: dbb}"), line: 12, path: "\(api).a.target", "did you mean 'db'"),
+        finding("op sql to a queue", opsCase("{id: a, kind: sql, label: A, target: q}"), line: 12, path: "\(api).a.target",
+                "a sql op cannot target 'q', a queue; target a database or search node"),
+        finding("op publish to a service", opsCase("{id: a, kind: publish, label: A, target: pay}"), line: 12, path: "\(api).a.target",
+                "cannot target 'pay', a service; target a queue or topic"),
+        finding("op rpc to a client", opsCase("{id: a, kind: rpc, label: A, target: web}"), line: 12, path: "\(api).a.target",
+                "an rpc op cannot target 'web', a client"),
+        finding("op calls syntax", opsCase("{id: a, kind: rpc, label: A, target: pay, calls: charge}"), line: 12, path: "\(api).a.calls",
+                "use node/op"),
+        finding("op calls unknown op", opsCase("{id: a, kind: rpc, label: A, target: pay, calls: pay/charg}"), line: 12,
+                path: "\(api).a.calls", "unknown op 'charg' on 'pay'; did you mean 'charge'"),
+        finding("op calls unknown node", opsCase("{id: a, kind: rpc, label: A, target: pay, calls: payy/charge}"), line: 12,
+                path: "\(api).a.calls", "unknown node 'payy'"),
+        finding("op streaming mode", opsCase("{id: a, kind: rpc, label: A, streaming: bidirectional}"), line: 12,
+                path: "\(api).a.streaming", "expected one of unary, server, client, bidi"),
+        finding("op access mode", opsCase("{id: a, kind: sql, label: A, target: db, access: rw}"), line: 12,
+                path: "\(api).a.access", "expected one of read, write, read-write"),
+        finding("op direction value", opsCase("{id: a, kind: http, label: A, direction: inbound}"), line: 12,
+                path: "\(api).a.direction", "expected in or out"),
+        finding("op inside and detail", opsCase("{id: a, kind: http, label: A, inside: {nodes: []}, detail: other}"), line: 12,
+                path: "\(api).a.detail", "use either inside or detail"),
+        finding("op ttl unit", opsCase("{id: a, kind: cache, label: A, target: cache, ttl: 300}"), line: 12,
+                path: "\(api).a.ttl", "a duration needs a unit"),
+        finding("op facts mapping", opsCase("{id: a, kind: http, label: A, facts: [a, b]}"), line: 12,
+                path: "\(api).a.facts", "expected a mapping of fact names"),
+        finding("op inside level", opsCase("{id: a, kind: http, label: A, inside: {nodes: [{id: x, kind: port}], flows: [{id: f, from: x, steps: [{call: nope}]}]}}"),
+                line: 12, path: "\(api).a.inside.flows.f.steps[0].call", "unknown node 'nope'"),
+        finding("step op unknown", opsCase("{id: a, kind: http, label: A}", flows: opsFlow("{call: api, op: nope}")), line: 15,
+                path: "\(step).op", "unknown op 'nope' on 'web' or 'api'"),
+        finding("step op suggestion", opsCase("{id: serve, kind: http, label: A}", flows: opsFlow("{call: api, op: serv}")), line: 15,
+                path: "\(step).op", "did you mean 'serve'"),
+        finding("step op unknown on node", opsCase("{id: a, kind: http, label: A}", flows: opsFlow("{call: pay, op: pay/nope}")), line: 15,
+                path: "\(step).op", "unknown op 'nope' on 'pay'"),
+        finding("step op unknown node", opsCase("{id: a, kind: http, label: A}", flows: opsFlow("{call: api, op: nobody/a}")), line: 15,
+                path: "\(step).op", "unknown node 'nobody'"),
+        finding("step op syntax", opsCase("{id: a, kind: http, label: A}", flows: opsFlow("{call: api, op: a/b/c}")), line: 15,
+                path: "\(step).op", "invalid op reference"),
+        // Warnings.
+        finding("op unknown key", opsCase("{id: a, kind: sql, label: A, target: db, tabls: [x]}"), line: 12,
+                path: "\(api).a.tabls", "did you mean 'tables'", severity: .warning),
+        finding("op field for another kind", opsCase("{id: a, kind: publish, label: A, target: q, query: x}"), line: 12,
+                path: "\(api).a.query", "'query' does not apply to a publish op; use it on sql or search ops", severity: .warning),
+        finding("op cache to a database", opsCase("{id: a, kind: cache, label: A, target: db}"), line: 12, path: "\(api).a.target",
+                "a cache op usually targets a cache; 'db' is a database", severity: .warning),
+        finding("op http to a cache", opsCase("{id: a, kind: http, label: A, target: cache}"), line: 12, path: "\(api).a.target",
+                "an http op usually targets a server", severity: .warning),
+        finding("op own node", opsCase("{id: a, kind: rpc, label: A, target: api}"), line: 12, path: "\(api).a.target",
+                "an op cannot target its own node", severity: .warning),
+        finding("op without an edge", opsCase("{id: a, kind: sql, label: A, target: archive}"), line: 12, path: "\(api).a.target",
+                "no edge connects 'api' and 'archive'", severity: .warning),
+        finding("op inbound with a target", opsCase("{id: a, kind: http, label: A, target: pay, direction: in}"), line: 12,
+                path: "\(api).a.direction", "an inbound op has no target", severity: .warning),
+        finding("op sql without a target", opsCase("{id: a, kind: sql, label: A}"), line: 12, path: "\(api).a",
+                "a sql op without a target reads as served by 'api'", severity: .warning),
+        finding("op consume without a buffer", opsCase("{id: a, kind: consume, label: A}"), line: 12, path: "\(api).a",
+                "a consume op names its buffer in target or topic", severity: .warning),
+        finding("op calls from an inbound op", opsCase("{id: a, kind: http, label: A, calls: pay/charge}"), line: 12,
+                path: "\(api).a.calls", "calls links an outbound op to the op it reaches; 'a' is inbound", severity: .warning),
+        finding("op calls an outbound op", opsCase("{id: a, kind: http, label: A, target: pay, calls: pay/settle}"), line: 12,
+                path: "\(api).a.calls", "'pay/settle' is an outbound op", severity: .warning),
+        finding("op publish calls a non-consumer", opsCase("{id: a, kind: publish, label: A, target: q, calls: pay/charge}"), line: 12,
+                path: "\(api).a.calls", "a publish reaches a consume op", severity: .warning),
+        finding("op calls another node than its target", opsCase("{id: a, kind: rpc, label: A, target: pay, calls: api/b}, {id: b, kind: http, label: B}"),
+                line: 12, path: "\(api).a.calls", "calls names an op on 'api' but the target is 'pay'", severity: .warning),
+        finding("step op publish names a sql op", opsCase("{id: w, kind: sql, label: W, target: db}", flows: opsFlow("{call: api, steps: [{publish: q, op: w}]}")),
+                line: 15, path: "\(nested).op", "'w' is a sql op; a publish step performs a publish op", severity: .warning),
+        finding("step op call names a consume op", opsCase("{id: c, kind: consume, label: C, target: q}", flows: opsFlow("{call: api, steps: [{call: pay, op: c}]}")),
+                line: 15, path: "\(nested).op", "'c' is a consume op, which a call step does not perform", severity: .warning),
+        finding("step op targets another node", opsCase("{id: w, kind: sql, label: W, target: db}", flows: opsFlow("{call: api, steps: [{call: cache, op: w}]}")),
+                line: 15, path: "\(nested).op", "'w' targets 'db' but this step calls 'cache'", severity: .warning),
+        finding("step op publishes elsewhere", opsCase("{id: p, kind: publish, label: P, target: t}", flows: opsFlow("{call: api, steps: [{publish: q, op: p}]}")),
+                line: 15, path: "\(nested).op", "'p' targets 't' but this step publishes to 'q'", severity: .warning),
+        finding("step op inbound on a downstream call", opsCase("{id: e, kind: http, label: E}", flows: opsFlow("{call: api, steps: [{call: db, op: e}]}")),
+                line: 15, path: "\(nested).op", "'e' is an inbound op of 'api'; name it on the step that calls 'api'", severity: .warning),
+        finding("step op outbound op of the target", opsCase("{id: w, kind: sql, label: W, target: db}", flows: opsFlow("{call: api, op: w}")),
+                line: 15, path: "\(step).op", "'w' is an outbound op of 'api'; name it on a step that 'api' performs", severity: .warning),
+        CheckCase(name: "parser resolves flow ops on the consumer or the source") {
+            let (manifest, diagnostics) = load(opsCase(
+                "{id: serve, kind: http, label: Serve}, {id: jobs, kind: consume, label: Jobs, target: q}, {id: put, kind: publish, label: Put, target: q}",
+                flows: """
+                flows:
+                  - {id: f, from: web, steps: [{call: api, steps: [{publish: q, op: put}]}]}
+                  - {id: g, on: q, by: api, op: jobs}
+                  - {id: h, on: q, by: api, op: api/jobs}
+                """))
+            check(diagnostics.allSatisfy { $0.message.contains("implicit edge 'q->api'") }, "flow ops: \(diagnostics)")
+            check(manifest?.root.flow("g")?.op == "jobs" && manifest?.root.flow("h")?.op == "api/jobs", "flow op was not decoded")
+        },
+        finding("flow op unknown", opsCase("{id: jobs, kind: consume, label: Jobs, target: q}", flows: "flows: [{id: g, on: q, by: api, op: job}]"),
+                line: 15, path: "flows.g.op", "unknown op 'job' on 'api'; did you mean 'jobs'"),
+        finding("flow op on a consumer is not a consume op", opsCase("{id: w, kind: sql, label: W, target: db}", flows: "flows: [{id: g, on: q, by: api, op: w}]"),
+                line: 15, path: "flows.g.op", "'w' is a sql op; a consumer flow performs a consume op", severity: .warning),
+        finding("flow op consumes another buffer", opsCase("{id: c, kind: consume, label: C, target: t}", flows: "flows: [{id: g, on: q, by: api, op: c}]"),
+                line: 15, path: "flows.g.op", "'c' consumes from 't' but this flow is on 'q'", severity: .warning),
+        finding("flow op on another node", opsCase("{id: c, kind: consume, label: C, target: q}", flows: "flows: [{id: g, on: q, by: pay, op: api/c}]"),
+                line: 15, path: "flows.g.op", "a consumer flow's op belongs to its consumer 'pay'", severity: .warning),
+        finding("flow op consume on a source flow", opsCase("{id: c, kind: consume, label: C, target: q}", flows: "flows: [{id: f, from: web, op: api/c}]"),
+                line: 15, path: "flows.f.op", "name it on a consumer flow", severity: .warning),
+        CheckCase(name: "parser library warns about unknown op detail manifests") {
+            try withTempDirectory { root in
+                try writeManifest(header + """
+                    nodes:
+                      - id: a
+                        kind: service
+                        ops:
+                          - { id: x, kind: http, label: X, detail: absent }
+                          - id: y
+                            kind: http
+                            label: Y
+                            inside:
+                              nodes:
+                                - id: b
+                                  kind: service
+                                  ops: [{ id: z, kind: http, label: Z, detail: missing }]
+                    """, at: root.appendingPathComponent("test.yaml"))
+                let library = Library(builtIn: nil, dirs: [root])
+                let warnings = library.entry("test")?.diagnostics ?? []
+                check(warnings.count == 2 && warnings.allSatisfy { $0.severity == .warning && $0.message.contains("unknown detail manifest") },
+                      "op detail warnings: \(warnings)")
+                check(warnings.map(\.path) == ["nodes.a.ops.x.detail", "nodes.a.ops.y.inside.nodes.b.ops.z.detail"] &&
+                      warnings.map(\.line) == [8, 16], "op detail paths: \(warnings)")
+                try writeManifest(header.replacingOccurrences(of: "id: test", with: "id: absent") + "nodes: []",
+                                  at: root.appendingPathComponent("absent.yaml"))
+                library.reload()
+                check(library.entry("test")?.diagnostics.count == 1, "a known op detail still warns")
+            }
+        },
+    ]
 }

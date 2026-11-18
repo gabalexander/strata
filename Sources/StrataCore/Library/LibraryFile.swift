@@ -45,6 +45,12 @@ struct LibraryFile {
                     location["detail"].diagnose("unknown detail manifest '\(detail)'; add it to the library or check its id", .warning)
                 }
                 if let inside = node.inside { check(inside, at: location["inside"]) }
+                for (op, opLocation) in zip(node.ops, location["ops"].items(named: true)) {
+                    if let detail = op.detail, !ids.contains(detail) {
+                        opLocation["detail"].diagnose("unknown detail manifest '\(detail)'; add it to the library or check its id", .warning)
+                    }
+                    if let inside = op.inside { check(inside, at: opLocation["inside"]) }
+                }
             }
         }
         check(manifest.root, at: Field(document, findings: findings))

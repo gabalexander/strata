@@ -139,6 +139,8 @@ extension Simulation {
         calls.remove(id)
         jobs[call.caller]!.call = nil
         let step = topology.steps[call.step]
+        // A cache that refused the call still lets the step continue as a miss, but the command failed.
+        if let op = step.op { recordOp(op, latency: now - call.started, failed: failure != nil || forceMiss) }
         if let failure, !step.spec.optional {
             finishJob(call.caller, failure: failure)
             return

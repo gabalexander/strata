@@ -45,9 +45,15 @@ enum Validate {
             let node = level.nodes[index]
             validator.node(node, at: location)
             duplicates(node.actions, at: location["actions"])
+            duplicates(node.ops, at: location["ops"])
             if var inside = node.inside {
                 Self.level(&inside, at: location["inside"], terms: terms)
                 level.nodes[index].inside = inside
+            }
+            for (opIndex, opLocation) in location["ops"].items(named: true).enumerated() {
+                guard var inside = node.ops[opIndex].inside else { continue }
+                Self.level(&inside, at: opLocation["inside"], terms: terms)
+                level.nodes[index].ops[opIndex].inside = inside
             }
         }
         for (control, location) in zip(level.controls, field["controls"].items(named: true)) {
@@ -60,7 +66,8 @@ enum Validate {
     }
 }
 
-private struct LevelValidation {
+struct LevelValidation {
+    let level: Level
     let nodes: [String: Node]
     let flows: [String: Flow]
     let groups: [String: String]
@@ -70,6 +77,7 @@ private struct LevelValidation {
     var positions: [GridPoint: String] = [:]
 
     init(level: Level, terms: TermIndex) {
+        self.level = level
         nodes = Dictionary(level.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         flows = Dictionary(level.flows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         groups = Dictionary(level.groups.map { ($0.id, $0.parent ?? "") }, uniquingKeysWith: { first, _ in first })
@@ -148,6 +156,7 @@ private struct LevelValidation {
         for (action, location) in zip(node.actions, field["actions"].items(named: true)) {
             commands(action.commands, at: location["do"])
         }
+        ops(of: node, at: field)
     }
 
     mutating func flow(_ flow: Flow, at field: Field) {
@@ -176,6 +185,7 @@ private struct LevelValidation {
             if flow.by != nil { field["by"].diagnose("by is only valid on a consumer flow with on") }
         }
         steps(flow.steps, at: field["steps"], chain: origin.map { [$0] } ?? [])
+        flowOp(flow, runsAt: origin, at: field["op"])
     }
 
     func consumerModes(_ kind: NodeKind) -> [OnError] {
@@ -184,6 +194,7 @@ private struct LevelValidation {
 
     mutating func steps(_ steps: [Step], at field: Field, chain: [String]) {
         for (step, location) in zip(steps, field.items()) {
+            stepOp(step, caller: chain.last, at: location)
             switch step.action {
             case .call(let id, let inner, let miss):
                 let target = requireNode(id, at: location["call"], as: .server)
