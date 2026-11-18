@@ -48,6 +48,8 @@ public struct NodeState: Sendable {
     public var utilization = 0.0         // busy / slots, 0...1
     public var redirectedTo: String?
     public var lastFailure: Double?      // sim time of the latest failure at this node (the UI flashes it)
+    public var groupLag: [String: Int] = [:] // topics: consumer flow id → messages behind
+    public var lost = 0                  // buffers: total messages or group deliveries lost
     public init() {}
 }
 
