@@ -14,6 +14,9 @@ Usage: strata <command>
                                           Run a simulation and print metrics
   ops <file|id> [--json]                  List every operation per level and node
   data <file|id> [--json]                 Print tables, sample rows and assembled entities
+  analyze <file|id> [--rates flow=50/s,...] [--json]
+                                          Capacity, bottlenecks, what to scale, database
+                                          pressure and blast radius (the Pressure tab)
   schema                                  Print the manifest reference
   paths                                   Print local data paths
   --help                                  Show this help
@@ -60,6 +63,10 @@ private func run(_ arguments: [String]) throws -> Int32 {
         let args = try Arguments(remaining, flags: ["--json"])
         try args.require(1, usage: "strata data <file|id> [--json]")
         return try listData(args)
+    case "analyze":
+        let args = try Arguments(remaining, flags: ["--json"], options: ["--rates"])
+        try args.require(1, usage: "strata analyze <file|id> [--rates flow=50/s,...] [--json]")
+        return try analyze(args)
     case "schema":
         try Arguments(remaining).require(0, usage: "strata schema")
         guard let url = StrataResources.url("Docs/manifest.md") else { throw CLIError("manifest reference is missing") }

@@ -312,6 +312,7 @@ private struct SimWorkspace: View {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }
             else if model.overlays.card != nil { model.overlays.closeTerm() }
             else if SimPressureState.of(sim).escape(selection, tabOpen: pressureOpen, sim: sim) { return true }
+            else if SimDataState.of(sim).escape(selection) { return true }
             else if selection != nil { select(nil) }
             else if !sim.path.isEmpty { up(sim.path.count - 1) }
             else if detailParent != nil { out() }

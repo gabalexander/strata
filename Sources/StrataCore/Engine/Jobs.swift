@@ -203,6 +203,7 @@ extension Simulation {
     func useSlot(_ id: RecordID, node index: Int, replica: Int) {
         guard let job = jobs[id] else { return }
         let node = nodes[index]
+        node.accrueBusy(at: now)
         node.replicas[replica].busy += 1
         node.busy += 1
         jobs[id]!.slot = replica
@@ -224,6 +225,7 @@ extension Simulation {
 
     private func releaseSlot(_ index: Int, _ replica: Int) {
         let node = nodes[index]
+        node.accrueBusy(at: now)
         node.replicas[replica].busy -= 1
         node.busy -= 1
         requestNodePump(index)

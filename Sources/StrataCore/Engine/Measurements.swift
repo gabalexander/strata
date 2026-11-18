@@ -115,6 +115,14 @@ struct SeriesHistory {
         guard values.count == 240, next > 0 else { return values }
         return Array(values[next...] + values[..<next])
     }
+
+    /// The newest `count` samples, oldest first, without copying the whole ring.
+    func last(_ count: Int) -> [Double] {
+        let size = min(max(0, count), values.count)
+        guard size > 0 else { return [] }
+        let newest = (next + values.count - 1) % values.count
+        return (0..<size).map { values[(newest - size + 1 + $0 + values.count) % values.count] }
+    }
 }
 
 struct InTransit {
