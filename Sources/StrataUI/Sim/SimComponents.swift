@@ -184,17 +184,41 @@ extension Health {
     }
 }
 
+/// A view in a panel to scroll to, by its `.id`. Each request is new, so asking twice scrolls twice.
+struct SimScrollTarget: Equatable {
+    let id: String
+    /// Where the view lands; nil scrolls just enough to show it.
+    var anchor: UnitPoint?
+    /// The panel's `resetOn` value (the selection) the view belongs to: the scroll waits for it, so a
+    /// request made just before the selection changes isn't undone by the reset to the top.
+    var context: AnyHashable?
+    /// Glide there (a reveal in place) or jump (landing on a new selection).
+    var animated = true
+    let request = UUID()
+
+    init(id: String, anchor: UnitPoint?, context: AnyHashable? = nil, animated: Bool = true) {
+        self.id = id
+        self.anchor = anchor
+        self.context = context
+        self.animated = animated
+    }
+}
+
 struct SimPanelScroll<Content: View>: View {
     let still: Bool
     /// Scrolls back to the top when this changes (a new selection or tab), keeping the scroll view
     /// itself, which is much cheaper than rebuilding it with `.id`.
     var resetOn: AnyHashable?
+    /// Scrolls to a view when this changes, after any reset (the data UI landing on a table).
+    var scrollTo: SimScrollTarget?
     @ViewBuilder var content: Content
     @State private var position = ScrollPosition(edge: .top)
+    @State private var scrolled: UUID?
 
-    init(still: Bool, resetOn: AnyHashable? = nil, @ViewBuilder content: () -> Content) {
+    init(still: Bool, resetOn: AnyHashable? = nil, scrollTo: SimScrollTarget? = nil, @ViewBuilder content: () -> Content) {
         self.still = still
         self.resetOn = resetOn
+        self.scrollTo = scrollTo
         self.content = content()
     }
 
@@ -207,9 +231,30 @@ struct SimPanelScroll<Content: View>: View {
                     .clipped()
             }
         } else {
-            ScrollView { content }
-                .scrollPosition($position)
-                .onChange(of: resetOn) { position.scrollTo(edge: .top) }
+            ScrollViewReader { proxy in
+                ScrollView { content }
+                    .scrollPosition($position)
+                    .onChange(of: resetOn) {
+                        if let target = scrollTo, target.request != scrolled, target.context == resetOn { scroll(to: target, proxy) }
+                        else { position.scrollTo(edge: .top) }
+                    }
+                    .onChange(of: scrollTo) { _, target in
+                        guard let target, target.context == nil || target.context == resetOn else { return }
+                        scroll(to: target, proxy)
+                    }
+            }
+        }
+    }
+
+    private func scroll(to target: SimScrollTarget, _ proxy: ScrollViewProxy) {
+        scrolled = target.request
+        // The target may have appeared in this same update: scroll once it is laid out.
+        DispatchQueue.main.async {
+            if target.animated {
+                withAnimation(Theme.snappy) { proxy.scrollTo(target.id, anchor: target.anchor) }
+            } else {
+                proxy.scrollTo(target.id, anchor: target.anchor)
+            }
         }
     }
 }

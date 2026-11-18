@@ -8,6 +8,7 @@ enum PaletteGroup: String, CaseIterable {
     case library = "Simulators and maps"
     case nodes = "Nodes in this simulator"
     case operations = "Operations"
+    case data = "Data"
     case glossary = "Glossary"
 }
 
@@ -51,7 +52,8 @@ struct PaletteResults {
                          symbol: command.symbol, shortcut: command.shortcut) { command.perform(on: model) }
         }
         let operations = SimOpsPalette.entries(model: model, manifest: currentManifest)
-        return commands + screenCommands(model.screenCommands) + notes + library + nodes + operations + glossary
+        let data = SimDataPalette.entries(model: model, manifest: currentManifest)
+        return commands + screenCommands(model.screenCommands) + notes + library + nodes + operations + data + glossary
     }
 
     private func screenCommands(_ items: [MenuItem], path: [String] = []) -> [PaletteEntry] {

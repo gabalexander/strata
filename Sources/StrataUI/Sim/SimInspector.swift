@@ -26,7 +26,7 @@ struct SimInspector: View {
             .padding(.horizontal, 14).frame(height: 44)
             Rectangle().fill(Theme.border).frame(height: 1)
             // Selection changes rebuild this on the same frame; only the SimLive leaves inside tick.
-            SimPanelScroll(still: still, resetOn: selection) {
+            SimPanelScroll(still: still, resetOn: selection, scrollTo: SimDataState.of(sim).scroll) {
                 VStack(alignment: .leading, spacing: 16) {
                     switch selection {
                     case .node(let id):
@@ -108,6 +108,7 @@ struct SimInspector: View {
                     SimSection(title: "Actions") { SimActionButtons(items: items) }
                 }
             }
+            SimDataSections(model: model, sim: sim, terms: terms, node: node, selection: selection, select: select, pulse: pulse, still: still)
             SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, pulse: pulse, still: still)
             if node.kind != .note {
                 SimSection(title: "Live metrics") { live { nodeMetrics(node, nodeState(node)) } }
