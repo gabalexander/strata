@@ -1,5 +1,5 @@
 SWIFT = swift build --disable-sandbox
-.PHONY: build app install login unlogin checks snapshots clean
+.PHONY: build app install release login unlogin checks snapshots clean
 
 build:
 	$(SWIFT)
@@ -8,7 +8,12 @@ app:
 	./scripts/build-app.sh
 
 install: app
-	./scripts/install.sh
+	./install.sh --app "$(CURDIR)/build/Strata.app"
+
+# Zips build/Strata.app for a GitHub release (the installer downloads Strata-macos-arm64.zip).
+release: app
+	ditto -c -k --keepParent build/Strata.app build/Strata-macos-arm64.zip
+	@echo build/Strata-macos-arm64.zip
 
 login:
 	./scripts/shell-login.sh enable

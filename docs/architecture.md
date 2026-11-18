@@ -57,7 +57,7 @@ Nothing about a work project goes into this repo.
 
 ## Hidden mode
 
-Hidden mode copies GabOps:
+Hidden mode:
 
 - **Out of screen shares.** When screen-share hiding is enabled, Strata sets `sharingType = .none` before AppKit orders any app-owned window on screen. Window sweeps also enforce this setting. macOS owns input method candidate windows, the character palette, and dictation UI, so their visibility is outside Strata's control.
 - **Out of the Dock and ⌘-Tab:** the app is an accessory (`LSUIElement`).

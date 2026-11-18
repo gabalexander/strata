@@ -15,6 +15,8 @@ trap 'rm -rf "$APP.tmp"' EXIT
 cp "$BIN/StrataApp" "$APP.tmp/Contents/MacOS/Strata"
 cp "$BIN/strata" "$APP.tmp/Contents/Resources/bin/strata"
 cp -R Resources/. "$APP.tmp/Contents/Resources/"
+mkdir -p "$APP.tmp/Contents/Resources/Skill"
+cp -R skill/. "$APP.tmp/Contents/Resources/Skill/"
 swift scripts/shell-app-icon.swift "$APP.tmp/Strata.iconset" "$APP.tmp/Contents/Resources/Strata.icns"
 rm -r "$APP.tmp/Strata.iconset"
 
