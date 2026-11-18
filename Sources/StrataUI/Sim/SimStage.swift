@@ -46,6 +46,15 @@ private final class StageClock {
     func suspend() { last = nil }
 }
 
+/// What a left mouse down on the stage started, kept by the event layer until mouse up.
+struct StagePress {
+    /// The press began on empty space (tokens aside), so dragging pans.
+    let pans: Bool
+    /// Nothing was under the press: a click without dragging clears the selection on mouse up.
+    let empty: Bool
+    let camera: StageCamera
+}
+
 @MainActor
 struct SimStage: View {
     let sim: Simulation
@@ -67,15 +76,12 @@ struct SimStage: View {
     @State private var clock = StageClock()
     @State private var hovered: StageSelection?
     @State private var hoverTask: Task<Void, Never>?
-    @State private var dragStart: StageCamera?
 
     var body: some View {
         GeometryReader { proxy in
             let camera = viewport.current(renderer.layout, in: proxy.size, compact: compact)
             let canvas = stageCanvas(camera)
                 .contentShape(Rectangle())
-                .gesture(taps(camera))
-                .simultaneousGesture(pan(camera))
                 .onContinuousHover { phase in
                     switch phase {
                     case .active(let point):
@@ -115,6 +121,15 @@ struct SimStage: View {
                             clearHover()
                             model.overlays.dismissMenu()
                             viewport.zoom(1 + amount, at: point, layout: renderer.layout, compact: compact)
+                        }, press: { point, clicks in
+                            press(point, clicks: clicks, camera: camera)
+                        }, drag: { press, translation, first in
+                            if first { clearHover() }
+                            var next = press.camera
+                            next.pan(translation)
+                            viewport.camera = next
+                        }, release: { press, dragged in
+                            if press.empty && !dragged { onSelect(nil) }
                         }, key: onKey)
                         .accessibilityHidden(true)
                     }
@@ -192,30 +207,16 @@ struct SimStage: View {
         renderer.hit(point, camera: camera, frame: sim.frame(), includeTokens: includeTokens)
     }
 
-    private func taps(_ camera: StageCamera) -> some Gesture {
-        SpatialTapGesture(count: 2).exclusively(before: SpatialTapGesture()).onEnded { outcome in
-            switch outcome {
-            case .first(let tap):
-                let target = hit(tap.location, camera)
-                onSelect(target)
-                if case .node(let id) = target { onDive(id) }
-            case .second(let tap): onSelect(hit(tap.location, camera))
-            }
+    /// Selects on mouse down, so a click never waits out the double-click interval; the second click
+    /// of a double-click on a node dives in. A press on empty space waits for mouse up, so dragging
+    /// to pan keeps the selection.
+    private func press(_ point: CGPoint, clicks: Int, camera: StageCamera) -> StagePress {
+        let target = hit(point, camera)
+        if let target {
+            onSelect(target)
+            if clicks == 2, case .node(let id) = target { onDive(id) }
         }
-    }
-
-    private func pan(_ camera: StageCamera) -> some Gesture {
-        DragGesture(minimumDistance: 5)
-            .onChanged { value in
-                if dragStart == nil, hit(value.startLocation, camera, includeTokens: false) == nil {
-                    dragStart = camera
-                    clearHover()
-                }
-                guard var next = dragStart else { return }
-                next.pan(value.translation)
-                viewport.camera = next
-            }
-            .onEnded { _ in dragStart = nil }
+        return StagePress(pans: hit(point, camera, includeTokens: false) == nil, empty: target == nil, camera: camera)
     }
 
     private func clearHover() {
@@ -230,6 +231,11 @@ private struct StageEvents: NSViewRepresentable {
     let compact: Bool
     let scroll: (NSEvent, CGPoint) -> Void
     let magnify: (CGFloat, CGPoint) -> Void
+    let press: (CGPoint, Int) -> StagePress
+    /// The press, the translation since it, and whether this is the first move past the slop.
+    let drag: (StagePress, CGSize, Bool) -> Void
+    /// The press, and whether it moved far enough to pan.
+    let release: (StagePress, Bool) -> Void
     let key: ((NSEvent) -> Bool)?
 
     func makeNSView(context: Context) -> EventView { EventView(events: self) }
@@ -238,6 +244,7 @@ private struct StageEvents: NSViewRepresentable {
     final class EventView: NSView {
         var events: StageEvents
         private var keyMonitor: Any?
+        private var pressed: (press: StagePress, start: CGPoint, dragged: Bool)?
 
         init(events: StageEvents) {
             self.events = events
@@ -252,8 +259,36 @@ private struct StageEvents: NSViewRepresentable {
             switch event.type {
             case .scrollWheel where !events.compact || event.modifierFlags.contains(.command), .magnify:
                 return super.hitTest(point)
+            case .leftMouseDown where !event.modifierFlags.contains(.control): // control-click is the right click
+                return super.hitTest(point)
             default: return nil
             }
+        }
+
+        // A click that brings the window forward selects too, instead of only activating it.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        override func mouseDown(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            pressed = (events.press(point, event.clickCount), point, false)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard var pressed, pressed.press.pans else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            let translation = CGSize(width: point.x - pressed.start.x, height: point.y - pressed.start.y)
+            let first = !pressed.dragged
+            guard !first || hypot(translation.width, translation.height) >= 5 else { return }
+            pressed.dragged = true
+            self.pressed = pressed
+            events.drag(pressed.press, translation, first)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard let pressed else { return }
+            self.pressed = nil
+            events.release(pressed.press, pressed.dragged)
         }
 
         override func scrollWheel(with event: NSEvent) {
