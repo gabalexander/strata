@@ -1,12 +1,7 @@
 import Foundation
 import Observation
 
-// PLACEHOLDER. The engine agent replaces this file's body with the real discrete-event engine
-// (docs/manifest.md, "What happens on a call" and "Messages"). The public API below is the
-// contract the UI codes against: keep every signature; add more if useful and say so.
-//
-// Until then this stub animates one token around each edge so the UI has something to draw.
-
+/// A discrete-event simulation of one level, driven on the main actor by the stage.
 @MainActor
 @Observable
 public final class Simulation {
@@ -29,82 +24,367 @@ public final class Simulation {
     public private(set) var revision = 0
     @ObservationIgnored public private(set) var log: [LogEntry] = []
 
-    @ObservationIgnored private var params: [Binding: Value] = [:]
+    let topology: ProgramTopology
+    private let parentRate: Double
+    private let seed: UInt64
+    private let topicConsumers: Set<Int>
+
+    @ObservationIgnored var nodes: [NodeRuntime] = []
+    @ObservationIgnored var flows: [FlowRuntime] = []
+    @ObservationIgnored var edges: [LinkRuntime] = []
+    @ObservationIgnored private var links: [Endpoints: Int] = [:]
+    @ObservationIgnored var circuits: [CircuitKey: Circuit] = [:]
+    @ObservationIgnored var jobs = RecordPool<Job>()
+    @ObservationIgnored var calls = RecordPool<CallRecord>()
+    @ObservationIgnored var deliveries = RecordPool<Delivery>()
+    @ObservationIgnored var random: SimulationRandom
+    @ObservationIgnored private var events = EventQueue()
+    @ObservationIgnored var tokens: [InTransit] = []
+    @ObservationIgnored var tokenSequence = 0
+    @ObservationIgnored var logSequence = 0
+    @ObservationIgnored var floodSecond = 0
+    @ObservationIgnored var floods: [Flood: FloodBatch] = [:]
+    @ObservationIgnored var histories: [MetricKey: SeriesHistory] = [:]
+    @ObservationIgnored var narratedSteps: Set<Int> = []
+    @ObservationIgnored private var scenarioGeneration = 0
+
+    private struct Endpoints: Hashable {
+        let from: Int
+        let to: Int
+    }
 
     /// `parentRate`: measured request rate of the node this level is inside (for `rate: parent`).
     public init(manifest: Manifest, path: [String] = [], parentRate: Double? = nil, seed: UInt64 = 1) {
         self.manifest = manifest
         self.path = path
-        self.level = manifest.level(at: path) ?? manifest.root
+        let topology = ProgramTopology(manifest.level(at: path) ?? manifest.root)
+        self.topology = topology
+        self.level = topology.level
+        self.parentRate = parentRate ?? 5
+        self.seed = seed
+        random = SimulationRandom(state: seed)
+        var queueConsumers: Set<Int> = []
+        var topicConsumers: Set<Int> = []
+        for flow in topology.level.flows {
+            guard let on = flow.on, let by = flow.by,
+                  let buffer = topology.nodeIndex[on], let consumer = topology.nodeIndex[by] else { continue }
+            if topology.level.nodes[buffer].kind == .topic { topicConsumers.insert(consumer) }
+            else { queueConsumers.insert(consumer) }
+        }
+        self.topicConsumers = topicConsumers.subtracting(queueConsumers)
+        reset()
     }
 
     /// Called every display frame with wall-clock seconds since the previous frame.
-    /// Advances `now` by `dt * speed` when playing (clamped so a stall never jumps far).
     public func tick(_ wallDelta: Double) {
-        guard playing else { return }
-        now += min(wallDelta, 0.1) * speed
+        guard playing, wallDelta.isFinite, wallDelta >= 0, speed.isFinite else { return }
+        advance(to: now + min(wallDelta, 0.1) * min(4, max(0.25, speed)), whilePlaying: true)
     }
 
     /// While paused: advance a short slice (0.1 s sim) so you can watch one step at a time.
-    public func step() { now += 0.1; revision += 1 }
-
-    /// Back to t = 0 with the manifest's parameters (and the same seed).
-    public func reset() { now = 0; log = []; narration = nil; scenario = nil; params = [:]; revision += 1 }
-
-    public func perform(_ commands: [Command]) {
-        for c in commands { append("\(c)", .info) }
+    public func step() {
+        guard !playing else { return }
+        advance(to: now + 0.1)
         revision += 1
     }
 
-    /// Fire `count` requests of a source flow now (also works for `rate: manual`).
-    public func send(_ flow: String, count: Int = 1) { append("send \(flow) ×\(count)", .info) }
-
-    /// Current value of a bindable parameter (effective: kind defaults applied), nil if unknown.
-    public func value(_ b: Binding) -> Value? { params[b] }
-    public func setValue(_ v: Value, for b: Binding) { params[b] = v; revision += 1 }
-
-    /// The node's effective parameters with every field filled from kind defaults.
-    public func effective(_ node: String) -> NodeParams { level.node(node)?.params ?? NodeParams() }
-
-    public func start(scenario id: String) { reset(); scenario = id; revision += 1 }
-    public func stopScenario() { scenario = nil; revision += 1 }
-
-    public func frame() -> SimFrame {
-        var f = SimFrame(t: now)
-        for (i, e) in level.edges.enumerated() {
-            let period = 1.6
-            let phase = (now + Double(i) * 0.37).truncatingRemainder(dividingBy: period * 2)
-            let forward = phase < period
-            f.tokens.append(TokenView(id: i, edge: e.id, progress: (forward ? phase : phase - period) / period,
-                                      reverse: !forward, kind: forward ? .request : .response,
-                                      color: (i % 6) + 1, flow: level.flows.first?.id ?? ""))
-            f.edges[e.id] = EdgeState()
+    /// Back to t = 0 with the manifest's parameters (and the same seed).
+    public func reset() {
+        now = 0
+        log = []
+        narration = nil
+        scenario = nil
+        scenarioGeneration = 0
+        events = EventQueue()
+        jobs = RecordPool()
+        calls = RecordPool()
+        deliveries = RecordPool()
+        random = SimulationRandom(state: seed)
+        tokens.removeAll(keepingCapacity: true)
+        tokenSequence = 0
+        logSequence = 0
+        floodSecond = 0
+        floods.removeAll(keepingCapacity: true)
+        histories.removeAll(keepingCapacity: true)
+        circuits.removeAll(keepingCapacity: true)
+        narratedSteps.removeAll(keepingCapacity: true)
+        nodes = level.nodes.enumerated().map { NodeRuntime($1, topicConsumer: topicConsumers.contains($0)) }
+        flows = level.flows.enumerated().map {
+            FlowRuntime($1, index: $0, program: topology.flowPrograms[$0], topology: topology)
         }
-        for (i, n) in level.nodes.enumerated() {
-            var s = NodeState()
-            s.slots = 8
-            s.busy = Int((sin(now + Double(i)) + 1) * 4)
-            s.utilization = Double(s.busy) / 8
-            if n.kind.role == .buffer { s.depth = Int((sin(now / 2 + Double(i)) + 1) * 6); s.held = Array(repeating: 1, count: min(12, s.depth)) }
-            s.throughput = 10
-            f.nodes[n.id] = s
+        edges.removeAll(keepingCapacity: true)
+        links.removeAll(keepingCapacity: true)
+        for edge in level.edges {
+            if let from = topology.nodeIndex[edge.from], let to = topology.nodeIndex[edge.to] {
+                addLink(edge, from: from, to: to)
+            }
         }
-        return f
+        for (index, flow) in flows.enumerated() {
+            if let buffer = flow.buffer, let consumer = flow.consumer {
+                nodes[buffer].buffer?.consumers.append(index)
+                nodes[consumer].consumerFlows.append(index)
+            }
+            scheduleSource(index)
+        }
+        schedule(.sample(1), at: 0.25)
+        revision += 1
     }
 
-    public func metrics(flow: String) -> FlowMetrics { FlowMetrics() }
+    public func perform(_ commands: [Command]) {
+        for command in commands { apply(command) }
+    }
 
-    /// Headless: advance `seconds` of sim time as fast as possible (playing or not). For checks and `strata simulate`.
-    public func run(seconds: Double) { now += seconds }
+    /// Fire `count` requests of a source flow now (also works for `rate: manual`).
+    public func send(_ flow: String, count: Int = 1) {
+        guard count > 0, let index = topology.flowIndex[flow], flows[index].source != nil else { return }
+        for _ in 0..<count { startSource(index) }
+    }
+
+    /// Current value of a bindable parameter (effective: kind defaults applied), nil if unknown.
+    public func value(_ b: Binding) -> Value? { read(b) }
+
+    public func setValue(_ v: Value, for b: Binding) {
+        if write(v, to: b) { revision += 1 }
+    }
+
+    /// The node's effective parameters with every field filled from kind defaults.
+    public func effective(_ node: String) -> NodeParams {
+        guard let index = topology.nodeIndex[node] else { return NodeParams() }
+        return nodes[index].params
+    }
+
+    public func start(scenario id: String) {
+        guard let definition = level.scenarios.first(where: { $0.id == id }) else { return }
+        reset()
+        scenarioGeneration += 1
+        scenario = id
+        playing = true
+        append("Started \(definition.label)", .info)
+        perform(definition.setup)
+        for step in definition.steps {
+            schedule(.scenario(step, scenarioGeneration), at: step.at)
+        }
+        schedule(.endScenario(scenarioGeneration), at: (definition.steps.map(\.at).max() ?? 0) + 10)
+        advance(to: now)
+    }
+
+    public func stopScenario() {
+        scenario = nil
+        scenarioGeneration += 1
+        revision += 1
+    }
+
+    public func frame() -> SimFrame {
+        var frame = SimFrame(t: now)
+        for index in nodes.indices { frame.nodes[nodes[index].node.id] = nodeState(index) }
+        for edge in edges {
+            var state = EdgeState()
+            state.cut = edge.cut
+            state.extraLatency = edge.extra
+            state.rate = edge.traversals.value(at: now)
+            state.breakerOpen = edge.openCircuits > 0
+            frame.edges[edge.id] = state
+        }
+        frame.tokens.reserveCapacity(tokens.count)
+        for token in tokens where now < token.end {
+            let fraction = min(1, max(0, (now - token.start) / (token.end - token.start)))
+            let eased = fraction * fraction * (3 - 2 * fraction)
+            let kind: TokenView.Kind = token.reply.map { isWaiting(for: $0) ? token.kind : .orphan } ?? token.kind
+            let flow = flows[token.traffic.flow]
+            frame.tokens.append(TokenView(id: token.id, edge: edges[token.edge].id,
+                                          progress: token.reverse ? 1 - eased : eased, reverse: token.reverse,
+                                          kind: kind, color: flow.color, flow: flow.flow.id, label: token.label))
+        }
+        return frame
+    }
+
+    public func metrics(flow: String) -> FlowMetrics {
+        guard let index = topology.flowIndex[flow] else { return FlowMetrics() }
+        return flowState(index)
+    }
+
+    /// Headless: advance `seconds` of sim time as fast as possible (playing or not).
+    public func run(seconds: Double) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        advance(to: now + seconds)
+    }
 
     /// A plain-text table of per-flow and per-node metrics at `now`, for `strata simulate`.
-    public func report() -> String { "t=\(now)s (engine not implemented yet)" }
+    public func report() -> String {
+        func table(_ rows: [[String]]) -> String {
+            let widths = rows[0].indices.map { column in rows.map { $0[column].count }.max() ?? 0 }
+            return rows.map { row in
+                row.enumerated().map { index, cell in
+                    let padding = String(repeating: " ", count: widths[index] - cell.count)
+                    return index == 0 ? cell + padding : padding + cell
+                }.joined(separator: "  ")
+            }.joined(separator: "\n")
+        }
+        func number(_ value: Double) -> String { String(format: "%.2f", value) }
+        func ms(_ value: Double?) -> String { value.map { number($0 * 1000) } ?? "–" }
+        var flowRows = [["Flow", "rate/s", "ok/s", "err/s", "p50 ms", "p99 ms", "retry/s"]]
+        for index in flows.indices {
+            let state = flowState(index)
+            flowRows.append([flows[index].flow.id, number(state.started), number(state.ok), number(state.failed),
+                             ms(state.p50), ms(state.p99), number(state.retries)])
+        }
+        var nodeRows = [["Node", "arr/s", "util", "in-flight", "queued", "depth", "lag", "err/s"]]
+        for index in nodes.indices {
+            let node = nodes[index]
+            let state = nodeState(index)
+            nodeRows.append([node.node.id, number(state.arrivals), number(state.utilization),
+                             String(node.live.count - node.queuedCalls), String(state.queued),
+                             node.buffer == nil ? "–" : String(state.depth),
+                             state.lag.isEmpty ? "–" : String(state.lag.values.reduce(0, +)), number(state.errors)])
+        }
+        let recent = log.suffix(10).map { "[\(number($0.t))s] \($0.text)" }.joined(separator: "\n")
+        return ["t = \(number(now))s", table(flowRows), table(nodeRows), recent]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
 
     /// Recent samples (one per 0.25 s of sim time, up to 240) for sparklines.
-    public func series(_ key: MetricKey) -> [Double] { (0..<60).map { sin((now - Double(60 - $0) * 0.25) / 2) * 0.5 + 0.5 } }
+    public func series(_ key: MetricKey) -> [Double] { histories[key]?.ordered ?? [] }
 
-    private func append(_ text: String, _ level: LogEntry.Level, node: String? = nil) {
-        log.append(LogEntry(id: log.count, t: now, text: text, level: level, node: node))
+    func schedule(_ event: SimulationEvent, at time: Double) {
+        if time.isFinite { events.insert(event, at: max(now, time)) }
+    }
+
+    private func advance(to target: Double, whilePlaying: Bool = false) {
+        guard target.isFinite else { return }
+        while let time = events.time, time <= target, !whilePlaying || playing {
+            let entry = events.pop()
+            now = time
+            process(entry.event)
+        }
+        if !whilePlaying || playing { now = target }
+        if !tokens.isEmpty { tokens.removeAll { $0.end <= now } }
+    }
+
+    private func process(_ event: SimulationEvent) {
+        switch event {
+        case .source(let flow, let generation):
+            guard flows[flow].generation == generation else { return }
+            startSource(flow)
+            scheduleSource(flow)
+        case .continueJob(let id): advanceJob(id)
+        case .deadline(let id):
+            guard let job = jobs[id] else { return }
+            let duration = now - job.arrived
+            flows[job.traffic.flow].timeouts.add(at: now)
+            note(.timeout, Failure.deadline(duration).describe(level, edges: edges), visible: job.traffic.visible)
+            finishJob(id, failure: .deadline(duration))
+        case .request(let attempt, let epoch): receiveRequest(attempt, epoch: epoch)
+        case .response(let attempt, let epoch, let failure): receiveResponse(attempt, epoch: epoch, failure: failure)
+        case .timeout(let id, let number): timeoutCall(id, number: number)
+        case .retry(let id): startAttempt(id)
+        case .pumpNode(let index): pumpNode(index)
+        case .pumpBuffer(let index): pumpBuffer(index)
+        case .delivery(let delivery, let edge, let epoch): receiveDelivery(delivery, edge: edge, epoch: epoch)
+        case .deadLetter(let letter, let edge, let epoch): receiveDeadLetter(letter, edge: edge, epoch: epoch)
+        case .retryDelivery(let id): retryDelivery(id)
+        case .expire(let buffer, let message): expire(buffer, message: message)
+        case .scenario(let step, let generation):
+            guard generation == scenarioGeneration, scenario != nil else { return }
+            append("Scenario step at \(Value.number(step.at))s", .info)
+            perform(step.commands)
+            if let say = step.say { narrate(say) }
+        case .endScenario(let generation):
+            if generation == scenarioGeneration, scenario != nil { stopScenario() }
+        case .sample(let sequence):
+            sampleMetrics()
+            schedule(.sample(sequence + 1), at: Double(sequence + 1) * 0.25)
+        case .flushLog(let second):
+            if second == floodSecond { flushLog() }
+        }
+    }
+
+    func append(_ text: String, _ level: LogEntry.Level, node: Int? = nil, time: Double? = nil) {
+        logSequence += 1
+        let id = node.map { nodes[$0].node.id }
+        log.append(LogEntry(id: logSequence, t: time ?? now, text: text, level: level, node: id))
         if log.count > 300 { log.removeFirst(log.count - 300) }
+        revision += 1
+    }
+
+    func updateLog(_ id: Int, withSummary summary: String) {
+        guard let index = log.lastIndex(where: { $0.id == id }) else { return }
+        log[index].text = summary + " · " + log[index].text
+        revision += 1
+    }
+
+    func narrate(_ text: String) {
+        narration = text
+        revision += 1
+    }
+
+    func rate(for flow: FlowRuntime) -> Double { flow.rate.perSecondValue ?? parentRate }
+
+    func changeRate(_ flow: Int, to rate: Rate) {
+        flows[flow].rate = rate
+        flows[flow].generation += 1
+        scheduleSource(flow)
+    }
+
+    private func scheduleSource(_ index: Int) {
+        let flow = flows[index]
+        guard flow.source != nil else { return }
+        let rate = rate(for: flow)
+        guard rate.isFinite, rate > 0 else { return }
+        let spacing: Double
+        switch flow.rate {
+        case .every(let seconds): spacing = seconds
+        case .manual: return
+        case .perSecond, .parent: spacing = random.sample(.exponential(1 / rate))
+        }
+        schedule(.source(index, flow.generation), at: max(now.nextUp, now + spacing))
+    }
+
+    func startSource(_ index: Int) {
+        let flow = flows[index]
+        guard let source = flow.source else { return }
+        let traffic = Traffic(flow: index, visible: flow.sample(at: now))
+        startFlow(index)
+        let node = nodes[source]
+        node.arrivals.add(at: now)
+        let id = jobs.insert(Job(end: .source, node: source, traffic: traffic, arrived: now, program: flow.program))
+        node.live.insert(id)
+        guard node.up else {
+            note(.failed, "\(node.node.id): connection refused", node: source, visible: traffic.visible)
+            finishJob(id, failure: .refused)
+            return
+        }
+        if flow.deadline > 0 { schedule(.deadline(id), at: now + flow.deadline) }
+        advanceJob(id)
+    }
+
+    func startFlow(_ index: Int) {
+        let flow = flows[index]
+        flow.started.add(at: now)
+        flow.inFlight += 1
+    }
+
+    @discardableResult
+    private func addLink(_ edge: Edge, from: Int, to: Int) -> Int {
+        let key = Endpoints(from: from, to: to)
+        if let index = links[key] { return index }
+        links[key] = edges.count
+        edges.append(LinkRuntime(edge, from: from, to: to))
+        return edges.count - 1
+    }
+
+    func existingLink(from: Int, to: Int) -> Int? { links[Endpoints(from: from, to: to)] }
+
+    func link(from: Int, to: Int) -> Int {
+        if let index = existingLink(from: from, to: to) { return index }
+        return addLink(Edge(from: nodes[from].node.id, to: nodes[to].node.id), from: from, to: to)
+    }
+
+    func destination(_ index: Int) -> Int {
+        var resolved = index
+        for _ in nodes.indices {
+            guard let redirect = nodes[resolved].redirect else { return resolved }
+            resolved = redirect
+        }
+        return index
     }
 }
