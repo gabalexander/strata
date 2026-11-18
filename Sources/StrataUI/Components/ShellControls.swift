@@ -1,0 +1,219 @@
+import SwiftUI
+
+@MainActor
+public struct StrataIconButton: View {
+    private let symbol: String
+    private let title: String
+    private let active: Bool
+    private let action: () -> Void
+    @State private var hovered = false
+    @State private var hintVisible = false
+
+    public init(_ symbol: String, title: String, active: Bool = false, action: @escaping () -> Void) {
+        self.symbol = symbol
+        self.title = title
+        self.active = active
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(Theme.ui(13, .medium))
+                .foregroundStyle(active ? Theme.accent : hovered ? Theme.text : Theme.muted)
+                .frame(width: 28, height: 28)
+                .background(active ? Theme.accent.opacity(0.10) : hovered ? Theme.hover : .clear,
+                            in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .onHover { hovered = $0 }
+        .task(id: hovered) {
+            hintVisible = false
+            guard hovered else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(450))
+                hintVisible = true
+            } catch {}
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if hintVisible {
+                Text(title)
+                    .font(Theme.small)
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .card(Theme.overlay, radius: Theme.radiusSmall)
+                    .fixedSize()
+                    .alignmentGuide(.bottom) { $0[.top] - 4 }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .zIndex(hintVisible ? 1 : 0)
+    }
+}
+
+@MainActor
+public struct StrataChip: View {
+    private let title: String
+    private let symbol: String?
+    private let tint: Color
+
+    public init(_ title: String, symbol: String? = nil, tint: Color = Theme.muted) {
+        self.title = title
+        self.symbol = symbol
+        self.tint = tint
+    }
+
+    public var body: some View {
+        HStack(spacing: 4) {
+            if let symbol { Image(systemName: symbol) }
+            Text(title).lineLimit(1)
+        }
+        .font(Theme.label)
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.10), in: Capsule())
+    }
+}
+
+@MainActor
+public struct StrataSegmentedControl<Option: Hashable>: View {
+    private let options: [Option]
+    @Binding private var selection: Option
+    private let title: (Option) -> String
+
+    public init(_ options: [Option], selection: Binding<Option>, title: @escaping (Option) -> String) {
+        self.options = options
+        self._selection = selection
+        self.title = title
+    }
+
+    public var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                let selected = selection == option
+                Button {
+                    selection = option
+                } label: {
+                    Text(title(option))
+                        .font(Theme.label)
+                        .foregroundStyle(selected ? Theme.accent : Theme.muted)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(selected ? Theme.selected : .clear,
+                                    in: RoundedRectangle(cornerRadius: Theme.radiusSmall - 2))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .card(Theme.raised, radius: Theme.radiusSmall)
+    }
+}
+
+@MainActor
+public struct StrataSparkline: View {
+    private let samples: [Double]
+    private let color: Color
+
+    public init(_ samples: [Double], color: Color = Theme.accent) {
+        self.samples = samples
+        self.color = color
+    }
+
+    public var body: some View {
+        Canvas { context, size in
+            let values = samples.filter(\.isFinite)
+            guard let low = values.min(), let high = values.max(), values.count > 1 else { return }
+            let span = high - low
+            let line = Path { path in
+                for (index, value) in values.enumerated() {
+                    let ratio = span > 0 ? (value - low) / span : 0.5
+                    let point = CGPoint(x: 1 + (size.width - 2) * Double(index) / Double(values.count - 1),
+                                        y: 2 + (size.height - 4) * (1 - ratio))
+                    if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                }
+            }
+            context.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+        }
+        .frame(minWidth: 32, idealWidth: 64, minHeight: 16, idealHeight: 20)
+        .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+public struct StrataSectionLabel: View {
+    private let title: String
+
+    public init(_ title: String) { self.title = title }
+
+    public var body: some View {
+        Text(title)
+            .font(Theme.ui(11, .semibold))
+            .foregroundStyle(Theme.muted)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+@MainActor
+public struct StrataKeycap: View {
+    private let key: String
+
+    public init(_ key: String) { self.key = key }
+
+    public var body: some View {
+        Text(key)
+            .font(Theme.mono(11))
+            .foregroundStyle(Theme.muted)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .card(Theme.raised, radius: Theme.radiusSmall - 2)
+            .fixedSize()
+    }
+}
+
+@MainActor
+public struct StrataSearchField: View {
+    private let prompt: String
+    @Binding private var text: String
+    @FocusState private var focused: Bool
+
+    public init(_ prompt: String, text: Binding<String>) {
+        self.prompt = prompt
+        self._text = text
+    }
+
+    public var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
+            TextField(prompt, text: $text, prompt: Text(prompt).foregroundStyle(Theme.muted))
+                .textFieldStyle(.plain)
+                .focused($focused)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                    focused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(Theme.ui())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .card()
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.radius)
+                .strokeBorder(focused ? Theme.accent.opacity(0.5) : .clear)
+                .allowsHitTesting(false)
+        }
+    }
+}
