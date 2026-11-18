@@ -246,6 +246,9 @@ public struct Flow: Sendable, Identifiable {
     public var rate: Rate = .manual      // source flows only
     public var deadline: Double?
     public var steps: [Step] = []
+    /// The op each run of this flow performs, counted when the run finishes (a consumer flow's
+    /// consume op on its `by` node, or an op on its `from` node); an op id on that node, or "node/op".
+    public var op: String?
     public var line: Int?
     public init(id: String, label: String? = nil) { self.id = id; self.label = label ?? id }
 

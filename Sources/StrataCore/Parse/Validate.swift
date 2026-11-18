@@ -185,6 +185,7 @@ struct LevelValidation {
             if flow.by != nil { field["by"].diagnose("by is only valid on a consumer flow with on") }
         }
         steps(flow.steps, at: field["steps"], chain: origin.map { [$0] } ?? [])
+        flowOp(flow, runsAt: origin, at: field["op"])
     }
 
     func consumerModes(_ kind: NodeKind) -> [OnError] {

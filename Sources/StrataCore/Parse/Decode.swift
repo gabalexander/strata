@@ -137,7 +137,7 @@ enum Decode {
     }
 
     static func flow(_ field: Field) -> Flow? {
-        guard field.mapping(["id", "label", "from", "on", "by", "rate", "color", "deadline", "steps"]) else { return nil }
+        guard field.mapping(["id", "label", "from", "on", "by", "rate", "color", "deadline", "steps", "op"]) else { return nil }
         var flow = Flow(id: field["id"].id(required: true) ?? "", label: field["label"].text())
         flow.line = field.line
         flow.color = field["color"].integer(in: 1...6)
@@ -147,6 +147,7 @@ enum Decode {
         flow.rate = field["rate"].scalar(Syntax.rate) ?? .manual
         flow.deadline = field["deadline"].duration()
         flow.steps = field["steps"].items().compactMap(step)
+        flow.op = field["op"].scalar { try Syntax.opReference($0, qualified: false) }
         return flow
     }
 

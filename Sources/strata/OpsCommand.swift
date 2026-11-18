@@ -41,7 +41,7 @@ struct OpListing: Encodable {
     let doc: String?
     let detail: String?
     let inside: Bool
-    /// Flows with a step that names this op (its live numbers come from them).
+    /// Flows that name this op, on the flow or on a step (its live numbers come from them).
     let flows: [String]
     let line: Int?
 
@@ -87,7 +87,7 @@ private func collectOps(_ level: Level, path: String, into listings: inout [OpLi
     }
 }
 
-/// "node/op" → ids of the flows whose steps name that op, resolved as the engine does.
+/// "node/op" → ids of the flows that name that op (on the flow or a step), resolved as the engine does.
 private func stepReferences(_ level: Level) -> [String: [String]] {
     var result: [String: [String]] = [:]
     func walk(_ steps: [Step], caller: String?, flow: String) {
@@ -108,7 +108,12 @@ private func stepReferences(_ level: Level) -> [String: [String]] {
             }
         }
     }
-    for flow in level.flows { walk(flow.steps, caller: flow.from ?? flow.by, flow: flow.id) }
+    for flow in level.flows {
+        if let reference = flow.op, let resolved = level.resolveOp(reference, caller: flow.by ?? flow.from, target: nil) {
+            result["\(resolved.node)/\(resolved.op.id)", default: []].append(flow.id)
+        }
+        walk(flow.steps, caller: flow.from ?? flow.by, flow: flow.id)
+    }
     return result
 }
 
@@ -129,7 +134,7 @@ private func renderOps(_ listings: [OpListing], manifest: Manifest) -> String {
     let nodes = Set(listings.map { "\($0.level)\u{0}\($0.node)" }).count
     let named = listings.filter { !$0.flows.isEmpty }.count
     func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
-    sections.append("\(count(listings.count, "op")) on \(count(nodes, "node")) in \(count(levels.count, "level")); \(named) named by flow steps")
+    sections.append("\(count(listings.count, "op")) on \(count(nodes, "node")) in \(count(levels.count, "level")); \(named) named by flows")
     return sections.joined(separator: "\n\n")
 }
 

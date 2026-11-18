@@ -112,6 +112,34 @@ extension LevelValidation {
         return nil
     }
 
+    /// A flow's own `op:`: resolved on the node each run happens at (`by`, or `from`), or `node/op`.
+    func flowOp(_ flow: Flow, runsAt origin: String?, at field: Field) {
+        guard let reference = flow.op else { return }
+        let owner: String
+        let op: Operation
+        if reference.contains("/") {
+            let parts = reference.split(separator: "/").map(String.init)
+            guard let found = lookup(parts[1], on: parts[0], at: field) else { return }
+            (owner, op) = (parts[0], found)
+        } else {
+            guard let origin, let found = lookup(reference, on: origin, at: field) else { return }
+            (owner, op) = (origin, found)
+        }
+        let named = "'\(reference)' is \(Self.article(op.kind)) \(op.kind.rawValue) op"
+        if let buffer = flow.on {
+            if op.kind != .consume {
+                field.diagnose("\(named); a consumer flow performs a consume op", .warning)
+            } else if let consumed = op.target, consumed != buffer, nodes[consumed]?.kind != .port {
+                field.diagnose("'\(op.id)' consumes from '\(consumed)' but this flow is on '\(buffer)'", .warning)
+            }
+            if let by = flow.by, owner != by {
+                field.diagnose("'\(reference)' belongs to '\(owner)'; a consumer flow's op belongs to its consumer '\(by)'", .warning)
+            }
+        } else if op.kind == .consume {
+            field.diagnose("\(named); name it on a consumer flow (on + by)", .warning)
+        }
+    }
+
     func stepOp(_ step: Step, caller: String?, at field: Field) {
         guard let reference = step.op else { return }
         let location = field["op"]

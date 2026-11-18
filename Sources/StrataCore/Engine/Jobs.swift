@@ -129,6 +129,7 @@ extension Simulation {
         let flow = flows[index]
         flow.inFlight -= 1
         flow.latency.add(now - arrived, at: now)
+        if let op = flow.op { recordOp(op, latency: now - arrived, failed: !success) }
         if success {
             flow.totalOK += 1
             flow.ok.add(at: now)

@@ -762,6 +762,31 @@ private func measure(_ format: String, _ values: CVarArg...) {
             check(lookup.rate > 9 && abs(lookup.errors - lookup.rate) < 1e-9 && sim.metrics(flow: "requests").failed == 0,
                   "a down cache should fail its op while the step falls back to a miss: \(lookup.errors) of \(lookup.rate)")
         },
+        CheckCase(name: "engine flow ops count every finished run, including handler failures") {
+            var worker = node("worker", .worker) { $0.concurrency = 8; $0.latency = .fixed(0.01); $0.errors = 0.5; $0.onError = .drop }
+            worker.ops = [op("handle", .consume, target: "queue")]
+            var web = Node(id: "client", kind: .client)
+            web.ops = [op("submit", .publish, target: "queue")]
+            var jobs = consumer("jobs", "queue", "worker")
+            jobs.op = "handle"
+            var requests = source(.every(0.1), [Step(.publish(target: "queue"))])
+            requests.op = "client/submit"
+            var level = Level()
+            level.nodes = [web, node("queue", .queue) { $0.capacity = 100_000 }, worker]
+            level.flows = [requests, jobs]
+            let sim = Simulation(manifest: Manifest(id: "flow-ops", title: "Flow ops", root: level,
+                                                    source: .inline(note: "Checks", index: 0)), seed: 21)
+            sim.run(seconds: 20)
+            let handle = sim.opMetrics(node: "worker", op: "handle")
+            let submit = sim.opMetrics(node: "client", op: "submit")
+            let flow = sim.metrics(flow: "jobs")
+            measure("Consumer flow op: %.2f/s, %.2f errors/s, p50 %.2f ms", handle.rate, handle.errors, (handle.p50 ?? 0) * 1000)
+            check(handle.referenced && abs(handle.rate - 10) < 0.5 && submit.referenced && abs(submit.rate - 10) < 0.5,
+                  "flow ops should count every run: handle \(handle.rate), submit \(submit.rate)")
+            check(handle.total == flow.totalOK + flow.totalFailed && abs(handle.errors - flow.failed) < 1e-9 && handle.errors > 2,
+                  "handler failures must count on the consumer's op: \(handle.errors) vs flow \(flow.failed)")
+            check(abs((handle.p50 ?? 0) - (flow.p50 ?? -1)) < 1e-9, "a flow op should time the whole run")
+        },
         CheckCase(name: "engine op attribution stays within the performance budget") {
             var nodes = (1...5).map { hop in node("hop\(hop)", .service) { $0.concurrency = 128; $0.latency = .fixed(0.002) } }
             for index in nodes.indices { nodes[index].ops = [op("serve", .rpc)] }

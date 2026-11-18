@@ -946,6 +946,28 @@ private func opsFlow(_ steps: String) -> String {
                 line: 15, path: "\(nested).op", "'e' is an inbound op of 'api'; name it on the step that calls 'api'", severity: .warning),
         finding("step op outbound op of the target", opsCase("{id: w, kind: sql, label: W, target: db}", flows: opsFlow("{call: api, op: w}")),
                 line: 15, path: "\(step).op", "'w' is an outbound op of 'api'; name it on a step that 'api' performs", severity: .warning),
+        CheckCase(name: "parser resolves flow ops on the consumer or the source") {
+            let (manifest, diagnostics) = load(opsCase(
+                "{id: serve, kind: http, label: Serve}, {id: jobs, kind: consume, label: Jobs, target: q}, {id: put, kind: publish, label: Put, target: q}",
+                flows: """
+                flows:
+                  - {id: f, from: web, steps: [{call: api, steps: [{publish: q, op: put}]}]}
+                  - {id: g, on: q, by: api, op: jobs}
+                  - {id: h, on: q, by: api, op: api/jobs}
+                """))
+            check(diagnostics.allSatisfy { $0.message.contains("implicit edge 'q->api'") }, "flow ops: \(diagnostics)")
+            check(manifest?.root.flow("g")?.op == "jobs" && manifest?.root.flow("h")?.op == "api/jobs", "flow op was not decoded")
+        },
+        finding("flow op unknown", opsCase("{id: jobs, kind: consume, label: Jobs, target: q}", flows: "flows: [{id: g, on: q, by: api, op: job}]"),
+                line: 15, path: "flows.g.op", "unknown op 'job' on 'api'; did you mean 'jobs'"),
+        finding("flow op on a consumer is not a consume op", opsCase("{id: w, kind: sql, label: W, target: db}", flows: "flows: [{id: g, on: q, by: api, op: w}]"),
+                line: 15, path: "flows.g.op", "'w' is a sql op; a consumer flow performs a consume op", severity: .warning),
+        finding("flow op consumes another buffer", opsCase("{id: c, kind: consume, label: C, target: t}", flows: "flows: [{id: g, on: q, by: api, op: c}]"),
+                line: 15, path: "flows.g.op", "'c' consumes from 't' but this flow is on 'q'", severity: .warning),
+        finding("flow op on another node", opsCase("{id: c, kind: consume, label: C, target: q}", flows: "flows: [{id: g, on: q, by: pay, op: api/c}]"),
+                line: 15, path: "flows.g.op", "a consumer flow's op belongs to its consumer 'pay'", severity: .warning),
+        finding("flow op consume on a source flow", opsCase("{id: c, kind: consume, label: C, target: q}", flows: "flows: [{id: f, from: web, op: api/c}]"),
+                line: 15, path: "flows.f.op", "name it on a consumer flow", severity: .warning),
         CheckCase(name: "parser library warns about unknown op detail manifests") {
             try withTempDirectory { root in
                 try writeManifest(header + """

@@ -214,6 +214,7 @@ final class FlowRuntime {
     var rate: Rate
     var deadline: Double
     var generation = 0
+    let op: Int?
 
     var lastCredit: Double?
     var credit = 1.0
@@ -237,6 +238,7 @@ final class FlowRuntime {
         consumer = flow.by.flatMap { topology.nodeIndex[$0] }
         rate = flow.rate
         deadline = flow.deadline ?? 0
+        op = topology.flowOps[index]
         if let buffer, topology.level.nodes[buffer].kind == .topic { group = TopicGroup() }
     }
 
@@ -282,6 +284,8 @@ struct ProgramTopology {
     var programs: [[Int]] = [[]]
     var steps: [ProgramStep] = []
     var flowPrograms: [Int] = []
+    /// The op each flow names with `op:` (index into `ops`), counted when a run finishes.
+    var flowOps: [Int?] = []
     /// Every op of every node of the level, in node order, and whether any step names it.
     var ops: [(node: String, op: String, referenced: Bool)] = []
     /// "node/op" → index into `ops`.
@@ -301,6 +305,7 @@ struct ProgramTopology {
         for flow in level.flows {
             if let on = flow.on, let by = flow.by { addEdge(on, by, known: &known) }
             flowPrograms.append(compile(flow.steps, from: flow.from ?? flow.by, known: &known))
+            flowOps.append(resolveOp(flow.op, caller: flow.by ?? flow.from, target: nil))
         }
         for (index, node) in level.nodes.enumerated() where node.at == nil {
             self.level.nodes[index].at = GridPoint(Double(index % 4), Double(index / 4))
