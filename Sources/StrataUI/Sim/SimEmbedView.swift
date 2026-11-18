@@ -174,7 +174,7 @@ private struct SimEmbedWorkspace: View {
         self.visible = visible
         self.still = still
         _renderer = State(initialValue: StageRenderer(level: sim.level))
-        terms = TermIndex(manifest: sim.manifest)
+        terms = SimSessions.terms(for: sim)
     }
 
     var body: some View {

@@ -32,6 +32,30 @@ enum SimSessions {
         model.sessions[AppModel.sessionKey(id, sim.path)] = sim
     }
 
+    @MainActor
+    private final class Parts {
+        let terms: TermIndex
+        let renderer: StageRenderer
+        init(_ sim: Simulation) {
+            terms = TermIndex(manifest: sim.manifest)
+            renderer = StageRenderer(level: sim.level)
+        }
+    }
+    private static let parts = NSMapTable<Simulation, Parts>.weakToStrongObjects()
+
+    private static func parts(for sim: Simulation) -> Parts {
+        if let parts = parts.object(forKey: sim) { return parts }
+        let made = Parts(sim)
+        parts.setObject(made, forKey: sim)
+        return made
+    }
+
+    /// The glossary for a session, built once: a new index recompiles its matcher on first use.
+    static func terms(for sim: Simulation) -> TermIndex { parts(for: sim).terms }
+
+    /// The stage layout and drawing caches for a session, built once instead of on every visit.
+    static func renderer(for sim: Simulation) -> StageRenderer { parts(for: sim).renderer }
+
     private final class Handoffs { var keys: Set<String> = [] }
     private static let handoffs = NSMapTable<AppModel, Handoffs>.weakToStrongObjects()
 
@@ -58,6 +82,9 @@ enum SimSessions {
     // Manifest has value semantics. Compare decoded fields, including nested levels, without
     // treating a library refresh for another id as a reason to discard live simulation state.
     nonisolated static func same(_ a: Manifest, _ b: Manifest) -> Bool {
+        // A session's manifest is usually a copy of the library's, sharing every buffer: identical bytes
+        // answer at once, where the reflective walk below takes milliseconds on a large manifest.
+        if withUnsafeBytes(of: a, { x in withUnsafeBytes(of: b) { y in x.elementsEqual(y) } }) { return true }
         func equal(_ a: Any, _ b: Any) -> Bool {
             guard type(of: a) == type(of: b) else { return false }
             if let a = a as? AnyHashable, let b = b as? AnyHashable { return a == b }

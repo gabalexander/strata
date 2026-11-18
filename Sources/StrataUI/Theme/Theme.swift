@@ -56,7 +56,7 @@ public enum Theme {
 
     // Motion: UI chrome animates quickly; the simulation has its own clock.
     public static let snappy = Animation.spring(response: 0.28, dampingFraction: 0.86)
-    public static let gentle = Animation.easeInOut(duration: 0.45)
+    public static let gentle = Animation.easeInOut(duration: 0.25)
 }
 
 /// A panel/card background: raised fill, hairline border.

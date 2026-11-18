@@ -186,7 +186,17 @@ extension Health {
 
 struct SimPanelScroll<Content: View>: View {
     let still: Bool
+    /// Scrolls back to the top when this changes (a new selection or tab), keeping the scroll view
+    /// itself, which is much cheaper than rebuilding it with `.id`.
+    var resetOn: AnyHashable?
     @ViewBuilder var content: Content
+    @State private var position = ScrollPosition(edge: .top)
+
+    init(still: Bool, resetOn: AnyHashable? = nil, @ViewBuilder content: () -> Content) {
+        self.still = still
+        self.resetOn = resetOn
+        self.content = content()
+    }
 
     var body: some View {
         if still {
@@ -198,6 +208,8 @@ struct SimPanelScroll<Content: View>: View {
             }
         } else {
             ScrollView { content }
+                .scrollPosition($position)
+                .onChange(of: resetOn) { position.scrollTo(edge: .top) }
         }
     }
 }

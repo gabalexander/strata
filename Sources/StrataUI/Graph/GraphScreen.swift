@@ -136,6 +136,8 @@ struct GraphScreen: View {
                     }
                     .onEnded { _ in lastMagnification = 1 }
             )
+            // The click that brings the window forward also opens or drags, like the stage.
+            .allowsWindowActivationEvents(true)
             .onRightClick { local, global in
                 hoverPoint = nil
                 if let hit = node(at: local) {

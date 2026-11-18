@@ -116,6 +116,7 @@ private struct SimWorkspace: View {
     @State private var presentationOpacity: Double = 1
     @State private var presentationNode: String?
     @State private var noteIDs: Set<String> = []
+    @State private var pulse = SimPulse()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let terms: TermIndex
@@ -125,9 +126,9 @@ private struct SimWorkspace: View {
         self.id = id
         self.sim = sim
         self.snapshot = snapshot
-        terms = TermIndex(manifest: sim.manifest)
+        terms = SimSessions.terms(for: sim)
         _arrival = arrival
-        _renderer = State(initialValue: StageRenderer(level: sim.level))
+        _renderer = State(initialValue: SimSessions.renderer(for: sim))
         _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
         _tab = State(initialValue: snapshot?.dockTab ?? .controls)
     }
@@ -139,23 +140,35 @@ private struct SimWorkspace: View {
     var body: some View {
         let actions = actions
         GeometryReader { proxy in
+            // Every pane gets an exact frame, so a change inside one (a new selection in the inspector)
+            // lays out that pane alone instead of re-measuring its neighbours' content.
+            let size = proxy.size
+            let inspectorWidth = model.inspectorVisible ? min(Theme.inspectorWidth, max(175, size.width * 0.34)) : 0
+            let columnWidth = max(0, size.width - (model.inspectorVisible ? inspectorWidth + 1 : 0))
+            let dockHeight = model.dockVisible ? min(222, max(133, size.height * 0.33)) : 0
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    SimToolbar(model: model, sim: sim, up: up, parent: detailParent.map { ($0.title, out) },
+                    SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
                                still: snapshot != nil)
+                        .equatable()
+                        .frame(width: columnWidth, height: 44)
                     Rectangle().fill(Theme.border).frame(height: 1)
                     stage(actions)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(width: columnWidth, height: max(0, size.height - 45 - (model.dockVisible ? dockHeight + 1 : 0)))
                     if model.dockVisible {
                         Rectangle().fill(Theme.border).frame(height: 1)
-                        SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, still: snapshot != nil, tab: $tab)
-                            .frame(height: min(222, max(133, proxy.size.height * 0.33)))
+                        SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, pulse: pulse,
+                                still: snapshot != nil, tab: $tab)
+                            .equatable()
+                            .frame(width: columnWidth, height: dockHeight)
                     }
                 }
+                .frame(width: columnWidth, height: size.height)
                 if model.inspectorVisible {
-                    Rectangle().fill(Theme.border).frame(width: 1)
-                    SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, still: snapshot != nil)
-                        .frame(width: min(Theme.inspectorWidth, max(175, proxy.size.width * 0.34)))
+                    Rectangle().fill(Theme.border).frame(width: 1, height: size.height)
+                    SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select,
+                                 pulse: pulse, still: snapshot != nil)
+                        .frame(width: inspectorWidth, height: size.height)
                 }
             }
         }
@@ -176,7 +189,7 @@ private struct SimWorkspace: View {
         SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
                  selection: selection, noteIDs: noteIDs, still: snapshot != nil,
                  onSelect: select, onDive: { if let node = sim.level.node($0) { dive(node) } },
-                 menu: actions.menu, onKey: key)
+                 menu: actions.menu, onKey: key, pulse: pulse)
             .scaleEffect(presentationScale, anchor: viewport.origin(for: presentationNode, in: renderer.layout, compact: false))
             .opacity(presentationOpacity)
             .clipped()
@@ -184,6 +197,9 @@ private struct SimWorkspace: View {
                 if snapshot?.previewMenu == true { SimMenuPreview(items: actions.menu(for: selection)) }
             }
     }
+
+    /// The zoom out of a level runs `Theme.gentle`; the next level opens just before it finishes.
+    private static let routeSwitchDelay = Duration.milliseconds(200)
 
     private func select(_ target: StageSelection?) {
         selection = target
@@ -218,7 +234,7 @@ private struct SimWorkspace: View {
             presentationOpacity = 0
         }
         navigation = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(370))
+            try? await Task.sleep(for: SimWorkspace.routeSwitchDelay)
             guard !Task.isCancelled else { return }
             arrival = SimArrival(destination: destination, forward: false, node: parent.node)
             model.goBack()
@@ -253,7 +269,7 @@ private struct SimWorkspace: View {
             presentationOpacity = 0
         }
         navigation = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(370))
+            try? await Task.sleep(for: SimWorkspace.routeSwitchDelay)
             guard !Task.isCancelled else { return }
             arrival = SimArrival(destination: route, forward: forward, node: node)
             model.open(route, parentRate: parentRate)
@@ -319,13 +335,22 @@ private struct SimWorkspace: View {
 }
 
 @MainActor
-private struct SimToolbar: View {
+private struct SimToolbar: View, Equatable {
     let model: AppModel
     let sim: Simulation
+    let pulse: SimPulse
     let up: (Int) -> Void
     /// Set when this manifest is another manifest's `detail:` deep dive: that level's title and the way out.
     var parent: (title: String, out: () -> Void)?
     var still = false
+
+    /// A selection change re-renders the workspace; the toolbar shows none of it. Its closures act on
+    /// the same session either way, and what it observes (playing, speed, scenario) it reads itself.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.sim === rhs.sim && lhs.pulse === rhs.pulse && lhs.parent?.title == rhs.parent?.title && lhs.still == rhs.still
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -373,7 +398,7 @@ private struct SimToolbar: View {
 
     private var transport: some View {
         HStack(spacing: 6) {
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            SimLive(sim: sim, pulse: pulse) {
                 Text(SimFormat.seconds(sim.now)).font(Theme.mono(11, .medium)).monospacedDigit()
                     .foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }

@@ -19,33 +19,13 @@ struct SimMarkdown: View {
                 if matches.isEmpty {
                     Text(parsed).lineLimit(lineLimit).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    InlineWords(spacing: 3, lineSpacing: 3, lineLimit: lineLimit) {
-                        let pieces = pieces(parsed, plain: plain, matches: matches)
-                        ForEach(pieces.indices, id: \.self) { i in
-                            let piece = pieces[i]
-                            Group {
-                                if let term = piece.term {
-                                    SimTermAnchor(term: term, model: model, index: terms) {
-                                        Text(piece.text).foregroundStyle(Theme.accent)
-                                            .overlay(alignment: .bottom) {
-                                                Canvas { context, size in
-                                                    let line = Path { p in
-                                                        p.move(to: CGPoint(x: 0, y: 0.5))
-                                                        p.addLine(to: CGPoint(x: size.width, y: 0.5))
-                                                    }
-                                                    context.stroke(line, with: .color(Theme.accent.opacity(0.55)),
-                                                                   style: StrokeStyle(lineWidth: 1, dash: [1, 2]))
-                                                }
-                                                .frame(height: 1)
-                                            }
-                                    }
-                                } else {
-                                    Text(piece.text)
-                                }
-                            }
-                            .layoutValue(key: InlineGap.self, value: piece.spaceBefore)
-                        }
-                    }
+                    // One Text per paragraph: a view per word made every inspector and dock rebuild
+                    // lay out dozens of views for a few lines of prose. Words flow as before: any run
+                    // of whitespace, line breaks included, is one space.
+                    let flowing = attributed(paragraph.replacing(#/\s+/#, with: " "))
+                    let text = String(flowing.characters)
+                    SimTermParagraph(text: linked(flowing, plain: text, matches: terms.matches(in: text)),
+                                     model: model, index: terms, lineLimit: lineLimit)
                 }
             }
         }
@@ -85,30 +65,141 @@ struct SimMarkdown: View {
         return parsed
     }
 
-    private func pieces(_ attributed: AttributedString, plain: String,
-                        matches: [(range: Range<String.Index>, term: Term)]) -> [(text: AttributedString, term: Term?, spaceBefore: Bool)] {
-        var pieces: [(AttributedString, Term?, Bool)] = []
+    /// The paragraph as one Text: each glossary term (outside links) is accent coloured, links to its
+    /// card and carries `SimTermRun` so the renderer can underline it and hovering can find it.
+    private func linked(_ attributed: AttributedString, plain: String,
+                        matches: [(range: Range<String.Index>, term: Term)]) -> Text {
+        var segments: [Text] = []
         var start = plain.startIndex
-        var previousEnd = start
         func append(_ range: Range<String.Index>, term: Term?) {
-            guard let lower = AttributedString.Index(range.lowerBound, within: attributed),
+            guard !range.isEmpty, let lower = AttributedString.Index(range.lowerBound, within: attributed),
                   let upper = AttributedString.Index(range.upperBound, within: attributed) else { return }
-            let part = AttributedString(attributed[lower..<upper])
-            let linked = part.runs.contains { $0.link != nil }
-            let separated = plain[previousEnd..<range.lowerBound].contains(where: \.isWhitespace)
-            pieces.append((part, linked ? nil : term, separated))
-            previousEnd = range.upperBound
+            var part = AttributedString(attributed[lower..<upper])
+            guard let term, !part.runs.contains(where: { $0.link != nil }) else {
+                segments.append(Text(part))
+                return
+            }
+            part.link = SimTermParagraph.url(for: term)
+            part.foregroundColor = Theme.accent
+            segments.append(Text(part).customAttribute(SimTermRun(id: term.id)))
         }
-        func words(_ range: Range<String.Index>) {
-            for match in plain[range].matches(of: #/\S+/#) { append(match.range, term: nil) }
-        }
-        for match in matches {
-            words(start..<match.range.lowerBound)
+        for match in matches.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) where match.range.lowerBound >= start {
+            append(start..<match.range.lowerBound, term: nil)
             append(match.range, term: match.term)
             start = match.range.upperBound
         }
-        words(start..<plain.endIndex)
-        return pieces
+        append(start..<plain.endIndex, term: nil)
+        return segments.reduce(Text(verbatim: "")) { Text("\($0)\($1)") }
+    }
+}
+
+/// Marks a glossary term inside a paragraph's Text.
+struct SimTermRun: TextAttribute {
+    let id: String
+}
+
+/// Where the terms of one paragraph were drawn, in the paragraph's own coordinates. Written by the
+/// text renderer, read by hover and clicks; not observed, so neither re-renders anything.
+private final class SimTermLayout: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runs: [(rect: CGRect, id: String)] = []
+    var frame = CGRect.zero
+    var hovered: String?
+    var pending: Task<Void, Never>?
+
+    func set(_ runs: [(rect: CGRect, id: String)]) {
+        lock.lock(); self.runs = runs; lock.unlock()
+    }
+
+    func term(at point: CGPoint) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return runs.first { $0.rect.insetBy(dx: -1, dy: -1).contains(point) }?.id
+    }
+
+    /// The first line of the term, in window coordinates.
+    func anchor(for id: String) -> CGRect? {
+        lock.lock(); defer { lock.unlock() }
+        return runs.first { $0.id == id }.map { $0.rect.offsetBy(dx: frame.minX, dy: frame.minY) }
+    }
+}
+
+/// Draws each term's faint dotted underline and records where the terms are.
+private struct SimTermUnderline: TextRenderer {
+    let layout: SimTermLayout
+
+    func draw(layout text: Text.Layout, in context: inout GraphicsContext) {
+        var runs: [(rect: CGRect, id: String)] = []
+        for line in text {
+            for run in line {
+                if let term = run[SimTermRun.self] {
+                    let rect = run.typographicBounds.rect
+                    runs.append((rect, term.id))
+                    var underline = Path()
+                    underline.move(to: CGPoint(x: rect.minX, y: rect.maxY - 0.5))
+                    underline.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 0.5))
+                    context.stroke(underline, with: .color(Theme.accent.opacity(0.55)),
+                                   style: StrokeStyle(lineWidth: 1, dash: [1, 2]))
+                }
+                context.draw(run)
+            }
+        }
+        layout.set(runs)
+    }
+}
+
+/// A paragraph with glossary terms: hovering a term shows its card after 300 ms, clicking pins it.
+@MainActor
+private struct SimTermParagraph: View {
+    let text: Text
+    let model: AppModel
+    let index: TermIndex
+    let lineLimit: Int?
+    @State private var layout = SimTermLayout()
+    @Environment(\.openURL) private var openURL
+
+    static func url(for term: Term) -> URL? {
+        var components = URLComponents()
+        components.scheme = "strata-term"
+        components.host = "open"
+        components.queryItems = [URLQueryItem(name: "id", value: term.id)]
+        return components.url
+    }
+
+    var body: some View {
+        text
+            .lineSpacing(3)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
+            .textRenderer(SimTermUnderline(layout: layout))
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { layout.frame = $0 }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): hover(layout.term(at: point))
+                case .ended: hover(nil)
+                }
+            }
+            .environment(\.openURL, OpenURLAction { url in
+                guard url.scheme == "strata-term" else { openURL(url); return .handled }
+                let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value
+                guard let id, let term = index.term(id) else { return .discarded }
+                layout.pending?.cancel()
+                model.overlays.showTerm(term, anchor: layout.anchor(for: id) ?? layout.frame, pinned: true, index: index)
+                return .handled
+            })
+            .onDisappear { layout.pending?.cancel() }
+    }
+
+    private func hover(_ id: String?) {
+        guard id != layout.hovered else { return }
+        layout.pending?.cancel()
+        if layout.hovered != nil { model.overlays.hideTerm() }
+        layout.hovered = id
+        guard let id, let term = index.term(id) else { return }
+        layout.pending = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, layout.hovered == id else { return }
+            model.overlays.showTerm(term, anchor: layout.anchor(for: id) ?? layout.frame, index: index)
+        }
     }
 }
 
@@ -144,54 +235,5 @@ struct SimTermAnchor<Content: View>: View {
         }
         .accessibilityAddTraits(.isLink)
         .onDisappear { pending?.cancel() }
-    }
-}
-
-private struct InlineGap: LayoutValueKey {
-    static let defaultValue = false
-}
-
-private struct InlineWords: Layout {
-    let spacing: CGFloat
-    let lineSpacing: CGFloat
-    let lineLimit: Int?
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        lines(proposal.width ?? .infinity, subviews).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let layout = lines(bounds.width, subviews)
-        for (view, frame) in zip(subviews, layout.frames) {
-            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
-                       anchor: .topLeading, proposal: ProposedViewSize(frame.size))
-        }
-    }
-
-    private func lines(_ width: CGFloat, _ subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var height: CGFloat = 0
-        var usedWidth: CGFloat = 0
-        var line = 1
-        var frames: [CGRect] = []
-        for subview in subviews {
-            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
-            let gap = x > 0 && subview[InlineGap.self] ? spacing : 0
-            if x > 0 && x + gap + size.width > width {
-                if let lineLimit, line >= lineLimit { break }
-                line += 1
-                x = 0
-                y += height + lineSpacing
-                height = 0
-            } else {
-                x += gap
-            }
-            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
-            usedWidth = max(usedWidth, x + size.width)
-            x += size.width
-            height = max(height, size.height)
-        }
-        return (CGSize(width: usedWidth, height: y + height), frames)
     }
 }
