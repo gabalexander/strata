@@ -369,17 +369,32 @@ it comes from.
       code: services/orders/domain/order.go:14
 ```
 
-- **Rows** are lists in column order, or maps from column name to value. `null` is SQL NULL.
-- **Sample rows are illustrative.** Make them realistic, but never copy production data.
+- **Columns** take `name` (required), `type`, `pk`, `ref`, `nullable`, `unique` and `note`. `pk` on
+  several columns makes a composite key.
+- **Rows** are lists in column order, or maps from column name to value. Columns a map leaves out
+  are NULL, and so is `null`. A nested mapping or list (a `jsonb` value) is shown as JSON.
+- **Sample rows are illustrative.** Make them realistic and make the ids join, but never copy
+  production data.
 - **`ref`** is `table.column` in the same database node. Use `node.table.column` across nodes.
-- **Volumes** use counts with `k`, `M` or `B` suffixes (`12M`, `40k/day`).
-- **`owner`** names the node that writes the table. It defaults from the ops whose `tables` include
-  it with write access.
+- **Volumes** use counts with `k`, `M` or `B` suffixes (`12M`). Growth is a count per period
+  (`40k/day`, `500/h`, `70k/week`), stored per day.
+- **`owner`** names the node that writes the table. It defaults to the nodes whose ops name the table
+  in `tables` with write or read-write access.
+- **`source`** defaults to the one database, store or search node the entity's node has ops on. With
+  several, the one whose schema has the root table.
 - **Entities** follow `ref` columns from the root to each included table, in either direction:
   `order_items.order_id → orders.id` makes items children of an order, and `orders.user_id → users.id`
-  makes the user its parent.
-- **Validation** checks that refs resolve, row widths match the columns, entities' tables exist in
-  their source, and op `tables` exist in the target's schema when it has one (a warning).
+  makes the user its parent. An include can also join through another include (an item's product).
+- **Validation**:
+  - errors: duplicate tables, columns or entities; a `ref` or `owner` that doesn't resolve; a row
+    whose width doesn't match the columns; an entity whose source is missing or isn't a database,
+    store or search node, whose root or includes aren't in the source's schema, or whose include
+    doesn't join the root through refs;
+  - warnings: op `tables` missing from the target's schema when it has one, duplicate primary keys
+    in sample rows, and a schema on a node that isn't a database, store or search node.
+
+`strata data <file|id>` prints every table with its keys and sample rows, then each entity assembled
+from the first row of its root table.
 
 ## Edges
 
@@ -508,6 +523,13 @@ flows:
     traffic: { peak: 120/s, daily: 4M }
     slo: { p99: 300ms, errors: 0.1% }
 ```
+
+- `traffic.peak` is the busiest rate (`120/s`, `7200/min`, `12k/s`), with no simulation limit.
+  `traffic.daily` is a count per day (`4M`).
+- `slo.p50` and `slo.p99` are durations. `slo.errors` is the highest acceptable error ratio (`0.1%`).
+- A peak below the simulated `rate` is fine. Validation warns when `daily` is less than one minute
+  of peak traffic or more than a whole day of it, when `p50` is above `p99`, and when `p99` is longer
+  than the flow's `deadline`.
 
 The **Pressure** tab answers where the architecture hurts. It combines a static capacity analysis
 of the level with live culprits from the running simulation.
