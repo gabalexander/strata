@@ -173,6 +173,9 @@ final class NodeRuntime {
     var errors = RecentRate()
     var lastFailure: Double?
     var latency = RecentLatency()
+    /// Busy slots integrated over sim time (slot-seconds) up to `busySince`.
+    var busyArea = 0.0
+    var busySince = 0.0
 
     init(_ node: Node, topicConsumer: Bool) {
         self.node = node
@@ -180,6 +183,12 @@ final class NodeRuntime {
         params = base
         replicas = Array(repeating: Replica(), count: base.replicas!)
         if node.kind.role == .buffer { buffer = MessageBuffer() }
+    }
+
+    /// Call before `busy` changes, so `busyArea` stays exact.
+    func accrueBusy(at time: Double) {
+        busyArea += Double(busy) * (time - busySince)
+        busySince = time
     }
 
     var slots: Int {
