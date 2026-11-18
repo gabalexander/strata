@@ -21,36 +21,101 @@ public struct SearchHit: Identifiable, Sendable, Hashable {
     public init(path: String, line: Int, excerpt: String) { self.path = path; self.line = line; self.excerpt = excerpt }
 }
 
+public struct NoteVersion: Codable, Equatable, Sendable {
+    let contentHash: Data
+    let modifiedAt: Date
+}
+
+public enum NoteRead: Equatable, Sendable {
+    case missing
+    case unreadable
+    case readable(String, version: NoteVersion, encoding: String.Encoding)
+
+    public var text: String? {
+        if case .readable(let text, _, _) = self { return text }
+        return nil
+    }
+
+    public var version: NoteVersion? {
+        if case .readable(_, let version, _) = self { return version }
+        return nil
+    }
+}
+
+public enum NoteSave: Sendable {
+    case saved(NoteRead)
+    case changed(NoteRead)
+    case failed
+}
+
 @MainActor
 @Observable
 public final class Vault {
     public let root: URL
     /// Folders first, then notes, alphabetical; only .md files and folders (hidden files skipped).
-    public private(set) var items: [VaultItem] = []
+    public var items: [VaultItem] {
+        _ = revision
+        return index.items
+    }
     public private(set) var revision = 0
 
     @ObservationIgnored private let files = FileManager.default
-    @ObservationIgnored private var notes: [String: IndexedNote] = [:]
-    @ObservationIgnored private var folders: Set<String> = []
-    @ObservationIgnored private var pathsByName: [String: Set<String>] = [:]
-    @ObservationIgnored private var sourcesByTarget: [String: Set<String>] = [:]
-    @ObservationIgnored private var orderedPaths: [String] = []
     @ObservationIgnored private var watcher: VaultWatcher?
 
-    public init(root: URL) {
+    @ObservationIgnored private var index: VaultIndex
+    @ObservationIgnored private var indexing = false
+    @ObservationIgnored private var pendingScan = false
+    @ObservationIgnored private var pendingPaths: Set<String> = []
+    @ObservationIgnored private var mutationGeneration = 0
+
+    public convenience init(root: URL) { self.init(root: root, loadImmediately: true) }
+
+    public init(root: URL, loadImmediately: Bool) {
         self.root = root.standardizedFileURL
-        reload()
+        index = VaultIndex(root: self.root)
+        if loadImmediately { reload() }
     }
 
     public var allNotes: [String] {
         _ = revision
-        return orderedPaths
+        return index.orderedPaths
     }
 
-    public func read(_ path: String) -> String? {
+    public func read(_ path: String) -> String? { readNote(path).text }
+
+    /// Inspects disk directly, including notes the watcher has not indexed yet.
+    public func readNote(_ path: String) -> NoteRead {
         _ = revision
-        guard Self.isMarkdown(path), let url = itemURL(path) else { return nil }
-        return try? String(contentsOf: url, encoding: .utf8)
+        guard VaultIndex.isMarkdown(path), let url = index.itemURL(path) else { return .unreadable }
+        return VaultIndex.readNote(at: url)
+    }
+
+    /// Saves an editor draft only if the current file still matches the editor's base.
+    public func saveEdit(_ path: String, text: String, basedOn base: NoteVersion) -> NoteSave {
+        guard VaultIndex.isMarkdown(path), let url = index.itemURL(path) else { return .failed }
+        let disk = VaultIndex.readNote(at: url)
+        guard disk != .unreadable else { return .failed }
+        guard disk.version == base else { return .changed(disk) }
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            return .failed
+        }
+        let saved = VaultIndex.readNote(at: url)
+        refresh(paths: [path])
+        guard saved != .unreadable else { return .failed }
+        return saved.text == text ? .saved(saved) : .changed(saved)
+    }
+
+    /// Creates a note at exactly this path, failing if anything already exists there.
+    @discardableResult public func createNote(at path: String, text: String = "") -> Bool {
+        guard VaultIndex.isMarkdown(path), let url = index.itemURL(path) else { return false }
+        do {
+            try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url, options: .withoutOverwriting)
+        } catch { return false }
+        refresh(paths: [path])
+        return true
     }
 
     public func write(_ path: String, _ text: String) {
@@ -59,7 +124,7 @@ public final class Vault {
 
     /// Saves atomically and updates the index before returning.
     @discardableResult public func save(_ path: String, _ text: String) -> Bool {
-        guard Self.isMarkdown(path), let url = itemURL(path) else { return false }
+        guard VaultIndex.isMarkdown(path), let url = index.itemURL(path) else { return false }
         do {
             try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try text.write(to: url, atomically: true, encoding: .utf8)
@@ -87,25 +152,27 @@ public final class Vault {
 
     /// Returns the new path, or nil if the rename failed. Updates [[links]] to the note.
     @discardableResult public func rename(_ path: String, to newName: String) -> String? {
-        let isFolder = folders.contains(path)
-        guard isFolder || notes[path] != nil,
+        reload()
+        let isFolder = index.folders.contains(path)
+        guard isFolder || index.containsNote(path),
               let name = Self.cleanName(newName, stripExtension: !isFolder) else { return nil }
-        return relocate(path, to: Self.join(Self.parent(path), name + (isFolder ? "" : ".md")))
+        return relocate(path, to: VaultIndex.join(VaultIndex.parent(path), name + (isFolder ? "" : ".md")))
     }
 
     /// Moves an item to a different vault folder and rewrites links to its notes.
     @discardableResult public func move(_ path: String, toFolder folder: String?) -> String? {
+        reload()
         let directory = folder ?? ""
-        guard directory.isEmpty || folders.contains(directory),
+        guard directory.isEmpty || index.folders.contains(directory),
               let name = path.split(separator: "/").last else { return nil }
-        return relocate(path, to: Self.join(directory, String(name)))
+        return relocate(path, to: VaultIndex.join(directory, String(name)))
     }
 
     /// Moves to the macOS Trash (recoverable).
     public func trash(_ path: String) { _ = try? moveToTrash(path) }
 
     @discardableResult public func moveToTrash(_ path: String) throws -> URL? {
-        guard notes[path] != nil || folders.contains(path), let url = itemURL(path) else {
+        guard index.containsNote(path) || index.folders.contains(path), let url = index.itemURL(path) else {
             throw CocoaError(.fileNoSuchFile)
         }
         var destination: NSURL?
@@ -115,7 +182,7 @@ public final class Vault {
     }
 
     public func reveal(_ path: String) {
-        guard let url = itemURL(path), files.fileExists(atPath: url.path) else { return }
+        guard let url = index.itemURL(path), files.fileExists(atPath: url.path) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -125,19 +192,19 @@ public final class Vault {
         _ = revision
         let target = link.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
         let name = target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
-        return resolveTarget(name.trimmingCharacters(in: .whitespacesAndNewlines))
+        return index.resolveTarget(name.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     public func backlinks(to path: String) -> [String] {
         _ = revision
-        guard notes[path] != nil else { return [] }
-        return sources(for: path).filter { $0 != path && backlinkRange(from: $0, to: path) != nil }
-            .sorted(by: Self.alphabetical)
+        guard index.containsNote(path) else { return [] }
+        return index.sources(for: path).filter { $0 != path && index.backlinkRange(from: $0, to: path) != nil }
+            .sorted(by: VaultIndex.alphabetical)
     }
 
     public func backlinkExcerpt(from source: String, to path: String) -> String? {
         _ = revision
-        guard let note = notes[source], let hit = backlinkRange(from: source, to: path) else { return nil }
+        guard let note = index.notes[source], let hit = index.backlinkRange(from: source, to: path) else { return nil }
         let text = note.text as NSString
         return text.substring(with: text.lineRange(for: hit)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -145,34 +212,33 @@ public final class Vault {
     /// Wiki links in source order, including aliases and heading fragments.
     public func outgoingLinks(from path: String) -> [NoteSyntax.WikiLink] {
         _ = revision
-        return notes[path]?.links ?? []
+        return index.notes[path]?.links ?? []
     }
 
     /// Library IDs referenced by strata fences in source order.
     public func embeddedSimIDs(in path: String) -> [String] {
         _ = revision
-        return notes[path]?.embeds ?? []
+        return index.notes[path]?.embeds ?? []
     }
 
     public func search(_ query: String) -> [SearchHit] {
         _ = revision
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        var titleMatches: [SearchHit] = []
-        var bodyMatches: [SearchHit] = []
-        for path in orderedPaths {
-            guard let note = notes[path] else { continue }
-            let hits = note.lines.indices.compactMap { index -> SearchHit? in
-                guard note.lines[index].range(of: query, options: .caseInsensitive) != nil else { return nil }
-                return SearchHit(path: path, line: index + 1, excerpt: note.excerpt(at: index, matching: query))
-            }
-            if Self.title(path).range(of: query, options: .caseInsensitive) != nil {
-                titleMatches += hits.isEmpty ? [SearchHit(path: path, line: 1, excerpt: note.excerpt(at: 0))] : hits
-            } else {
-                bodyMatches += hits
-            }
+        return index.search(query, checkCancellation: {}).flatMap(\.hits)
+    }
+
+    /// Searches a snapshot in bounded batches. Cancelling the caller cancels the worker.
+    public func searchNotes(_ query: String) async throws -> [NoteSearchGroup] {
+        let snapshot = index
+        let worker = Task.detached(priority: .userInitiated) {
+            try snapshot.search(query, checkCancellation: { try Task.checkCancellation() })
         }
-        return titleMatches + bodyMatches
+        return try await withTaskCancellationHandler {
+            let result = try await worker.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     /// The personal note attached to a node of a sim: "Sims/<sim>/<level path…>/<node>.md".
@@ -182,39 +248,30 @@ public final class Vault {
 
     public func hasNote(_ path: String) -> Bool {
         _ = revision
-        return notes[path] != nil
+        return index.containsNote(path)
     }
 
     /// Resolves a local attachment relative to its note, keeping access within the vault.
     public func attachmentURL(_ path: String, relativeTo note: String) -> URL? {
         let decoded = path.removingPercentEncoding ?? path
         guard !decoded.hasPrefix("/"), URLComponents(string: decoded)?.scheme == nil else { return nil }
-        let url = root.appendingPathComponent(Self.join(Self.parent(note), decoded)).standardizedFileURL
-        guard let relative = relativePath(of: url), let safe = itemURL(relative),
+        let url = root.appendingPathComponent(VaultIndex.join(VaultIndex.parent(note), decoded)).standardizedFileURL
+        guard let relative = index.relativePath(of: url), let safe = index.itemURL(relative),
               (try? safe.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
         return safe
     }
 
-    /// Copies the seed notes (Resources/Vault) into an empty or missing vault directory.
+    /// Copies the bundled notes into an empty vault and indexes them immediately.
     public func seedIfEmpty(from seed: URL? = StrataResources.url("Vault")) {
         guard let seed else { return }
-        if files.fileExists(atPath: root.path) {
-            guard let contents = try? files.contentsOfDirectory(atPath: root.path), contents.isEmpty else { return }
-        }
-        do {
-            for url in try files.contentsOfDirectory(at: seed, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
-                try files.createDirectory(at: root, withIntermediateDirectories: true)
-                let destination = root.appendingPathComponent(url.lastPathComponent)
-                try files.copyItem(at: url, to: destination)
-            }
-        } catch {
-            // Index any files already copied if the seed could only be installed in part.
-        }
+        index.seedIfEmpty(from: seed)
         reload()
     }
 
-    /// Starts watching the vault for outside changes (an agent editing a note).
-    public func startWatching() {
+    /// Starts watching and loads the first index on a worker, optionally seeding an empty vault.
+    public func startWatching() { startWatching(seedFrom: nil) }
+
+    public func startWatching(seedFrom seed: URL?) {
         guard watcher == nil else { return }
         try? files.createDirectory(at: root, withIntermediateDirectories: true)
         let watchedRoot = root.resolvingSymlinksInPath()
@@ -223,22 +280,67 @@ public final class Vault {
             roots.append(String(cString: canonical))
             free(canonical)
         }
-        let prefixes = Set(roots.map { $0 + "/" })
+        let prefixes = Set(roots.map { $0 + "/" }).sorted { $0.count > $1.count }
         watcher = VaultWatcher(root: watchedRoot) { [weak self] paths, fullScan in
             guard let self else { return }
-            if fullScan { self.reload() }
-            else {
-                self.refresh(paths: paths.compactMap { path in
+            if fullScan {
+                self.pendingScan = true
+            } else {
+                self.pendingPaths.formUnion(paths.compactMap { path in
                     prefixes.first(where: path.hasPrefix).map { String(path.dropFirst($0.count)) }
                 })
             }
+            self.indexPendingChanges()
         }
-        reload()
+        pendingScan = true
+        indexPendingChanges(seedFrom: seed)
+    }
+
+    private func indexPendingChanges(seedFrom seed: URL? = nil) {
+        guard !indexing, pendingScan || !pendingPaths.isEmpty else { return }
+        let fullScan = pendingScan
+        let paths = pendingPaths
+        pendingScan = false
+        pendingPaths = []
+        indexing = true
+        let generation = mutationGeneration
+        let base = index
+        Task { @MainActor [weak self] in
+            let (updated, changed) = await Task.detached(priority: .utility) {
+                var updated = base
+                if let seed { updated.seedIfEmpty(from: seed) }
+                let changed = fullScan ? updated.reload() : updated.refresh(paths: paths)
+                return (updated, changed)
+            }.value
+            guard let self else { return }
+            self.indexing = false
+            if self.mutationGeneration == generation {
+                if changed {
+                    self.index = updated
+                    self.revision += 1
+                }
+            } else {
+                // A local write published a newer index while the scan was in flight.
+                self.pendingScan = self.pendingScan || fullScan
+                self.pendingPaths.formUnion(paths)
+            }
+            self.indexPendingChanges()
+        }
+    }
+
+    private func reload() {
+        mutationGeneration += 1
+        if index.reload() { revision += 1 }
+    }
+
+    private func refresh(paths: [String]) {
+        mutationGeneration += 1
+        if index.refresh(paths: Set(paths)) { revision += 1 }
     }
 
     private func relocate(_ path: String, to newPath: String) -> String? {
-        guard notes[path] != nil || folders.contains(path),
-              let oldURL = itemURL(path), let newURL = itemURL(newPath),
+        guard index.containsNote(path) || index.folders.contains(path),
+              let oldURL = index.itemURL(path), let newURL = index.itemURL(newPath),
               !newPath.hasPrefix(path + "/") else { return nil }
         guard path != newPath else { return path }
 
@@ -248,45 +350,73 @@ public final class Vault {
                 .contains(newURL.lastPathComponent)) == false
         guard caseChange || !files.fileExists(atPath: newURL.path) else { return nil }
 
-        let moves = Dictionary(uniqueKeysWithValues: orderedPaths.compactMap { note -> (String, String)? in
+        let moves = Dictionary(uniqueKeysWithValues: index.orderedPaths.compactMap { note -> (String, String)? in
             guard note == path || note.hasPrefix(path + "/") else { return nil }
             return (note, newPath + note.dropFirst(path.count))
         })
 
-        let affected = moves.keys.reduce(into: Set<String>()) { $0.formUnion(sources(for: $1)) }
-        var rewrites: [(path: String, before: String, after: String)] = []
-        for source in affected {
-            guard let current = read(source) else { return nil }
-            let note = notes[source].flatMap { $0.text == current ? $0 : nil } ?? IndexedNote(current, path: source)
+        let projectedPaths = Set(index.orderedPaths).subtracting(moves.keys).union(moves.values)
+        var projectedNames = index.pathsByName
+        for old in moves.keys { projectedNames[VaultIndex.title(old).lowercased()]?.remove(old) }
+        for new in moves.values { projectedNames[VaultIndex.title(new).lowercased(), default: []].insert(new) }
+        func projectedTarget(_ target: String) -> String? {
+            VaultIndex.resolveTarget(target, contains: projectedPaths.contains, pathsByName: projectedNames)
+        }
+
+        var affected: Set<String> = []
+        for (old, new) in moves {
+            affected.formUnion(index.sources(for: old))
+            affected.formUnion(index.sources(for: new))
+        }
+
+        var rewrites: [(path: String, version: NoteVersion, after: Data)] = []
+        for source in affected.sorted() {
+            guard let note = index.notes[source],
+                  case .readable(let current, let version, let encoding) = readNote(source),
+                  version == index.versions[source] else { return nil }
             let edited = NSMutableString(string: current)
             for link in note.links.reversed() {
-                guard let destination = resolveTarget(link.target), let replacement = moves[destination] else { continue }
-                let fullPath = String(replacement.dropLast(3))
-                let name = Self.title(replacement)
-                let usePath = link.target.contains("/") || (pathsByName[name.lowercased()] ?? [])
-                    .contains(where: { $0 != destination && moves[$0] == nil })
-                let newTarget = (usePath ? fullPath : name) + (Self.isMarkdown(link.target) ? ".md" : "")
-                edited.replaceCharacters(in: link.targetRange, with: newTarget)
+                guard let destination = index.resolveTarget(link.target) else { continue }
+                let desired = moves[destination] ?? destination
+                guard desired != destination || projectedTarget(link.target) != desired else { continue }
+
+                let name = VaultIndex.title(desired)
+                let suffix = VaultIndex.isMarkdown(link.target) ? String(desired.suffix(3)) : ""
+                let short = name + suffix
+                let full = VaultIndex.linkKey(desired, folded: false) + suffix
+                let shortIsSafe = !link.target.contains("/") && projectedNames[name.lowercased()]?.count == 1
+                    && projectedTarget(short) == desired
+                let target = shortIsSafe ? short : (projectedTarget(full) == desired ? full : desired)
+                guard NoteSyntax.wikiLinks(in: "[[\(target)]]").first?.target == target,
+                      projectedTarget(target) == desired else { return nil }
+                edited.replaceCharacters(in: link.targetRange, with: target)
             }
             let after = edited as String
-            if after != current { rewrites.append((source, current, after)) }
+            if !after.utf8.elementsEqual(current.utf8) {
+                rewrites.append((source, version, after.data(using: encoding) ?? Data(after.utf8)))
+            }
         }
 
         var moved = false
-        var applied: [(url: URL, before: String)] = []
+        var applied: [(url: URL, before: Data, after: Data)] = []
         do {
             try moveItem(from: oldURL, to: newURL, caseChange: caseChange)
             moved = true
             for rewrite in rewrites {
-                guard let url = itemURL(moves[rewrite.path] ?? rewrite.path),
-                      try String(contentsOf: url, encoding: .utf8) == rewrite.before else {
+                guard let url = index.itemURL(moves[rewrite.path] ?? rewrite.path) else {
                     throw CocoaError(.fileWriteUnknown)
                 }
-                try rewrite.after.write(to: url, atomically: true, encoding: .utf8)
-                applied.append((url, rewrite.before))
+                let before = try Data(contentsOf: url)
+                guard VaultIndex.readNote(at: url).version == rewrite.version else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try rewrite.after.write(to: url, options: .atomic)
+                applied.append((url, before, rewrite.after))
             }
         } catch {
-            for rewrite in applied.reversed() { try? rewrite.before.write(to: rewrite.url, atomically: true, encoding: .utf8) }
+            for rewrite in applied.reversed() where (try? Data(contentsOf: rewrite.url)) == rewrite.after {
+                try? rewrite.before.write(to: rewrite.url, options: .atomic)
+            }
             if moved { try? moveItem(from: newURL, to: oldURL, caseChange: caseChange) }
             reload()
             return nil
@@ -310,151 +440,9 @@ public final class Vault {
         }
     }
 
-    private func resolveTarget(_ target: String) -> String? {
-        guard !target.isEmpty else { return nil }
-        let exact = Self.isMarkdown(target) ? target : target + ".md"
-        if notes[exact] != nil { return exact }
-        guard !target.contains("/") else { return nil }
-        return pathsByName[Self.title(target).lowercased()]?.min {
-            let firstDepth = $0.split(separator: "/").count
-            let secondDepth = $1.split(separator: "/").count
-            return firstDepth == secondDepth ? Self.alphabetical($0, $1) : firstDepth < secondDepth
-        }
-    }
-
-    private func sources(for path: String) -> Set<String> {
-        let fullPath = String(path.dropLast(3)).lowercased()
-        return (sourcesByTarget[fullPath] ?? []).union(sourcesByTarget[Self.title(path).lowercased()] ?? [])
-    }
-
-    private func backlinkRange(from source: String, to path: String) -> NSRange? {
-        notes[source]?.links.first { resolveTarget($0.target) == path }?.range
-    }
-
-    private func replaceNote(at path: String, with text: String?) -> Bool {
-        guard notes[path]?.text != text else { return false }
-        let name = Self.title(path).lowercased()
-        if let old = notes.removeValue(forKey: path) {
-            for key in Set(old.links.map { Self.linkKey($0.target) }) {
-                sourcesByTarget[key]?.remove(path)
-                if sourcesByTarget[key]?.isEmpty == true { sourcesByTarget[key] = nil }
-            }
-            pathsByName[name]?.remove(path)
-            if pathsByName[name]?.isEmpty == true { pathsByName[name] = nil }
-        }
-        if let text {
-            let note = IndexedNote(text, path: path)
-            notes[path] = note
-            pathsByName[name, default: []].insert(path)
-            for key in Set(note.links.map { Self.linkKey($0.target) }) {
-                sourcesByTarget[key, default: []].insert(path)
-            }
-        }
-        return true
-    }
-
-    private func reload() {
-        let listing = scan(root)
-        reconcile(listing.notes, removed: Set(notes.keys).subtracting(listing.notes.keys), folders: listing.folders)
-    }
-
-    private func refresh(paths: [String]) {
-        let distinct = Set(paths)
-        if Set(distinct.map { $0.lowercased() }).count < distinct.count {
-            reload()
-            return
-        }
-        var nextFolders = folders
-        var changed: [String: String] = [:]
-        var removed: Set<String> = []
-        for path in distinct.sorted() {
-            let type = try? itemURL(path)?.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
-            if type?.isDirectory == true || folders.contains(path) {
-                let listing = itemURL(path).flatMap { type?.isDirectory == true ? scan($0) : nil } ?? (folders: [], notes: [:])
-                nextFolders.subtract(folders.filter { $0 == path || $0.hasPrefix(path + "/") })
-                nextFolders.formUnion(listing.folders)
-                if type?.isDirectory == true {
-                    var folder = path
-                    while !folder.isEmpty {
-                        nextFolders.insert(folder)
-                        folder = Self.parent(folder)
-                    }
-                }
-                removed.formUnion(notes.keys.filter { ($0 == path || $0.hasPrefix(path + "/")) && listing.notes[$0] == nil })
-                changed.merge(listing.notes) { _, new in new }
-            } else if Self.isMarkdown(path) {
-                if type?.isRegularFile == true, let url = itemURL(path), let current = try? String(contentsOf: url, encoding: .utf8) {
-                    changed[path] = current
-                    var parent = Self.parent(path)
-                    while !parent.isEmpty {
-                        nextFolders.insert(parent)
-                        parent = Self.parent(parent)
-                    }
-                } else { removed.insert(path) }
-            }
-        }
-        reconcile(changed, removed: removed.subtracting(changed.keys), folders: nextFolders)
-    }
-
-    private func reconcile(_ changed: [String: String], removed: Set<String>, folders nextFolders: Set<String>) {
-        var structureChanged = folders != nextFolders || !removed.isDisjoint(with: notes.keys)
-        var contentChanged = false
-        for path in removed {
-            if replaceNote(at: path, with: nil) { contentChanged = true }
-        }
-        for (path, content) in changed {
-            if notes[path] == nil { structureChanged = true }
-            if replaceNote(at: path, with: content) { contentChanged = true }
-        }
-        if structureChanged {
-            folders = nextFolders
-            orderedPaths = notes.keys.sorted(by: Self.alphabetical)
-            rebuildTree()
-        }
-        if structureChanged || contentChanged { revision += 1 }
-    }
-
-    private func scan(_ directory: URL) -> (folders: Set<String>, notes: [String: String]) {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
-        guard let contents = files.enumerator(at: directory, includingPropertiesForKeys: Array(keys), options: .skipsHiddenFiles) else {
-            return ([], [:])
-        }
-        var folders: Set<String> = []
-        var found: [String: String] = [:]
-        for case let url as URL in contents {
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isSymbolicLink != true, let path = relativePath(of: url) else {
-                contents.skipDescendants()
-                continue
-            }
-            if values.isDirectory == true { folders.insert(path) }
-            else if values.isRegularFile == true, Self.isMarkdown(path),
-                    let text = try? String(contentsOf: url, encoding: .utf8) { found[path] = text }
-        }
-        return (folders, found)
-    }
-
-    private func rebuildTree() {
-        let children = Dictionary(grouping: Array(folders) + orderedPaths, by: Self.parent)
-        func build(_ parent: String) -> [VaultItem] {
-            (children[parent] ?? []).sorted {
-                let firstIsFolder = folders.contains($0)
-                let secondIsFolder = folders.contains($1)
-                if firstIsFolder != secondIsFolder { return firstIsFolder }
-                return Self.alphabetical($0, $1)
-            }.map { path in
-                if folders.contains(path) {
-                    return VaultItem(path: path, name: (path as NSString).lastPathComponent, isFolder: true, children: build(path))
-                }
-                return VaultItem(path: path, name: Self.title(path), isFolder: false)
-            }
-        }
-        items = build("")
-    }
-
     private func createUnique(in folder: String?, base: String, suffix: String, create: (URL) throws -> Void) -> String {
         let folder = folder ?? ""
-        guard let parent = folder.isEmpty ? root : itemURL(folder) else { return "" }
+        guard let parent = folder.isEmpty ? root : index.itemURL(folder) else { return "" }
         do { try files.createDirectory(at: parent, withIntermediateDirectories: true) }
         catch { return "" }
 
@@ -466,7 +454,7 @@ public final class Vault {
             }
             do {
                 try create(url)
-                let path = Self.join(folder, name)
+                let path = VaultIndex.join(folder, name)
                 refresh(paths: [path])
                 return path
             } catch let error as CocoaError where error.code == .fileWriteFileExists {
@@ -476,43 +464,9 @@ public final class Vault {
         return ""
     }
 
-    private func itemURL(_ path: String) -> URL? {
-        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && !$0.hasPrefix(".") && !$0.contains("\0") }) else { return nil }
-        var url = root
-        for part in parts {
-            url.appendPathComponent(String(part))
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { return nil }
-        }
-        return url
-    }
-
-    private func relativePath(of url: URL) -> String? {
-        let value = url.standardizedFileURL.path
-        for directory in [root.path, root.resolvingSymlinksInPath().path] where value.hasPrefix(directory + "/") {
-            return String(value.dropFirst(directory.count + 1))
-        }
-        return nil
-    }
-
-    private static func alphabetical(_ lhs: String, _ rhs: String) -> Bool {
-        let order = lhs.localizedStandardCompare(rhs)
-        return order == .orderedSame ? lhs < rhs : order == .orderedAscending
-    }
-
-    private static func isMarkdown(_ path: String) -> Bool { (path as NSString).pathExtension.lowercased() == "md" }
-    private static func parent(_ path: String) -> String { (path as NSString).deletingLastPathComponent }
-    private static func title(_ path: String) -> String { linkKey((path as NSString).lastPathComponent, folded: false) }
-    private static func join(_ folder: String, _ name: String) -> String { folder.isEmpty ? name : folder + "/" + name }
-
-    private static func linkKey(_ target: String, folded: Bool = true) -> String {
-        let key = isMarkdown(target) ? String(target.dropLast(3)) : target
-        return folded ? key.lowercased() : key
-    }
-
     private static func cleanName(_ name: String, stripExtension: Bool) -> String? {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = stripExtension ? linkKey(name, folded: false) : name
+        let base = stripExtension ? VaultIndex.linkKey(name, folded: false) : name
         guard !base.isEmpty, !base.hasPrefix("."), !base.contains("/"),
               base.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
         return base

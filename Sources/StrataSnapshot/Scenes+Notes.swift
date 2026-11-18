@@ -32,6 +32,10 @@ import StrataUI
             let model = fixture.model(.note(fixture.nodeNote))
             return AnyView(NoteScreen(model: model, path: fixture.nodeNote, initiallyReading: true))
         },
+        Scene(name: "notes-unreadable", size: CGSize(width: 920, height: 590), hosted: true) {
+            let path = fixture.blockedNote
+            return AnyView(NoteScreen(model: fixture.model(.note(path)), path: path))
+        },
         Scene(name: "notes-empty", size: CGSize(width: 920, height: 590), hosted: true) {
             let path = "System design/Failover notes.md"
             return AnyView(NoteScreen(model: fixture.model(.note(path)), path: path))
@@ -43,6 +47,7 @@ import StrataUI
 private final class NoteScenesFixture {
     let richNote = "System design/Checkout failure notes.md"
     let nodeNote = "Sims/checkout/orders/tx.md"
+    let blockedNote = "Unavailable.md"
     private let root = FileManager.default.temporaryDirectory.appendingPathComponent("strata-notes-scene-\(UUID().uuidString)")
     private let vault: Vault
 
@@ -87,6 +92,9 @@ private final class NoteScenesFixture {
     deinit { try? FileManager.default.removeItem(at: root) }
 
     func model(_ route: Route) -> AppModel {
+        if route == .note(blockedNote) {
+            try? FileManager.default.createDirectory(at: root.appendingPathComponent(blockedNote), withIntermediateDirectories: false)
+        }
         let model = AppModel(library: Library(manifests: [Fixtures.checkout]), vault: vault)
         model.open(route)
         return model

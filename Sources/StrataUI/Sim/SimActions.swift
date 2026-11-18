@@ -123,7 +123,7 @@ struct SimActions {
             if case .inline(let note, _) = sim.manifest.source { target = note }
             else { target = sim.manifest.id }
             let text = "# \(node.label)\n\n[[\(target)]]\n\n## What it does\n\n## Gotchas\n"
-            model.vault.write(path, text)
+            model.vault.createNote(at: path, text: text)
         }
         model.open(.note(path))
     }

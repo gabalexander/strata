@@ -25,9 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let library = Library(dirs: config.simURLs)
         library.startWatching()
-        let vault = Vault(root: config.vaultURL)
-        vault.seedIfEmpty()
-        vault.startWatching()
+        let vault = Vault(root: config.vaultURL, loadImmediately: false)
+        vault.startWatching(seedFrom: StrataResources.url("Vault"))
 
         let model = AppModel(library: library, vault: vault, config: config)
         self.model = model

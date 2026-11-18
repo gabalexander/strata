@@ -144,10 +144,8 @@ struct NoteReader: View {
     }
 
     private func inline(_ content: String, index: TermIndex, font: Font = Theme.ui(15)) -> some View {
-        NoteInline(content: content, index: index, overlays: model.overlays) { target, heading in
-            NoteLinks.open(target, heading: heading, from: path, model: model)
-        }
-        .font(font)
+        NoteInline(content: content, index: index, model: model, path: path)
+            .font(font)
         .lineSpacing(6)
     }
 
@@ -257,11 +255,13 @@ private struct TermRenderer: TextRenderer {
 }
 
 @MainActor
-private struct NoteInline: View {
+struct NoteInline: View {
     let content: String
     let index: TermIndex
-    let overlays: Overlays
-    let open: (String, String?) -> Void
+    let model: AppModel
+    let path: String
+
+    private var overlays: Overlays { model.overlays }
 
     @State private var hitMap = TermHitMap()
     @State private var frame: CGRect = .zero
@@ -283,9 +283,14 @@ private struct NoteInline: View {
         }
     }
 
-    private func openURL(_ url: URL) -> OpenURLAction.Result {
-        guard url.scheme == "strata", let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return .systemAction
+    func openURL(_ url: URL) -> OpenURLAction.Result {
+        if let route = Route(strataURL: url.absoluteString) {
+            model.open(route)
+            return .handled
+        }
+        guard url.scheme == NoteLinks.internalScheme,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.scheme?.lowercased() == "strata" ? .discarded : .systemAction
         }
         let items = components.queryItems ?? []
         let target = items.first { $0.name == "target" }?.value ?? ""
@@ -294,7 +299,7 @@ private struct NoteInline: View {
             let rect = hover?.term.id == term.id ? hover?.rect : hitMap.storage.withLock { hits in hits.first { $0.term.id == term.id }?.rect }
             overlays.showTerm(term, anchor: anchor(rect), pinned: true, index: index)
         } else if url.host == "note" {
-            open(target, items.first { $0.name == "heading" }?.value)
+            NoteLinks.open(target, heading: items.first { $0.name == "heading" }?.value, from: path, model: model)
         }
         return .handled
     }

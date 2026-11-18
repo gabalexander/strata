@@ -410,6 +410,7 @@ final class NoteTextView: NSTextView {
         isAutomaticLinkDetectionEnabled = false
         isAutomaticDataDetectionEnabled = false
         isAutomaticTextCompletionEnabled = false
+        writingToolsBehavior = .none
         smartInsertDeleteEnabled = false
         drawsBackground = false
         insertionPointColor = NSColor(Theme.accent)
@@ -425,6 +426,35 @@ final class NoteTextView: NSTextView {
         font = NoteEditorStyle.font
         textColor = NSColor(Theme.text)
     }
+
+    private static let panelActions: Set<Selector> = [
+        #selector(showGuessPanel(_:)), #selector(complete(_:)), #selector(orderFrontSubstitutionsPanel(_:)),
+        #selector(orderFrontSpacingPanel(_:)), #selector(orderFrontLinkPanel(_:)), #selector(orderFrontListPanel(_:)),
+        #selector(orderFrontTablePanel(_:)), #selector(showWritingTools(_:)), #selector(showContextMenuForSelection(_:)),
+        #selector(quickLookPreviewItems(_:)), #selector(orderFrontFontPanel(_:)), #selector(orderFrontColorPanel(_:)),
+        #selector(orderFrontCharacterPalette(_:)), #selector(startDictation(_:)),
+    ]
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if let action = item.action, Self.panelActions.contains(action) { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func showGuessPanel(_ sender: Any?) {}
+    override func complete(_ sender: Any?) {}
+    override func orderFrontSubstitutionsPanel(_ sender: Any?) {}
+    override func orderFrontSpacingPanel(_ sender: Any?) {}
+    override func orderFrontLinkPanel(_ sender: Any?) {}
+    override func orderFrontListPanel(_ sender: Any?) {}
+    override func orderFrontTablePanel(_ sender: Any?) {}
+    override func showWritingTools(_ sender: Any?) {}
+    override func showContextMenuForSelection(_ sender: Any?) {}
+    override func quickLookPreviewItems(_ sender: Any?) {}
+    override func quickLook(with event: NSEvent) {}
+    @objc func orderFrontFontPanel(_ sender: Any?) {}
+    @objc func orderFrontColorPanel(_ sender: Any?) {}
+    @objc func orderFrontCharacterPalette(_ sender: Any?) {}
+    @objc func startDictation(_ sender: Any?) {}
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if window?.firstResponder === self, event.modifierFlags.contains(.command), key?(event) == true { return true }

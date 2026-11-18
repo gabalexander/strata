@@ -6,7 +6,7 @@ struct ForceLayout {
         let y: Int
     }
 
-    let graph: GraphData
+    private(set) var graph: GraphData
     var positions: [CGPoint]
     private var velocities: [CGPoint]
     private var temperature: CGFloat = 1
@@ -21,6 +21,19 @@ struct ForceLayout {
             return CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
         }
         velocities = Array(repeating: .zero, count: positions.count)
+    }
+
+    mutating func updateGraph(_ updated: GraphData) {
+        if !graph.nodes.elementsEqual(updated.nodes, by: { $0.route == $1.route }) {
+            let defaults = ForceLayout(graph: updated)
+            let indices = Dictionary(graph.nodes.enumerated().map { ($0.element.route, $0.offset) },
+                                     uniquingKeysWith: { first, _ in first })
+            positions = updated.nodes.enumerated().map { index, node in
+                indices[node.route].map { positions[$0] } ?? defaults.positions[index]
+            }
+            velocities = updated.nodes.map { node in indices[node.route].map { velocities[$0] } ?? .zero }
+        }
+        graph = updated
     }
 
     mutating func reheat() {

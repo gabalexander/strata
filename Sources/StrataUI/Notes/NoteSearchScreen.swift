@@ -14,10 +14,11 @@ public struct SearchScreen: View {
         self.model = model
         self.query = query
         _input = State(initialValue: query)
-        _results = State(initialValue: SearchResults(query, vault: model.vault))
+        _results = State(initialValue: SearchResults(query: query.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
     public var body: some View {
+        let request = SearchRequest(input: input, revision: model.vault.revision)
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Search notes")
@@ -53,12 +54,15 @@ public struct SearchScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.bg)
         .onChange(of: query) { _, new in input = new }
-        .task(id: SearchRequest(input: input, revision: model.vault.revision)) {
-            if results.query != input.trimmingCharacters(in: .whitespacesAndNewlines) {
-                try? await Task.sleep(for: .milliseconds(110))
-                guard !Task.isCancelled else { return }
+        .task(id: request) {
+            let query = request.input.trimmingCharacters(in: .whitespacesAndNewlines)
+            if results.query != query {
+                do { try await Task.sleep(for: .milliseconds(110)) }
+                catch { return }
             }
-            results = SearchResults(input, vault: model.vault)
+            guard let groups = try? await model.vault.searchNotes(query),
+                  !Task.isCancelled, request.input == input, request.revision == model.vault.revision else { return }
+            results = SearchResults(query: query, groups: groups)
         }
     }
 
@@ -97,7 +101,7 @@ public struct SearchScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func resultGroup(_ group: SearchResults.Group) -> some View {
+    private func resultGroup(_ group: NoteSearchGroup) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text").font(Theme.ui(12)).foregroundStyle(Theme.muted)
@@ -150,26 +154,8 @@ private struct SearchRequest: Equatable {
 }
 
 private struct SearchResults {
-    struct Group: Identifiable {
-        let path: String
-        let hits: [SearchHit]
-        var id: String { path }
-    }
-
     let query: String
-    let groups: [Group]
-
-    @MainActor
-    init(_ input: String, vault: Vault) {
-        query = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hits = vault.search(query)
-        let byPath = Dictionary(grouping: hits, by: \.path)
-        var seen: Set<String> = []
-        groups = hits.compactMap { hit in
-            guard seen.insert(hit.path).inserted, let group = byPath[hit.path] else { return nil }
-            return Group(path: hit.path, hits: group)
-        }
-    }
+    var groups: [NoteSearchGroup] = []
 }
 
 private struct HitRow: View {
