@@ -1,0 +1,129 @@
+strata: 1
+id: checkout
+title: Checkout platform
+kind: architecture
+category: company
+summary: How an order travels from the web app to the email inbox.
+tags: [demo]
+narration: "A web checkout: synchronous calls down to **Postgres**, an event to **Kafka**, and an email worker that consumes it."
+
+groups:
+  - { id: backend, label: Backend (EKS), kind: cluster }
+nodes:
+  - { id: web, kind: client, label: Web app, tech: React, at: [0, 1] }
+  - { id: api, kind: gateway, label: API gateway, tech: Envoy, group: backend, at: [1, 1] }
+  - id: orders
+    kind: service
+    label: orders-svc
+    tech: Go
+    group: backend
+    at: [2, 1]
+    latency: 30ms
+    concurrency: 8
+    replicas: 2
+    doc: Owns the order lifecycle. Writes to Postgres, reads prices from Redis, emits `OrderPlaced`.
+    term: grpc
+    inside:
+      narration: "Inside **orders-svc**: the handler validates, writes the order and an outbox row in one transaction, and a relay publishes the outbox."
+      nodes:
+        - { id: in, kind: port, label: from api-gateway, at: [0, 1] }
+        - { id: handler, kind: service, label: HTTP handler, tech: Go, latency: 2ms, at: [1, 1] }
+        - { id: validate, kind: service, label: validator, latency: 1ms, at: [2, 0] }
+        - { id: tx, kind: database, label: orders + outbox tx, tech: postgres, at: [2, 2] }
+        - { id: relay, kind: worker, label: outbox relay, at: [3, 2] }
+      edges:
+        - { from: in, to: handler }
+        - { from: handler, to: validate }
+        - { from: handler, to: tx, protocol: sql }
+        - { from: relay, to: tx, protocol: sql }
+      flows:
+        - id: requests
+          label: Requests
+          from: in
+          rate: parent
+          steps:
+            - call: handler
+              label: POST /orders
+              steps:
+                - call: validate
+                - { call: tx, label: INSERT order + outbox }
+  - { id: cache, kind: cache, label: prices, tech: redis, group: backend, hitRate: 90%, at: [3, 0] }
+  - { id: db, kind: database, label: orders db, tech: postgres, group: backend, at: [3, 1] }
+  - { id: events, kind: topic, label: order-events, tech: kafka, group: backend, at: [3, 2] }
+  - { id: mailer, kind: worker, label: mailer, group: backend, at: [4, 2] }
+  - { id: smtp, kind: external, label: SendGrid, at: [5, 2] }
+  - { id: hint, kind: note, label: Note, doc: Right-click any node to break it., at: [0, 2.4] }
+
+edges:
+  - { from: web, to: api, protocol: https }
+  - { from: api, to: orders, protocol: grpc, label: gRPC }
+  - { from: orders, to: cache, protocol: redis }
+  - { from: orders, to: db, protocol: sql }
+  - { from: orders, to: events, protocol: kafka }
+  - { from: events, to: mailer }
+  - { from: mailer, to: smtp, protocol: https }
+
+flows:
+  - id: place-order
+    label: Place order
+    from: web
+    rate: 5/s
+    color: 1
+    steps:
+      - call: api
+        steps:
+          - call: orders
+            label: POST /orders
+            steps:
+              - call: cache
+                label: GET price
+                miss:
+                  - { call: db, label: SELECT price }
+              - { call: db, label: INSERT order }
+              - { publish: events, label: OrderPlaced }
+  - id: email
+    label: Confirmation email
+    on: events
+    by: mailer
+    color: 3
+    steps:
+      - { call: smtp, label: send }
+
+controls:
+  - id: rate
+    label: Checkout traffic
+    bind: place-order.rate
+    min: 0
+    max: 200
+    step: 5
+    unit: /s
+  - id: hit
+    label: Price cache hit rate
+    bind: cache.hitRate
+    options: [0, 0.5, 0.9, 0.99]
+    insights:
+      - when: "< 0.5"
+        text: Most reads miss and fall through to Postgres, so database load tracks traffic one to one.
+        effects:
+          - { metric: db load, dir: up, good: false }
+          - { metric: p99, dir: up, good: false }
+      - text: The cache absorbs almost every read; Postgres only sees writes and the occasional miss.
+        effects:
+          - { metric: db load, dir: down, good: true }
+
+scenarios:
+  - id: db-outage
+    label: Postgres goes down
+    goal: What happens to checkout when the database disappears for five seconds?
+    setup: "rate place-order 20/s"
+    steps:
+      - { at: 2s, do: "kill db", say: "Postgres is gone. Watch orders-svc fill up." }
+      - { at: 7s, do: "restore db", say: "Back. How long until the backlog drains?" }
+    watch: [orders.inflight, place-order.errors]
+
+terms:
+  - id: grpc
+    term: gRPC
+    short: An RPC framework over HTTP/2 with protobuf messages.
+    detail: Calls are multiplexed as streams on one long-lived connection.
+    match: [gRPC]
