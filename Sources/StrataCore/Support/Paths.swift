@@ -28,6 +28,10 @@ public enum StrataResources {
             let u = base.appendingPathComponent(name)
             if fm.fileExists(atPath: u.path) { return u }
         }
+        // The CLI lives in Strata.app/Contents/Resources/bin (often run through a ~/.local/bin symlink).
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let bundled = exe.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(name)
+        if fm.fileExists(atPath: bundled.path) { return bundled }
         // Sources/StrataCore/Support/Paths.swift → repo root
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
