@@ -6,7 +6,7 @@ category: platform
 summary: Trace order creation from the web app to Postgres and follow the confirmation event to the email provider.
 tags: [demo]
 glossaries: [http, grpc, go, redis, postgres, kafka, consistency, resilience]
-narration: "Follow Place order to Postgres, then follow OrderPlaced to the mailer. Double-click orders-svc to trace validation and the outbox relay."
+narration: "Follow Place order to Postgres, then follow OrderPlaced to the mailer. Select a service to see the endpoints, queries, keys and topics it uses. Double-click orders-svc to trace validation and the outbox relay."
 
 terms:
   - id: order-placed
@@ -26,6 +26,20 @@ nodes:
     doc: |
       Sends a checkout request when the customer places an order.
       A gateway error leaves the customer without a confirmation.
+    ops:
+      - id: submit-order
+        kind: http
+        target: api
+        label: POST /v1/orders
+        method: POST
+        path: /v1/orders
+        request: '{ "cart_id": "c_81f2", "payment_token": "tok_…" }'
+        calls: api/post-orders
+        code: web/src/checkout/placeOrder.ts:31
+        doc: Sends the cart with an Idempotency-Key header that it generates once per checkout attempt.
+        facts:
+          timeout: 10s, then the page shows a retry button
+          idempotency key: one UUID per checkout, reused on retry
   - id: api
     kind: gateway
     label: API gateway
@@ -35,6 +49,34 @@ nodes:
     doc: |
       Accepts HTTPS requests and forwards each order to orders-svc over gRPC.
       A short timeout with retries can send the same order to the service several times.
+    ops:
+      - id: post-orders
+        kind: http
+        label: POST /v1/orders
+        method: POST
+        path: /v1/orders
+        request: '{ "cart_id": "c_81f2", "payment_token": "tok_…" }'
+        response: '{ "order_id": "o_9k2", "status": "placed" }'
+        status: ["201 created", "400 invalid cart", "401 no session", "429 rate limited", "503 orders-svc unavailable"]
+        code: deploy/envoy/routes.yaml:18
+        doc: Checks the session, applies the per-user rate limit, and transcodes the JSON body to PlaceOrder.
+        facts:
+          auth: session JWT, verified at the edge
+          rate limit: 20 requests/s per user
+          transcoding: grpc_json_transcoder with orders.v1 descriptors
+      - id: forward-place-order
+        kind: rpc
+        target: orders
+        label: PlaceOrder
+        method: orders.v1.Orders/PlaceOrder
+        streaming: unary
+        calls: orders/place-order
+        code: deploy/envoy/clusters.yaml:42
+        risks: [a retry after a lost response commits the order twice unless the idempotency key reaches orders-svc]
+        facts:
+          timeout: route timeout (api.timeout)
+          retries: api.retries, on 5xx and connection reset
+          idempotency: forwards Idempotency-Key as x-idempotency-key metadata
   - id: orders
     kind: service
     label: orders-svc
@@ -48,6 +90,140 @@ nodes:
     doc: |
       Reads the price and commits the order before the confirmation email can be sent.
       Slow Redis calls hold its request slots. A refused Postgres write fails checkout.
+    ops:
+      - id: place-order
+        kind: rpc
+        label: PlaceOrder
+        method: orders.v1.Orders/PlaceOrder
+        streaming: unary
+        request: '{ "user_id": "u_17", "cart_id": "c_81f2", "idempotency_key": "7f3c…" }'
+        response: '{ "order_id": "o_9k2", "total_cents": 4200 }'
+        status: [OK, INVALID_ARGUMENT empty cart, ALREADY_EXISTS duplicate idempotency key, UNAVAILABLE database down]
+        code: services/orders/grpc/server.go:57
+        doc: Prices the cart, commits the order with its outbox row, then emits OrderPlaced.
+        facts:
+          deadline: inherits the gateway timeout
+          idempotency: unique index on orders.idempotency_key
+      - id: get-price
+        kind: cache
+        target: cache
+        label: GET price
+        command: GET
+        key: "price:{sku}"
+        access: read
+        code: services/orders/pricing/cache.go:31
+        facts:
+          client: go-redis v9, 10 connections per replica
+          on miss: read Postgres, then SET with a 5m TTL
+      - id: set-price
+        kind: cache
+        target: cache
+        label: SET price
+        command: SET EX 300
+        key: "price:{sku}"
+        ttl: 5m
+        access: write
+        code: services/orders/pricing/cache.go:48
+        risks: [concurrent misses on one hot SKU all read Postgres before the first SET lands]
+      - id: read-price
+        kind: sql
+        target: db
+        label: SELECT price
+        access: read
+        tables: [prices]
+        indexes: [prices_pkey]
+        query: |
+          -- name: GetPrice :one
+          SELECT amount_cents, currency FROM prices WHERE sku = $1;
+        code: services/orders/db/queries/prices.sql:3
+      - id: insert-order
+        kind: sql
+        target: db
+        label: INSERT order + outbox
+        access: write
+        tables: [orders, order_items, outbox]
+        indexes: [orders_idempotency_key_key, outbox_unpublished_idx]
+        tx: true
+        locks: row
+        query: |
+          BEGIN;
+          INSERT INTO orders (id, user_id, total_cents, idempotency_key) VALUES ($1, $2, $3, $4);
+          INSERT INTO order_items (order_id, sku, qty, price_cents)
+            SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
+          INSERT INTO outbox (topic, key, payload) VALUES ('order-events', $1, $8);
+          COMMIT;
+        code: services/orders/db/queries/orders.sql:12
+        doc: Writes the order, its items and the outbox row in one transaction, so the event exists only if the order does.
+        risks:
+          - a duplicate idempotency key aborts the whole transaction (ALREADY_EXISTS)
+          - a slow COMMIT holds an orders-svc slot and a pool connection
+        facts:
+          isolation: read committed
+          pool: pgxpool, 20 connections per replica
+        inside:
+          narration: "One commit runs three inserts on one pooled connection. The orders row stays locked until COMMIT, so a retry with the same idempotency key waits for it."
+          nodes:
+            - id: conn
+              kind: port
+              label: pgx connection
+              at: [0, 1]
+              doc: The pooled connection orders-svc borrows for the transaction.
+            - id: txn
+              kind: service
+              label: BEGIN … COMMIT
+              latency: 0.2ms
+              at: [1, 1]
+              doc: |
+                Runs the statements in order on one connection.
+                Any failed insert rolls back all three.
+            - id: orders-row
+              kind: database
+              label: orders
+              latency: 1ms
+              at: [2, 0]
+              doc: The order row. Its unique idempotency key rejects a duplicate checkout.
+            - id: items-rows
+              kind: database
+              label: order_items
+              latency: 1.5ms
+              at: [2, 1]
+              doc: One row per cart line, inserted with unnest in a single statement.
+            - id: outbox-row
+              kind: database
+              label: outbox
+              latency: 0.5ms
+              at: [2, 2]
+              doc: The OrderPlaced row the relay publishes after COMMIT.
+          edges:
+            - { from: conn, to: txn, protocol: sql }
+            - { from: txn, to: orders-row, label: INSERT }
+            - { from: txn, to: items-rows, label: INSERT }
+            - { from: txn, to: outbox-row, label: INSERT }
+          flows:
+            - id: commit
+              label: Order transaction
+              from: conn
+              rate: parent
+              steps:
+                - call: txn
+                  steps:
+                    - { call: orders-row, label: INSERT orders }
+                    - { call: items-rows, label: INSERT order_items }
+                    - { call: outbox-row, label: INSERT outbox }
+      - id: order-placed
+        kind: publish
+        target: events
+        label: OrderPlaced
+        topic: order-events
+        key: order_id
+        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "total_cents": 4200, "currency": "EUR" }'
+        calls: mailer/on-order-placed
+        code: services/orders/events/producer.go:29
+        doc: In production the outbox relay publishes this row after COMMIT. The overview publishes at commit to show the route.
+        facts:
+          acks: all
+          idempotent producer: "yes"
+          schema: orders.v1.OrderPlaced (protobuf)
     inside:
       narration: "Follow the handler through validation to the SQL transaction. Watch the relay poll that same table on its own schedule."
       nodes:
@@ -67,6 +243,35 @@ nodes:
           doc: |
             Checks the request with the validator before opening a database transaction.
             A failed validation or write propagates back to the gateway.
+          ops:
+            - id: place-order
+              kind: rpc
+              label: PlaceOrder
+              method: orders.v1.Orders/PlaceOrder
+              streaming: unary
+              code: services/orders/grpc/server.go:57
+              doc: Decodes the request, checks the cart, then commits the order and its outbox row.
+            - id: validate-cart
+              kind: call
+              target: validate
+              label: ValidateCart
+              method: domain.ValidateCart(ctx, cart)
+              calls: validate/check-cart
+              code: services/orders/grpc/server.go:71
+            - id: commit
+              kind: sql
+              target: tx
+              label: INSERT order + outbox
+              access: write
+              tables: [orders, order_items, outbox]
+              tx: true
+              locks: row
+              query: |
+                -- in one pgx.Tx
+                INSERT INTO orders (id, user_id, total_cents, idempotency_key) VALUES ($1, $2, $3, $4);
+                INSERT INTO order_items (order_id, sku, qty, price_cents) SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
+                INSERT INTO outbox (topic, key, payload) VALUES ('order-events', $1, $8);
+              code: services/orders/repo/orders.go:88
         - id: validate
           kind: service
           label: Validator
@@ -75,6 +280,15 @@ nodes:
           doc: |
             Checks that the cart and quantities are valid before any write.
             Inject an error here to model rejection before the SQL call.
+          ops:
+            - id: check-cart
+              kind: call
+              label: ValidateCart
+              method: domain.ValidateCart(ctx, cart)
+              request: '{ "items": [{ "sku": "A-1", "qty": 2 }] }'
+              status: [ok, empty cart, quantity above 20, unknown SKU]
+              code: services/orders/domain/validate.go:18
+              doc: Pure checks with no I/O. A failure maps to INVALID_ARGUMENT.
         - id: tx
           kind: database
           label: Order + outbox
@@ -93,6 +307,36 @@ nodes:
           doc: |
             Polls Postgres for pending rows on its own schedule.
             A failed poll delays publication. The overview shows the Kafka handoff.
+          ops:
+            - id: poll-outbox
+              kind: sql
+              target: tx
+              label: Claim pending outbox rows
+              access: read-write
+              tables: [outbox]
+              indexes: [outbox_unpublished_idx]
+              tx: true
+              locks: row, SKIP LOCKED
+              query: |
+                -- name: ClaimOutbox :many
+                UPDATE outbox SET claimed_at = now()
+                WHERE id IN (
+                  SELECT id FROM outbox WHERE published_at IS NULL
+                  ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED)
+                RETURNING id, topic, key, payload;
+              code: services/orders/outbox/relay.go:52
+              doc: SKIP LOCKED lets several relay replicas claim different rows without blocking each other.
+            - id: produce
+              kind: publish
+              direction: out
+              label: Produce OrderPlaced
+              topic: order-events
+              key: order_id
+              code: services/orders/outbox/relay.go:77
+              doc: Kafka is outside this view. The relay marks a row published only after the broker acks it.
+              facts:
+                batch: up to 100 rows per poll
+                delivery: at least once; consumers dedupe by order_id
       edges:
         - { from: in, to: handler, protocol: grpc }
         - { from: in, to: relay, label: Poll timer }
@@ -107,9 +351,10 @@ nodes:
           steps:
             - call: handler
               label: PlaceOrder
+              op: place-order
               steps:
-                - { call: validate, label: Validate cart }
-                - { call: tx, label: Commit order and outbox }
+                - { call: validate, label: Validate cart, op: validate-cart }
+                - { call: tx, label: Commit order and outbox, op: commit }
         - id: relay-polls
           label: Relay polls
           from: in
@@ -118,7 +363,7 @@ nodes:
           steps:
             - call: relay
               steps:
-                - { call: tx, label: Read pending outbox rows }
+                - { call: tx, label: Read pending outbox rows, op: poll-outbox }
   - id: cache
     kind: cache
     label: Price cache
@@ -156,6 +401,32 @@ nodes:
     doc: |
       Reads OrderPlaced and calls the email provider.
       A provider failure delays the consumer group while it retries the event.
+    ops:
+      - id: on-order-placed
+        kind: consume
+        target: events
+        label: OrderPlaced consumer
+        topic: order-events
+        group: mailer
+        key: order_id
+        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "total_cents": 4200, "currency": "EUR" }'
+        code: services/mailer/consumer.go:40
+        facts:
+          commit: offset committed after SendGrid accepts the email
+          on error: retry in place, which blocks the partition
+      - id: send-confirmation
+        kind: http
+        target: smtp
+        label: POST /v3/mail/send
+        method: POST
+        path: /v3/mail/send
+        request: '{ "template_id": "d-order-confirmation", "personalizations": [{ "to": [{ "email": "…" }], "dynamic_template_data": { "order_id": "o_9k2" } }] }'
+        calls: smtp/send-mail
+        code: services/mailer/sendgrid/client.go:52
+        risks: [a retry after a lost 202 sends the customer a second email]
+        facts:
+          timeout: 5s
+          auth: bearer API key from Vault
   - id: smtp
     kind: external
     label: Email provider
@@ -165,6 +436,16 @@ nodes:
     doc: |
       Accepts confirmation emails for delivery to customers.
       If it fails, checkout can still complete and the mailer retries separately.
+    ops:
+      - id: send-mail
+        kind: http
+        label: POST /v3/mail/send
+        method: POST
+        path: /v3/mail/send
+        status: ["202 accepted", "400 invalid template data", "401 bad API key", "429 rate limited", "5xx provider error"]
+        doc: SendGrid's v3 Mail Send API. A 202 means queued for delivery, not delivered.
+        facts:
+          rate limit: 600 requests/min on this plan
   - id: hint
     kind: note
     label: Order lifecycle
@@ -188,25 +469,31 @@ flows:
     from: web
     rate: 12/s
     color: 1
+    op: submit-order
     steps:
       - call: api
+        op: post-orders
         steps:
           - call: orders
             label: PlaceOrder
+            op: place-order
             steps:
               - call: cache
                 label: Get price
+                op: get-price
                 miss:
-                  - { call: db, label: Read price }
-              - { call: db, label: Commit order and outbox }
-              - { publish: events, label: OrderPlaced }
+                  - { call: db, label: Read price, op: read-price }
+                  - { call: cache, label: Fill price, op: set-price }
+              - { call: db, label: Commit order and outbox, op: insert-order }
+              - { publish: events, label: OrderPlaced, op: order-placed }
   - id: email
     label: Confirmation email
     on: events
     by: mailer
     color: 3
+    op: on-order-placed
     steps:
-      - { call: smtp, label: Send confirmation }
+      - { call: smtp, label: Send confirmation, op: send-confirmation }
 
 controls:
   - label: Checkout traffic
