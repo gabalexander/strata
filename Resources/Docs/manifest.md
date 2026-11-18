@@ -287,6 +287,7 @@ is shown as JSON. A field another kind uses (`query` on a `publish`) is a warnin
 - `inside:` gives an op its own level (for example the lock and transaction sequence of a query),
   and `detail:` opens another manifest. In a level path that level is the element `node#op`:
   `view: [orders#insert-order]` in an embed, `?path=orders%23insert-order` in a `strata://sim/` link.
+  Inside it, `rate: parent` follows the op's measured rate.
 
 **Live numbers.** A step names the op it performs with `op:`. That counts its rate, errors and
 latency on the op:

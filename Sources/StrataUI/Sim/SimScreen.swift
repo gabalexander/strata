@@ -249,7 +249,8 @@ private struct SimWorkspace: View {
 
     private func dive(_ node: Node) {
         guard let route = SimSessions.drillDestination(node, id: id, path: sim.path) else { return }
-        navigate(route, forward: true, node: node.id, parentRate: sim.nodeState(node.id)?.arrivals)
+        navigate(route, forward: true, node: node.id,
+                 parentRate: sim.nodeState(node.id)?.arrivals ?? SimOpsPath.measuredRate(node.id, in: sim))
     }
 
     private func up(_ depth: Int) {

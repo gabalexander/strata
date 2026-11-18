@@ -376,6 +376,14 @@ enum SimOpsPath {
         return "\(node.label) · \(node.ops.first { $0.id == ref.op }?.label ?? ref.op)"
     }
 
+    /// What `rate: parent` follows inside an op: the op's measured rate, when a flow step performs it.
+    @MainActor
+    static func measuredRate(_ element: String, in sim: Simulation) -> Double? {
+        guard let ref = ref(element) else { return nil }
+        let metrics = sim.opMetrics(node: ref.node, op: ref.op)
+        return metrics.referenced ? metrics.rate : nil
+    }
+
     /// The node the stage zooms into for a path element (the op's node for `node#op`).
     static func node(_ element: String) -> String { ref(element)?.node ?? element }
 
