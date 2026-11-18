@@ -456,10 +456,11 @@ private struct SimPressureScale: View {
         let analysis = state.analysis(sim)
         let plan = analysis.report.scalePlan
         let tries = state.liveTries(sim)
-        let planned = Set(plan.map(\.node))
+        // A try the plan shows as a row keeps its Undo there; any other try gets its own line.
+        let planned = Set(plan.map(\.id))
         VStack(alignment: .leading, spacing: 9) {
             SimPressureHeader(title: "Scale next", caption: "scale the bottleneck until it stops being one, then the next")
-            ForEach(tries.filter { !planned.contains($0.node) }) { tried in
+            ForEach(tries.filter { !planned.contains("\($0.node)-\($0.to)") }) { tried in
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle").font(Theme.ui(12, .medium)).foregroundStyle(Theme.good.opacity(0.85))
                     Text("Scaled \(sim.pressureLabel(tried.node)) \(tried.from) → \(tried.to) replicas")
