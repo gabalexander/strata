@@ -55,6 +55,9 @@ public final class Vault {
     }
     public func hasNote(_ path: String) -> Bool { false }
 
+    /// Copies the seed notes (Resources/Vault) into an empty or missing vault directory.
+    public func seedIfEmpty(from seed: URL? = StrataResources.url("Vault")) {}
+
     /// Starts watching the vault for outside changes (an agent editing a note).
     public func startWatching() {}
 }

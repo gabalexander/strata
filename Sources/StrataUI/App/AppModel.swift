@@ -27,6 +27,9 @@ public final class AppModel {
 
     public var sidebarVisible = true
     public var inspectorVisible = true
+    public var dockVisible = true           // sim screens: the bottom dock (⌘J)
+    /// Commands the active screen offers to the ⌘K palette (e.g. a sim's play/pause, scenarios, node actions).
+    public var screenCommands: [MenuItem] = []
     public var paletteOpen = false          // ⌘K: commands + everything
     public var switcherOpen = false         // ⌘O: jump to a note or sim
 

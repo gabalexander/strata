@@ -94,6 +94,12 @@ public final class Simulation {
 
     public func metrics(flow: String) -> FlowMetrics { FlowMetrics() }
 
+    /// Headless: advance `seconds` of sim time as fast as possible (playing or not). For checks and `strata simulate`.
+    public func run(seconds: Double) { now += seconds }
+
+    /// A plain-text table of per-flow and per-node metrics at `now`, for `strata simulate`.
+    public func report() -> String { "t=\(now)s (engine not implemented yet)" }
+
     /// Recent samples (one per 0.25 s of sim time, up to 240) for sparklines.
     public func series(_ key: MetricKey) -> [Double] { (0..<60).map { sin((now - Double(60 - $0) * 0.25) / 2) * 0.5 + 0.5 } }
 
