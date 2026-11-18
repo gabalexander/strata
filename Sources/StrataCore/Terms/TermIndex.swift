@@ -90,6 +90,9 @@ private final class TermMatcher: @unchecked Sendable {
     private let lock = NSLock()
     private var compiled: Compiled?
     private var attempted = false
+    /// Views re-render the same paragraphs often (every inspector or dock rebuild), and one regex pass
+    /// over hundreds of alternatives costs far more than a lookup.
+    private var memo: [String: [(range: NSRange, term: Int)]] = [:]
 
     init(terms: [Term]) { self.terms = terms }
 
@@ -129,7 +132,22 @@ private final class TermMatcher: @unchecked Sendable {
     }
 
     func matches(in text: String) -> [(range: Range<String.Index>, term: Term)] {
-        guard !text.isEmpty, let compiled = expression() else { return [] }
+        guard !text.isEmpty else { return [] }
+        lock.lock()
+        let remembered = memo[text]
+        lock.unlock()
+        let found = remembered ?? search(text)
+        if remembered == nil {
+            lock.lock()
+            if memo.count >= 1024 { memo.removeAll(keepingCapacity: true) }
+            memo[text] = found
+            lock.unlock()
+        }
+        return found.compactMap { match in Range(match.range, in: text).map { ($0, terms[match.term]) } }
+    }
+
+    private func search(_ text: String) -> [(range: NSRange, term: Int)] {
+        guard let compiled = expression() else { return [] }
         let matches = compiled.regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
         let excluded = matches.compactMap { match -> NSRange? in
             let range = match.range(at: 1)
@@ -167,9 +185,7 @@ private final class TermMatcher: @unchecked Sendable {
         for candidate in prioritized where !selected.contains(where: { $0.range.intersection(candidate.range) != nil }) {
             selected.append(candidate)
         }
-        return selected.sorted { $0.range.location < $1.range.location }.compactMap { candidate in
-            Range(candidate.range, in: text).map { ($0, terms[candidate.term]) }
-        }
+        return selected.sorted { $0.range.location < $1.range.location }.map { ($0.range, $0.term) }
     }
 
     private static func fold(_ text: String) -> String {
