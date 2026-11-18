@@ -61,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             pendingURLRoute = nil
             model.open(route)
             showWindow()
-        } else if !config.menubar && !registered {
+        } else if !CommandLine.arguments.contains("--hidden") || (!config.menubar && !registered) {
+            // A normal launch shows the window; the login agent passes --hidden and waits for the hotkey.
             showWindow()
         }
     }

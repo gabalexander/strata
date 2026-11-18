@@ -12,8 +12,11 @@ rm -rf "$DEST"
 mv "$DEST.new" "$DEST"
 ln -sf "$DEST/Contents/Resources/bin/strata" "$HOME/.local/bin/strata"
 if [ -d skill ]; then
-  mkdir -p "$HOME/.claude/skills/strata"
-  cp -R skill/. "$HOME/.claude/skills/strata/"
+  # Claude Code reads ~/.claude/skills; Codex and other agents read ~/.agents/skills.
+  for d in "$HOME/.claude/skills/strata" "$HOME/.agents/skills/strata"; do
+    mkdir -p "$d"
+    cp -R skill/. "$d/"
+  done
 fi
 mkdir -p "$HOME/.strata/sims" "$HOME/.strata/vault"
 open "$DEST"

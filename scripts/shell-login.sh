@@ -20,6 +20,8 @@ case "${1:-}" in
     /usr/bin/plutil -insert Label -string "$label" "$temp"
     /usr/bin/plutil -insert ProgramArguments -json '["/usr/bin/open","-g"]' "$temp"
     /usr/bin/plutil -insert ProgramArguments.2 -string "$app" "$temp"
+    /usr/bin/plutil -insert ProgramArguments.3 -string "--args" "$temp"
+    /usr/bin/plutil -insert ProgramArguments.4 -string "--hidden" "$temp"
     /usr/bin/plutil -insert RunAtLoad -bool YES "$temp"
     /usr/bin/plutil -lint "$temp" >/dev/null
     mv -f "$temp" "$plist"
