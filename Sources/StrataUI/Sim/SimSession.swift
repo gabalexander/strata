@@ -89,8 +89,11 @@ struct SimLoadIssue: View {
                 Text(message(entry)).font(Theme.ui()).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 if let url {
-                    Text(url.path).font(Theme.mono(11)).foregroundStyle(Theme.muted).textSelection(.enabled)
-                        .strataCopyMenu("Copy path", text: url.path, overlays: model.overlays)
+                    VStack(alignment: .leading, spacing: 3) {
+                        if entry == nil { Text("Expected at").font(Theme.label).foregroundStyle(Theme.faint) }
+                        Text(url.path).font(Theme.mono(11)).foregroundStyle(Theme.muted).textSelection(.enabled)
+                            .strataCopyMenu("Copy path", text: url.path, overlays: model.overlays)
+                    }
                 }
                 if let entry, invalidPath == nil {
                     VStack(alignment: .leading, spacing: 8) {
