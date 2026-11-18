@@ -60,6 +60,7 @@ private struct NoteContent: View {
                                        jump: jump, toggleTask: session.toggleTask)
                         } else {
                             NoteEditor(model: model, path: path, text: session.text, jump: editorJump,
+                                       focusOnAppear: session.text.isEmpty,
                                        onEdit: session.edit, toggleReading: toggleReading)
                                 .frame(maxWidth: 828)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)

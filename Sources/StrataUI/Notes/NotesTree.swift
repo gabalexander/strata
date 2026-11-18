@@ -22,19 +22,22 @@ public struct NotesTree: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack {
-                Text("Notes").font(Theme.label).foregroundStyle(Theme.muted)
-                    .accessibilityAddTraits(.isHeader)
+                StrataSectionLabel("Notes")
                 Spacer(minLength: 0)
-                NoteIconButton(title: "New note", symbol: "plus") { create(in: nil, folder: false) }
+                StrataIconButton("plus", title: "New note ⌘N") { create(in: nil, folder: false) }
             }
-            .padding(.leading, 7)
+            .padding(.leading, 2)
+            .padding(.trailing, -4)
+            .contentShape(Rectangle())
             .onRightClick { _, point in model.overlays.showMenu(creationItems(in: nil), at: point) }
 
             ForEach(visibleRows) { row in
                 if renaming == row.id {
                     nameField(row)
                 } else if row.item.isFolder {
-                    treeRow(row).dropDestination(for: VaultDrag.self) { data, _ in drop(data, in: row.id) }
+                    treeRow(row)
+                        .draggable(VaultDrag(root: model.vault.root.path, path: row.id))
+                        .dropDestination(for: VaultDrag.self) { data, _ in drop(data, in: row.id) }
                 } else {
                     treeRow(row).draggable(VaultDrag(root: model.vault.root.path, path: row.id))
                 }
@@ -165,10 +168,14 @@ public struct NotesTree: View {
     }
 
     private func drop(_ data: [VaultDrag], in folder: String?) {
-        guard let dragged = data.first, dragged.root == model.vault.root.path,
+        guard let dragged = data.first, dragged.root == model.vault.root.path else { return }
+        let parent = (dragged.path as NSString).deletingLastPathComponent
+        // Dropping where it already is, or a folder into itself, is not a move.
+        guard parent != (folder ?? ""), folder != dragged.path, folder?.hasPrefix(dragged.path + "/") != true,
               workspace.session?.flush() != false else { return }
         guard let moved = model.vault.move(dragged.path, toFolder: folder) else {
-            model.overlays.toast("Couldn’t move note")
+            let name = NoteLinks.title(dragged.path)
+            model.overlays.toast("Couldn’t move “\(name)”: that folder already has an item with this name")
             return
         }
         if let folder { workspace.expanded.insert(folder) }

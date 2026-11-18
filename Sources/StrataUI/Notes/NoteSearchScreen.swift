@@ -54,6 +54,7 @@ public struct SearchScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.bg)
         .onChange(of: query) { _, new in input = new }
+        .onAppear { focused = true }
         .task(id: request) {
             let query = request.input.trimmingCharacters(in: .whitespacesAndNewlines)
             if results.query != query {

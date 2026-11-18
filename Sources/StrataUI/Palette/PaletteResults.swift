@@ -72,13 +72,13 @@ struct PaletteResults {
     private var nodes: [PaletteEntry] {
         guard case .sim(let id, let path) = model.route,
               let level = currentManifest?.level(at: path) else { return [] }
-        return level.nodes.filter(\.canDeepDive).map { node in
+        // Selecting shows the node in the inspector; deep dives are listed under Commands.
+        return level.nodes.filter { $0.kind != .note }.map { node in
             PaletteEntry(id: "node/\(([id] + path + [node.id]).joined(separator: "/"))",
                          group: .nodes, title: node.label, symbol: node.icon ?? node.kind.symbol,
-                         subtitle: "Deep dive", keywords: node.id) {
-                guard let destination = SimSessions.drillDestination(node, id: id, path: path) else { return }
-                let parent = model.sessions[AppModel.sessionKey(id, path)]
-                model.open(destination, parentRate: parent?.nodeState(node.id)?.arrivals)
+                         subtitle: node.tech ?? node.kind.rawValue,
+                         keywords: [node.id, node.kind.rawValue, node.tech ?? ""].joined(separator: " ")) {
+                SimFocus.of(model).reveal(node.id, in: id, path: path, model: model)
             }
         }
     }

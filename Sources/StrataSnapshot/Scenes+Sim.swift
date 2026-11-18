@@ -16,7 +16,7 @@ import StrataCore
         checkout("sim-dock-about", size: size, tab: .about),
         checkout("sim-node-menu", size: size, selected: "orders", menu: true),
     ]
-    return scenes + [Scene(name: "sim-embed-420", size: CGSize(width: 832, height: 420)) {
+    return scenes + [detailDive(size: size), loadError(), Scene(name: "sim-embed-420", size: CGSize(width: 832, height: 420)) {
         let manifest = fixtureManifest()
         let model = fixtureModel(manifest)
         var embed = Embed(target: .library("checkout"))
@@ -81,4 +81,49 @@ private func fixtureManifest() -> Manifest {
 @MainActor private func advance(_ sim: Simulation) {
     sim.playing = true
     for _ in 0..<180 { sim.tick(1.0 / 60) }
+}
+
+/// A `detail:` deep dive into another manifest: the breadcrumbs lead back to the level it came from.
+@MainActor private func detailDive(size: CGSize) -> Scene {
+    Scene(name: "sim-detail-dive", size: size) {
+        var parent = fixtureManifest()
+        parent.id = "shop"
+        parent.title = "Shop"
+        if let index = parent.root.nodes.firstIndex(where: { $0.id == "orders" }) {
+            parent.root.nodes[index].inside = nil
+            parent.root.nodes[index].detail = "checkout"
+        }
+        let manifest = fixtureManifest()
+        let model = AppModel(library: Library(manifests: [parent, manifest]),
+                             vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
+        model.open(.sim("shop", path: []))
+        model.open(.sim("checkout", path: []))
+        let sim = Simulation(manifest: manifest)
+        advance(sim)
+        model.sessions[AppModel.sessionKey(manifest.id, [])] = sim
+        return AnyView(SimScreen(model: model, id: manifest.id, path: [], snapshot: SimSnapshotOptions()))
+    }
+}
+
+/// A manifest that stopped parsing while open: every problem with its line, and ways to fix it.
+@MainActor private func loadError() -> Scene {
+    Scene(name: "sim-load-error", size: CGSize(width: 1100, height: 640), hosted: true) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-broken")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? """
+        strata: 1
+        id: billing
+        title: Billing service
+        nodes:
+          - { id: api, kind: service, label: API, at: [0, 0] }
+        edges:
+          - { from: api, to: ledger }
+        flows:
+          - { id: charge, from: api, rate: fast, steps: [ { call: ledger } ] }
+        """.write(to: directory.appendingPathComponent("billing.yaml"), atomically: true, encoding: .utf8)
+        let model = AppModel(library: Library(builtIn: nil, dirs: [directory]),
+                             vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
+        model.open(.sim("billing", path: []))
+        return AnyView(SimScreen(model: model, id: "billing", path: []))
+    }
 }

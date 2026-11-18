@@ -27,12 +27,10 @@ public struct SimEmbedView: View {
         Group {
             if let manifest = input.manifest, manifest.level(at: embed.view) != nil {
                 SimEmbedSession(model: model, embed: embed, id: input.id, manifest: manifest,
-                                visible: visible, snapshotSession: snapshotSession)
+                                handoff: handoffKey(input.id), visible: visible, snapshotSession: snapshotSession)
                     .id(AppModel.sessionKey(input.id, embed.view))
             } else {
-                Label("Simulator or level unavailable", systemImage: "exclamationmark.triangle")
-                    .font(Theme.ui()).foregroundStyle(Theme.muted)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                unavailable(input.manifest)
             }
         }
         .frame(height: embed.height)
@@ -41,6 +39,38 @@ public struct SimEmbedView: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.border))
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
         .onAppear { visible = true }
+    }
+
+    /// Identifies this embed in its note, so a session handed to the full screen comes back here.
+    private func handoffKey(_ id: String) -> String {
+        [note, AppModel.sessionKey(id, embed.view), embed.scenario ?? ""].joined(separator: "\n")
+    }
+
+    private func unavailable(_ manifest: Manifest?) -> some View {
+        let reason: (title: String, detail: String?)
+        if let manifest {
+            reason = ("No level “\(embed.view.joined(separator: " › "))” in \(manifest.title)",
+                      "Check the embed’s view: path against the manifest’s nodes.")
+        } else if case .library(let id) = embed.target, let entry = model.library.entry(id) {
+            let error = entry.firstError
+            var location = entry.url.lastPathComponent
+            if let line = error?.line { location += " · line \(line)" }
+            reason = ("\(entry.title) has an error", error.map { "\(location): \($0.message)" })
+        } else if case .library(let id) = embed.target {
+            reason = ("No simulator “\(id)” in the library", "Check the id, or run strata list to see what is installed.")
+        } else {
+            reason = ("Simulator unavailable", nil)
+        }
+        return VStack(spacing: 6) {
+            Label(reason.title, systemImage: "exclamationmark.triangle")
+                .font(Theme.ui(13, .semibold)).foregroundStyle(Theme.warn)
+            if let detail = reason.detail {
+                Text(detail).font(Theme.ui(12)).foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center).lineLimit(3)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var input: (id: String, manifest: Manifest?) {
@@ -65,6 +95,7 @@ private struct SimEmbedSession: View {
     let embed: Embed
     let id: String
     let manifest: Manifest
+    let handoff: String
     let visible: Bool
     let still: Bool
 
@@ -80,19 +111,22 @@ private struct SimEmbedSession: View {
     @StateObject private var session: EmbedSessionState
     private var sim: Simulation { session.sim }
 
-    init(model: AppModel, embed: Embed, id: String, manifest: Manifest,
+    init(model: AppModel, embed: Embed, id: String, manifest: Manifest, handoff: String,
          visible: Bool, snapshotSession: Simulation?) {
         self.model = model
         self.embed = embed
         self.id = id
         self.manifest = manifest
+        self.handoff = handoff
         self.visible = visible
         still = snapshotSession != nil
-        _session = StateObject(wrappedValue: EmbedSessionState(snapshotSession ?? Self.make(manifest: manifest, embed: embed)))
+        let shared = SimSessions.handedOff(handoff, model: model, id: id, path: embed.view, manifest: manifest)
+        _session = StateObject(wrappedValue: EmbedSessionState(snapshotSession ?? shared ?? Self.make(manifest: manifest, embed: embed)))
     }
 
     var body: some View {
-        SimEmbedWorkspace(model: model, id: id, sim: sim, scenario: embed.scenario, visible: visible, still: still)
+        SimEmbedWorkspace(model: model, id: id, sim: sim, scenario: embed.scenario, handoff: handoff,
+                          visible: visible, still: still)
             .id(ObjectIdentifier(sim))
             .onChange(of: Definition(manifest: manifest, scenario: embed.scenario)) { _, _ in
                 session.sim = Self.make(manifest: manifest, embed: embed)
@@ -123,6 +157,7 @@ private struct SimEmbedWorkspace: View {
     let id: String
     let sim: Simulation
     let scenario: String?
+    let handoff: String
     let visible: Bool
     let still: Bool
     @State private var renderer: StageRenderer
@@ -130,11 +165,12 @@ private struct SimEmbedWorkspace: View {
     @State private var selection: StageSelection?
     private let terms: TermIndex
 
-    init(model: AppModel, id: String, sim: Simulation, scenario: String?, visible: Bool, still: Bool) {
+    init(model: AppModel, id: String, sim: Simulation, scenario: String?, handoff: String, visible: Bool, still: Bool) {
         self.model = model
         self.id = id
         self.sim = sim
         self.scenario = scenario
+        self.handoff = handoff
         self.visible = visible
         self.still = still
         _renderer = State(initialValue: StageRenderer(level: sim.level))
@@ -164,7 +200,8 @@ private struct SimEmbedWorkspace: View {
             .frame(height: 37)
             Rectangle().fill(Theme.border).frame(height: 1)
             SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
-                     selection: selection, compact: true, visible: visible, still: still, onSelect: { selection = $0 })
+                     selection: selection, compact: true, visible: visible, still: still, onSelect: { selection = $0 },
+                     menu: SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive).menu)
         }
     }
 
@@ -174,18 +211,26 @@ private struct SimEmbedWorkspace: View {
         return sim.manifest.title + " › " + (level.node(node)?.label ?? node)
     }
 
+    /// A deep dive from the embed continues full screen, with this level kept for the way back out.
+    private func dive(_ node: Node) {
+        guard let destination = SimSessions.drillDestination(node, id: id, path: sim.path) else { return }
+        share()
+        model.open(destination, parentRate: sim.nodeState(node.id)?.arrivals)
+    }
+
+    /// The full screen continues this embed's simulation, and the embed picks it up again on return.
     private func expand() {
-        if case .inline = sim.manifest.source {
-            if !sim.path.isEmpty, SimSessions.cachedManifest(model, id: id).map({ !SimSessions.same($0, sim.manifest) }) ?? true {
-                SimSessions.remember(Simulation(manifest: sim.manifest), model: model, id: id)
-            }
-            SimSessions.remember(sim, model: model, id: id)
-        } else {
-            let cached = model.sessions[AppModel.sessionKey(id, sim.path)]
-            if cached == nil || cached?.parentRate != sim.parentRate {
-                SimSessions.remember(sim, model: model, id: id)
-            }
-        }
+        share()
         model.open(.sim(id, path: sim.path))
+    }
+
+    private func share() {
+        if case .inline = sim.manifest.source, !sim.path.isEmpty,
+           SimSessions.cachedManifest(model, id: id).map({ !SimSessions.same($0, sim.manifest) }) ?? true {
+            // Inline manifests live only in sessions: keep the root so breadcrumbs can lead out.
+            SimSessions.remember(Simulation(manifest: sim.manifest), model: model, id: id)
+        }
+        SimSessions.remember(sim, model: model, id: id)
+        SimSessions.handOff(handoff, model: model)
     }
 }

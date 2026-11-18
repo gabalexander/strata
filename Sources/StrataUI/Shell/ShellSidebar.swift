@@ -42,18 +42,19 @@ struct Sidebar: View {
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            StrataSectionLabel("Notes")
-                            Spacer()
-                            StrataIconButton("plus", title: "New note ⌘N") { ShellCommand.newNote.perform(on: model) }
-                        }
-                        .padding(.leading, 8)
-                        .padding(.trailing, 2)
                         if catalog.fixtureNotes != nil {
+                            HStack {
+                                StrataSectionLabel("Notes")
+                                Spacer()
+                                StrataIconButton("plus", title: "New note ⌘N") { ShellCommand.newNote.perform(on: model) }
+                            }
+                            .padding(.leading, 8)
+                            .padding(.trailing, 2)
                             ForEach(catalog.notePaths, id: \.self) { path in
                                 quickLink(ShellCatalog.title(path), symbol: "note.text", route: .note(path))
                             }
                         } else {
+                            // The tree draws its own header, with the creation menu on right-click.
                             NotesTree(model: model)
                         }
                     }
@@ -110,12 +111,13 @@ struct Sidebar: View {
 
     private func libraryRow(_ entry: Library.Entry) -> some View {
         let selected = switch model.route {
-        case .sim(let id, _): id == entry.id && entry.manifest != nil
+        case .sim(let id, _): id == entry.id
         default: false
         }
+        // A broken manifest opens its error screen, which lists every problem with its line.
         return SidebarRow(title: entry.title, symbol: entry.shellSymbol, selected: selected,
                           trailingInset: entry.firstError != nil ? 20 : 0) {
-            if entry.manifest != nil { model.open(.sim(entry.id, path: [])) }
+            model.open(.sim(entry.id, path: []))
         }
         .overlay(alignment: .trailing) {
             if let error = entry.firstError { DiagnosticDot(entry: entry, diagnostic: error, overlays: model.overlays) }

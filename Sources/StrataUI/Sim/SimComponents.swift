@@ -18,6 +18,9 @@ enum SimFormat {
 
     static func value(_ value: Value, param: String, unit: String? = nil) -> String {
         guard let n = value.number else { return value.description }
+        // The engine reads 0 as "no timeout" / "never expires", and ports have no limits at all.
+        if n == 0, ["timeout", "ttl"].contains(param) { return "None" }
+        if n >= 1e15, ["concurrency", "queue", "capacity"].contains(param) { return "Unlimited" }
         if unit == "%" || ["errors", "loss", "hitRate"].contains(param) { return "\(number(n * 100))%" }
         if let unit { return "\(number(n))\(unit)" }
         if ["latency", "timeout", "backoff", "ttl"].contains(param) { return latency(n) }

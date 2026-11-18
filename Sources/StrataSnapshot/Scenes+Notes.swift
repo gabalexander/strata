@@ -36,6 +36,11 @@ import StrataUI
             let path = fixture.blockedNote
             return AnyView(NoteScreen(model: fixture.model(.note(path)), path: path))
         },
+        Scene(name: "notes-embed-errors", size: CGSize(width: 900, height: 760), hosted: true) {
+            let model = fixture.model(.note(fixture.embedNote))
+            model.inspectorVisible = false
+            return AnyView(NoteScreen(model: model, path: fixture.embedNote, initiallyReading: true))
+        },
         Scene(name: "notes-empty", size: CGSize(width: 920, height: 590), hosted: true) {
             let path = "System design/Failover notes.md"
             return AnyView(NoteScreen(model: fixture.model(.note(path)), path: path))
@@ -48,6 +53,7 @@ private final class NoteScenesFixture {
     let richNote = "System design/Checkout failure notes.md"
     let nodeNote = "Sims/checkout/orders/tx.md"
     let blockedNote = "Unavailable.md"
+    let embedNote = "System design/Embeds.md"
     private let root = FileManager.default.temporaryDirectory.appendingPathComponent("strata-notes-scene-\(UUID().uuidString)")
     private let vault: Vault
 
@@ -71,6 +77,34 @@ private final class NoteScenesFixture {
         ## Recovery
 
         Follow [[System design/Retry budget#Deadlines|the retry budget]] and replay one request.
+        """)
+        vault.write(embedNote, """
+        # Embeds that cannot load
+
+        ```strata
+        sim: payments
+        height: 110
+        ```
+
+        ```strata
+        sim: checkout
+        view: [ledger]
+        height: 110
+        ```
+
+        ```strata
+        sim: [checkout
+        ```
+
+        ```strata
+        nodes:
+          - { id: a, kind: client, label: Client, at: [0, 0] }
+          - { id: b, kind: service, label: Server, at: [1, 0] }
+        flows:
+          - { id: f, from: a, rate: 2/s, steps: [ { call: b } ] }
+        height: 190
+        autoplay: false
+        ```
         """)
         vault.write("System design/Retry budget.md", """
         # Retry budget

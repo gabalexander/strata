@@ -8,7 +8,8 @@ struct LibraryActions {
     func menu(for entry: Library.Entry) -> [MenuItem] {
         var items = [
             MenuItem.header(entry.title),
-            MenuItem("Open", icon: "arrow.up.right", shortcut: "↩", enabled: entry.manifest != nil) {
+            MenuItem(entry.manifest == nil ? "Show errors" : "Open",
+                     icon: entry.manifest == nil ? "exclamationmark.triangle" : "arrow.up.right") {
                 model.open(.sim(entry.id, path: []))
             }
         ]
@@ -22,6 +23,7 @@ struct LibraryActions {
             })
         }
         items += [
+            MenuItem("Open file", icon: "doc.text", enabled: !entry.builtIn) { model.openCode(entry.url.path, repo: nil) },
             MenuItem("Reveal file", icon: "folder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) },
             .separator,
             MenuItem("Copy ID", icon: "number") { copy(entry.id, message: "Copied ID") },

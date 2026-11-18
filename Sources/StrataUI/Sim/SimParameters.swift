@@ -73,6 +73,9 @@ struct SimParameters: View {
     }
 
     var body: some View {
+        // The inspector passes the same node and sim on every refresh, so this view would keep its first
+        // values; `revision` bumps on every parameter change.
+        let _ = sim.revision
         let parameters = parameters
         if !parameters.isEmpty {
             SimSection(title: "Parameters") {

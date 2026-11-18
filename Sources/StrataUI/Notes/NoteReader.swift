@@ -174,6 +174,7 @@ struct NoteReader: View {
                     .font(Theme.mono(13))
                     .lineSpacing(4)
                     .textSelection(.enabled)
+                    .strataCopyMenu("Copy code", text: text, overlays: model.overlays)
                     .padding(13)
             }
         }
@@ -190,6 +191,7 @@ struct NoteReader: View {
                     .font(Theme.mono(12))
                     .foregroundStyle(Theme.muted)
                     .textSelection(.enabled)
+                    .strataCopyMenu("Copy error", text: diagnostic.description, overlays: model.overlays)
             }
         }
         .padding(14)

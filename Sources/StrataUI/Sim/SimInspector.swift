@@ -83,6 +83,13 @@ struct SimInspector: View {
                     Text(node.label).font(Theme.heading).foregroundStyle(Theme.text)
                     Text([node.kind.rawValue, node.tech].compactMap { $0 }.joined(separator: " · "))
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    if let name = node.term, let term = terms.term(name) {
+                        SimTermAnchor(term: term, model: model, index: terms) {
+                            Label(term.term, systemImage: "text.book.closed")
+                                .font(Theme.ui(11, .medium)).foregroundStyle(Theme.accent)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 0)
                 if node.kind != .note { SimPill(title: health.title, icon: health.icon, tint: health.tint) }
@@ -109,7 +116,7 @@ struct SimInspector: View {
                     }
                 }
             }
-            nodeNote(node, preview: notePreview)
+            if actions.supportsNotes { nodeNote(node, preview: notePreview) }
             if node.kind != .note { SimParameters(node: node, sim: sim, model: model) }
         }
     }
@@ -225,6 +232,9 @@ struct SimInspector: View {
     }
 
     private func flowCard(_ flow: Flow, selectable: Bool) -> some View {
+        // Rows of a ForEach over unchanged data are not rebuilt by the panel's timeline, so each row
+        // observes `revision`, which bumps on every parameter change, command and scenario step.
+        let _ = sim.revision
         let metrics = sim.metrics(flow: flow.id)
         let binding = StrataCore.Binding(.flow(flow.id), "rate")
         let rate = sim.value(binding)?.number ?? metrics.configuredRate

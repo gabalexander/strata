@@ -115,6 +115,21 @@ import StrataCore
                 check(!vault.hasNote("Platform/New.md") && vault.hasNote("Platform/new.md"), "tree uses new spelling")
             }
         },
+        CheckCase(name: "vault moves folders by drag and refuses to nest them in themselves") {
+            try withVault { vault in
+                vault.write("Team/Runbook.md", "# Runbook")
+                vault.write("Team/Deep/Notes.md", "[[Runbook]]")
+                vault.write("Index.md", "[[Team/Runbook]] [[Team/Deep/Notes|deep]]")
+                check(vault.createFolder(in: nil, name: "Archive") == "Archive", "create destination")
+                check(vault.move("Team", toFolder: "Team/Deep") == nil, "a folder cannot move into its own child")
+                check(vault.move("Team", toFolder: "Team") == nil, "a folder cannot move into itself")
+                check(vault.move("Team", toFolder: "Archive") == "Archive/Team", "move a folder")
+                check(vault.hasNote("Archive/Team/Runbook.md") && vault.hasNote("Archive/Team/Deep/Notes.md"), "children move along")
+                check(vault.read("Index.md") == "[[Archive/Team/Runbook]] [[Archive/Team/Deep/Notes|deep]]", "links follow the folder")
+                vault.write("Runbook.md", "# Another")
+                check(vault.move("Archive/Team/Runbook.md", toFolder: nil) == nil, "a name clash at the destination fails")
+            }
+        },
         CheckCase(name: "vault rename preserves resolution of unrelated short links") {
             try withVault { vault in
                 vault.write("Z/Guide.md", "# Guide")

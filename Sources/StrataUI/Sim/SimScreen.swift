@@ -141,7 +141,8 @@ private struct SimWorkspace: View {
         GeometryReader { proxy in
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    SimToolbar(model: model, sim: sim, up: up, still: snapshot != nil)
+                    SimToolbar(model: model, sim: sim, up: up, parent: detailParent.map { ($0.title, out) },
+                               still: snapshot != nil)
                     Rectangle().fill(Theme.border).frame(height: 1)
                     stage(actions)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -164,8 +165,10 @@ private struct SimWorkspace: View {
         .onAppear {
             updateNotes()
             appear()
+            takeFocus()
         }
         .onChange(of: model.vault.revision) { _, _ in updateNotes() }
+        .onChange(of: SimFocus.of(model).request) { _, _ in takeFocus() }
         .onDisappear { navigation?.cancel() }
     }
 
@@ -185,6 +188,42 @@ private struct SimWorkspace: View {
     private func select(_ target: StageSelection?) {
         selection = target
         model.overlays.dismissMenu()
+    }
+
+    /// Selects the node a note or the palette asked for.
+    private func takeFocus() {
+        guard let node = SimFocus.of(model).take(for: AppModel.sessionKey(id, sim.path)),
+              sim.level.node(node) != nil else { return }
+        select(.node(node))
+    }
+
+    /// The level this manifest was entered from through a node's `detail:` link.
+    private var detailParent: (title: String, node: String)? {
+        guard sim.path.isEmpty, case .sim(let parentID, let parentPath)? = model.backStack.last, parentID != id,
+              let parent = SimSessions.cachedManifest(model, id: parentID),
+              let node = parent.level(at: parentPath)?.nodes.first(where: { $0.detail == id }) else { return nil }
+        let level = parentPath.last.flatMap { parent.level(at: Array(parentPath.dropLast()))?.node($0)?.label }
+        return (level ?? parent.title, node.id)
+    }
+
+    /// Back out of a `detail:` deep dive to the level it was entered from.
+    private func out() {
+        guard navigation == nil, let parent = detailParent, let destination = model.backStack.last else { return }
+        model.overlays.dismissMenu()
+        model.overlays.closeTerm()
+        guard !reduceMotion else { model.goBack(); return }
+        presentationNode = nil
+        withAnimation(Theme.gentle) {
+            presentationScale = 0.8
+            presentationOpacity = 0
+        }
+        navigation = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(370))
+            guard !Task.isCancelled else { return }
+            arrival = SimArrival(destination: destination, forward: false, node: parent.node)
+            model.goBack()
+            navigation = nil
+        }
     }
 
     private func updateNotes() {
@@ -248,13 +287,14 @@ private struct SimWorkspace: View {
             else if model.overlays.card != nil { model.overlays.closeTerm() }
             else if selection != nil { select(nil) }
             else if !sim.path.isEmpty { up(sim.path.count - 1) }
+            else if detailParent != nil { out() }
             else { return false }
             return true
         }
         guard model.overlays.menu == nil else { return false }
-        if flags == .command && event.keyCode == 126 && !sim.path.isEmpty {
-            up(sim.path.count - 1)
-            return true
+        if flags == .command && event.keyCode == 126 {
+            if !sim.path.isEmpty { up(sim.path.count - 1); return true }
+            if detailParent != nil { out(); return true }
         }
         let key = event.charactersIgnoringModifiers?.lowercased()
         if flags.isEmpty {
@@ -283,6 +323,8 @@ private struct SimToolbar: View {
     let model: AppModel
     let sim: Simulation
     let up: (Int) -> Void
+    /// Set when this manifest is another manifest's `detail:` deep dive: that level's title and the way out.
+    var parent: (title: String, out: () -> Void)?
     var still = false
 
     var body: some View {
@@ -293,7 +335,8 @@ private struct SimToolbar: View {
                 } else {
                     ScrollView(.horizontal) { breadcrumbs }
                         .scrollIndicators(.hidden)
-                        .defaultScrollAnchor(.trailing)
+                        .defaultScrollAnchor(.leading, for: .alignment)
+                        .defaultScrollAnchor(.trailing, for: .initialOffset)
                 }
             }
             .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
@@ -347,6 +390,14 @@ private struct SimToolbar: View {
         HStack(spacing: 7) {
             Image(systemName: sim.manifest.kind == .architecture ? "point.3.connected.trianglepath.dotted" : "waveform.path")
                 .font(Theme.ui(13, .medium)).foregroundStyle(Theme.accent)
+            if let parent {
+                Button(action: parent.out) {
+                    Text(parent.title).font(Theme.ui(13)).foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Back out of this deep dive")
+                Image(systemName: "chevron.right").font(Theme.ui(8, .medium)).foregroundStyle(Theme.faint)
+            }
             crumb(sim.manifest.title, depth: 0)
             ForEach(Array(sim.path.enumerated()), id: \.offset) { i, id in
                 Image(systemName: "chevron.right").font(Theme.ui(8, .medium)).foregroundStyle(Theme.faint)
