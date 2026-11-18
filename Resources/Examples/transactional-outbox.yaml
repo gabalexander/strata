@@ -45,6 +45,32 @@ nodes:
     doc: |
       Stores orders for both paths and the outbox rows of the lower path.
       If Postgres refuses the transaction, neither path can proceed to its next step.
+    schema:
+      - table: orders
+        doc: One row per checkout from either path. Row counts are estimates.
+        columns:
+          - { name: id, type: text, pk: true }
+          - { name: total_cents, type: bigint }
+          - { name: created_at, type: timestamptz }
+        rows:
+          - [o_51, 4200, "2025-11-14 10:02"]
+          - [o_52, 1700, "2025-11-14 10:02"]
+          - [o_53, 899, "2025-11-14 10:03"]
+        volume: { rows: 30M, growth: 1.4M/day }
+      - table: outbox
+        doc: One pending event per order of the outbox path, committed with it. The relay sets published_at after Kafka accepts the event.
+        owner: durable
+        columns:
+          - { name: id, type: bigserial, pk: true }
+          - { name: order_id, type: text, ref: orders.id }
+          - { name: topic, type: text }
+          - { name: payload, type: jsonb }
+          - { name: published_at, type: timestamptz, nullable: true }
+        indexes: ["outbox_unpublished_idx (id) WHERE published_at IS NULL"]
+        rows:
+          - [7001, o_51, order-events, { order_id: o_51, total_cents: 4200 }, "2025-11-14 10:02"]
+          - [7002, o_53, order-events, { order_id: o_53, total_cents: 899 }, null]
+        volume: { rows: 400k, growth: 700k/day }
   - id: outbox
     kind: queue
     label: Pending outbox
@@ -103,6 +129,8 @@ flows:
     label: Direct checkout
     from: clients
     rate: 8/s
+    traffic: { peak: 30/s, daily: 700k }
+    slo: { p99: 50ms, errors: 0.1% }
     steps:
       - call: direct
         steps:
@@ -112,6 +140,8 @@ flows:
     label: Outbox checkout
     from: clients
     rate: 8/s
+    traffic: { peak: 30/s, daily: 700k }
+    slo: { p99: 50ms, errors: 0.1% }
     color: 3
     steps:
       - call: durable
