@@ -42,7 +42,7 @@ struct SimInspector: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
             }
-            .overlay { SimOpsDetailHost(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, still: still) }
+            .overlay { SimOpsDetailHost(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, pulse: pulse, still: still) }
         }
         .background(Theme.surface)
     }
@@ -108,7 +108,7 @@ struct SimInspector: View {
                     SimSection(title: "Actions") { SimActionButtons(items: items) }
                 }
             }
-            SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, still: still)
+            SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, pulse: pulse, still: still)
             if node.kind != .note {
                 SimSection(title: "Live metrics") { live { nodeMetrics(node, nodeState(node)) } }
                 if node.kind.role == .buffer { live { bufferDetails(nodeState(node)) } }

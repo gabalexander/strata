@@ -12,6 +12,7 @@ struct SimOpsDetailHost: View {
     let actions: SimActions
     let selection: StageSelection?
     let select: (StageSelection?) -> Void
+    var pulse: SimPulse?
     var still = false
 
     var body: some View {
@@ -22,8 +23,7 @@ struct SimOpsDetailHost: View {
                 .onChange(of: selection) { _, next in state.selectionChanged(to: next) }
             if let detail = state.detail(for: selection), let entry = state.index.entry(detail.current) {
                 SimOpDetail(model: model, sim: sim, terms: terms, actions: actions, entry: entry, detail: detail,
-                            select: select, still: still)
-                    .id(detail.current)
+                            select: select, pulse: pulse, still: still)
                     .background(Theme.surface)
             }
         }
@@ -40,6 +40,7 @@ struct SimOpDetail: View {
     let entry: SimOpsIndex.Entry
     let detail: SimOpsState.Detail
     let select: (StageSelection?) -> Void
+    var pulse: SimPulse?
     var still = false
 
     private var state: SimOpsState { SimOpsState.of(sim) }
@@ -47,7 +48,7 @@ struct SimOpDetail: View {
     private var op: StrataCore.Operation { entry.op }
 
     var body: some View {
-        SimPanelScroll(still: still) {
+        SimPanelScroll(still: still, resetOn: detail.current) {
             VStack(alignment: .leading, spacing: 16) {
                 backBar
                 header
@@ -173,7 +174,7 @@ struct SimOpDetail: View {
     // MARK: Live
 
     private var live: some View {
-        SimOpsLive(sim: sim, still: still) {
+        SimLive(sim: sim, pulse: pulse) {
             let metrics = SimOpsMetrics.metrics(sim, entry.ref)
             if metrics.referenced {
                 VStack(alignment: .leading, spacing: 8) {
@@ -334,7 +335,8 @@ struct SimOpDetail: View {
                         if offset > 0 { SimOpsHairline() }
                         // A link from another node already talks to this op's node: leave the peer out.
                         SimOpRow(sim: sim, entry: link, owner: link.node.id != entry.node.id,
-                                 summary: link.peer == entry.node.id ? SimOpsText.reverseSummary(link) : nil, still: still,
+                                 summary: link.peer == entry.node.id ? SimOpsText.reverseSummary(link) : nil,
+                                 pulse: pulse, still: still,
                                  open: { state.push($0) },
                                  menu: { SimOpsMenus.row(index.entry($0) ?? link, sim: sim, model: model, anchor: detail.anchor) },
                                  overlays: model.overlays)

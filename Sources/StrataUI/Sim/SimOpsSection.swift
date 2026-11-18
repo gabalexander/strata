@@ -11,6 +11,7 @@ struct SimOpsSection: View {
     let actions: SimActions
     let node: Node
     let selection: StageSelection?
+    var pulse: SimPulse?
     var still = false
 
     private var state: SimOpsState { SimOpsState.of(sim) }
@@ -140,7 +141,8 @@ struct SimOpsSection: View {
                      callers: [OpRef] = []) -> some View {
         SimOpRow(sim: sim, entry: entry, owner: owner, summary: owner ? SimOpsText.reverseSummary(entry) : nil,
                  preview: preview,
-                 callers: callers.compactMap(index.entry), pinned: state.isPinned(entry.ref, at: selection), still: still,
+                 callers: callers.compactMap(index.entry), pinned: state.isPinned(entry.ref, at: selection), pulse: pulse,
+                 still: still,
                  open: { state.open($0, from: selection) },
                  menu: { SimOpsMenus.row(index.entry($0) ?? entry, sim: sim, model: model, anchor: selection) },
                  overlays: model.overlays)
@@ -160,6 +162,8 @@ struct SimOpRow: View {
     var callers: [SimOpsIndex.Entry] = []
     /// Its path is pinned on the stage ("Highlight path").
     var pinned = false
+    /// Beats the live rate and p99 (SimLive); nothing else in the row refreshes with it.
+    var pulse: SimPulse?
     var still = false
     let open: (OpRef) -> Void
     let menu: (OpRef) -> [MenuItem]
@@ -189,7 +193,7 @@ struct SimOpRow: View {
                                 Image(systemName: "pin.fill").font(Theme.ui(9)).foregroundStyle(Theme.accent)
                                     .accessibilityLabel("Path pinned")
                             }
-                            if !owner { SimOpsLive(sim: sim, still: still) { SimOpRate(sim: sim, ref: entry.ref) } }
+                            if !owner { SimLive(sim: sim, pulse: pulse) { SimOpRate(sim: sim, ref: entry.ref) } }
                             if let access = SimOpsText.access(op) { SimOpAccessBadge(access: access) }
                         }
                         .frame(height: 16)
@@ -202,7 +206,7 @@ struct SimOpRow: View {
                                         .lineLimit(1).truncationMode(.tail)
                                 }
                                 Spacer(minLength: 4)
-                                SimOpsLive(sim: sim, still: still) { SimOpRate(sim: sim, ref: entry.ref) }
+                                SimLive(sim: sim, pulse: pulse) { SimOpRate(sim: sim, ref: entry.ref) }
                             }
                         } else {
                             Text(secondLine)
@@ -309,24 +313,6 @@ struct SimOpAccessBadge: View {
     }
 }
 
-/// Live numbers refresh four times a second and on every discrete change; nothing around them does.
-@MainActor
-struct SimOpsLive<Content: View>: View {
-    let sim: Simulation
-    var still = false
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        if still {
-            content()
-        } else {
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
-                let _ = sim.revision
-                content()
-            }
-        }
-    }
-}
 
 /// A labelled card of rows.
 struct SimOpsGroupBox<Content: View>: View {
