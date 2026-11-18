@@ -72,7 +72,7 @@ func listOps(_ args: Arguments) throws -> Int32 {
 }
 
 private func collectOps(_ level: Level, path: String, into listings: inout [OpListing]) {
-    let references = stepReferences(level)
+    let references = level.opReferences()
     for node in level.nodes {
         for op in node.ops {
             listings.append(OpListing(level: path, node: node.id, op: op, flows: references["\(node.id)/\(op.id)"] ?? []))
@@ -85,36 +85,6 @@ private func collectOps(_ level: Level, path: String, into listings: inout [OpLi
             if let inside = op.inside { collectOps(inside, path: "\(nodePath)#\(op.id)", into: &listings) }
         }
     }
-}
-
-/// "node/op" → ids of the flows that name that op (on the flow or a step), resolved as the engine does.
-private func stepReferences(_ level: Level) -> [String: [String]] {
-    var result: [String: [String]] = [:]
-    func walk(_ steps: [Step], caller: String?, flow: String) {
-        for step in steps {
-            var target: String?
-            switch step.action {
-            case .call(let callee, let inner, let miss):
-                target = callee
-                walk(inner, caller: callee, flow: flow)
-                walk(miss, caller: caller, flow: flow)
-            case .publish(let buffer): target = buffer
-            case .parallel(let branches): walk(branches, caller: caller, flow: flow)
-            case .work: break
-            }
-            if let reference = step.op, let resolved = level.resolveOp(reference, caller: caller, target: target) {
-                let key = "\(resolved.node)/\(resolved.op.id)"
-                if result[key]?.contains(flow) != true { result[key, default: []].append(flow) }
-            }
-        }
-    }
-    for flow in level.flows {
-        if let reference = flow.op, let resolved = level.resolveOp(reference, caller: flow.by ?? flow.from, target: nil) {
-            result["\(resolved.node)/\(resolved.op.id)", default: []].append(flow.id)
-        }
-        walk(flow.steps, caller: flow.from ?? flow.by, flow: flow.id)
-    }
-    return result
 }
 
 private func renderOps(_ listings: [OpListing], manifest: Manifest) -> String {
