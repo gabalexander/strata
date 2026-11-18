@@ -232,6 +232,9 @@ struct SimInspector: View {
     }
 
     private func flowCard(_ flow: Flow, selectable: Bool) -> some View {
+        // Rows of a ForEach over unchanged data are not rebuilt by the panel's timeline, so each row
+        // observes `revision`, which bumps on every parameter change, command and scenario step.
+        let _ = sim.revision
         let metrics = sim.metrics(flow: flow.id)
         let binding = StrataCore.Binding(.flow(flow.id), "rate")
         let rate = sim.value(binding)?.number ?? metrics.configuredRate

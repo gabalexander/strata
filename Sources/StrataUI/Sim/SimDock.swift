@@ -98,6 +98,9 @@ struct SimDock: View {
     }
 
     private func controlCard(_ control: Control) -> some View {
+        // Rows of a ForEach over unchanged data are not rebuilt by the panel's timeline, so each row
+        // observes `revision`, which bumps on every parameter change, command and scenario step.
+        let _ = sim.revision
         let value = sim.value(control.bind)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -168,6 +171,7 @@ struct SimDock: View {
         return VStack(alignment: .leading, spacing: 8) {
             if sim.level.scenarios.isEmpty { empty("No scenarios at this level", icon: "flag") }
             ForEach(sim.level.scenarios) { scenario in
+                let _ = sim.revision // see controlCard
                 let active = sim.scenario == scenario.id
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
