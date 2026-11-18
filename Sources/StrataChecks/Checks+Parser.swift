@@ -427,12 +427,12 @@ private func expectClean(_ result: (Manifest?, [Diagnostic])) -> Manifest? {
     ]
 }
 
-private func requiredResource(_ name: String) throws -> URL {
+func requiredResource(_ name: String) throws -> URL {
     guard let url = StrataResources.url(name) else { throw CocoaError(.fileNoSuchFile) }
     return url
 }
 
-private func referenceFences() throws -> [String] {
+func referenceFences() throws -> [String] {
     let text = try String(contentsOf: requiredResource("Docs/manifest.md"), encoding: .utf8)
     var fences: [String] = []
     var lines: [String]?
@@ -448,7 +448,7 @@ private func referenceFences() throws -> [String] {
     return fences
 }
 
-private func specManifest(_ snippet: String) -> String {
+func specManifest(_ snippet: String) -> String {
     if snippet.hasPrefix("strata: 1") { return snippet }
     // The node and step field catalogs contain ellipses and mutually exclusive alternatives.
     let text = snippet.replacingOccurrences(of: "[...]", with: "[]").components(separatedBy: "\n")
