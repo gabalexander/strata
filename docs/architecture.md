@@ -59,7 +59,7 @@ Nothing about a work project goes into this repo.
 
 Hidden mode copies GabOps:
 
-- **Out of screen shares:** every window has `sharingType = .none`. A hook re-applies it to each new window.
+- **Out of screen shares.** When screen-share hiding is enabled, Strata sets `sharingType = .none` before AppKit orders any app-owned window on screen. Window sweeps also enforce this setting. macOS owns input method candidate windows, the character palette, and dictation UI, so their visibility is outside Strata's control.
 - **Out of the Dock and ⌘-Tab:** the app is an accessory (`LSUIElement`).
 - **Summoned:** a global hotkey (Carbon `RegisterEventHotKey`, no Accessibility permission; default ctrl+option+s) and a menu bar item open it.
 - **No system popups:** menus, popovers, tooltips and sheets are drawn inside the window by `OverlayHost`. Never use `.contextMenu`, `.popover`, `.help`, `.sheet`, `.alert` or `NSMenu`; a separate system window would show up in a screen share. The menu bar item's own menu is the one exception.

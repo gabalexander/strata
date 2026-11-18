@@ -251,6 +251,12 @@ public final class Vault {
         return index.containsNote(path)
     }
 
+    /// Lines from the current vault index, or nil if the note is absent from the index.
+    public func indexedLines(at path: String) -> [String]? {
+        _ = revision
+        return index.notes[path]?.lines
+    }
+
     /// Resolves a local attachment relative to its note, keeping access within the vault.
     public func attachmentURL(_ path: String, relativeTo note: String) -> URL? {
         let decoded = path.removingPercentEncoding ?? path

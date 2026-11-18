@@ -13,7 +13,7 @@ struct StageCamera: Equatable {
     init(fitting bounds: CGRect, in size: CGSize, inset: CGFloat) {
         let available = CGSize(width: max(1, size.width - inset * 2), height: max(1, size.height - inset * 2))
         let scale = min(1, available.width / max(1, bounds.width), available.height / max(1, bounds.height))
-        self.init(zoom: max(0.3, scale))
+        self.init(zoom: scale)
         offset = CGPoint(x: size.width / 2 - bounds.midX * zoom, y: size.height / 2 - bounds.midY * zoom)
     }
 
@@ -27,7 +27,7 @@ struct StageCamera: Equatable {
 
     mutating func magnify(by factor: CGFloat, around anchor: CGPoint) {
         let point = world(anchor)
-        zoom = min(3, max(0.3, zoom * factor))
+        zoom = min(3, max(min(0.3, zoom), zoom * factor))
         offset = anchor - point * zoom
     }
 }

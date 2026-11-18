@@ -9,7 +9,7 @@ public struct NotesTree: View {
     @State private var renaming: String?
     @State private var name = ""
     @FocusState private var focusedRow: String?
-    @FocusState private var focusedName: Bool
+    @State private var focusedName = false
 
     public init(model: AppModel) { self.model = model }
 
@@ -100,16 +100,13 @@ public struct NotesTree: View {
             Image(systemName: row.item.isFolder ? "folder" : "doc.text")
                 .font(Theme.ui(12)).foregroundStyle(Theme.accent)
                 .frame(width: 15)
-            TextField("Name", text: $name)
-                .font(Theme.ui())
-                .textFieldStyle(.plain)
-                .focused($focusedName)
+            StrataTextField(placeholder: "Name", text: $name, focused: $focusedName, overlays: model.overlays,
+                            onSubmit: { commitRename(row.item) },
+                            onEscape: { renaming = nil; focusedRow = row.id })
                 .padding(.horizontal, 5)
                 .frame(height: 23)
                 .background(Theme.raised, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
                 .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall).strokeBorder(Theme.accent.opacity(0.42)))
-                .onSubmit { commitRename(row.item) }
-                .onExitCommand { renaming = nil; focusedRow = row.id }
         }
         .padding(.leading, row.indent + 14)
         .padding(.trailing, 3)

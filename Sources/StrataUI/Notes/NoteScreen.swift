@@ -34,7 +34,7 @@ private struct NoteContent: View {
     @State private var owner = UUID()
     @State private var renaming = false
     @State private var name = ""
-    @FocusState private var titleFocused: Bool
+    @State private var titleFocused = false
     @State private var jump: NoteWorkspace.Destination?
     @State private var editorJump: (id: UUID, line: Int)?
 
@@ -109,15 +109,11 @@ private struct NoteContent: View {
                 .frame(width: 30, height: 34)
             VStack(alignment: .leading, spacing: 3) {
                 if renaming {
-                    TextField("Note title", text: $name)
-                        .textFieldStyle(.plain)
-                        .font(Theme.ui(15, .semibold))
+                    StrataTextField(placeholder: "Note title", text: $name, focused: $titleFocused, overlays: model.overlays,
+                                    size: 15, weight: .semibold, onSubmit: commitRename, onEscape: { renaming = false })
                         .padding(.horizontal, 5)
                         .background(Theme.raised, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
                         .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall).strokeBorder(Theme.accent.opacity(0.35)))
-                        .focused($titleFocused)
-                        .onSubmit(commitRename)
-                        .onExitCommand { renaming = false }
                         .frame(maxWidth: 360)
                 } else {
                     Text(NoteLinks.title(path))

@@ -88,24 +88,24 @@ private struct SimEmbedSession: View {
         self.manifest = manifest
         self.visible = visible
         still = snapshotSession != nil
-        _session = StateObject(wrappedValue: EmbedSessionState(snapshotSession ?? Self.make(model: model, id: id, manifest: manifest, embed: embed)))
+        _session = StateObject(wrappedValue: EmbedSessionState(snapshotSession ?? Self.make(manifest: manifest, embed: embed)))
     }
 
     var body: some View {
         SimEmbedWorkspace(model: model, id: id, sim: sim, scenario: embed.scenario, visible: visible, still: still)
             .id(ObjectIdentifier(sim))
             .onChange(of: Definition(manifest: manifest, scenario: embed.scenario)) { _, _ in
-                session.sim = Self.make(model: model, id: id, manifest: manifest, embed: embed)
+                session.sim = Self.make(manifest: manifest, embed: embed)
             }
             .onChange(of: embed.autoplay) { _, autoplay in sim.playing = autoplay }
     }
 
-    private static func make(model: AppModel, id: String, manifest: Manifest, embed: Embed) -> Simulation {
-        let sim = SimSessions.make(model, id: id, path: embed.view, manifest: manifest)
+    private static func make(manifest: Manifest, embed: Embed) -> Simulation {
+        let sim = Simulation(manifest: manifest, path: embed.view)
         if let scenario = embed.scenario, sim.level.scenarios.contains(where: { $0.id == scenario }) {
             sim.start(scenario: scenario)
         }
-        sim.playing = embed.autoplay
+        if !embed.autoplay { sim.playing = false }
         return sim
     }
 }
@@ -151,7 +151,7 @@ private struct SimEmbedWorkspace: View {
                     SimButton(title: sim.scenario == scenario ? "Stop scenario" : "Run scenario", icon: "flag",
                               iconOnly: true, active: sim.scenario == scenario) {
                         if sim.scenario == scenario { sim.stopScenario() }
-                        else { sim.start(scenario: scenario); sim.playing = true }
+                        else { sim.start(scenario: scenario) }
                     }
                 }
                 SimButton(title: sim.playing ? "Pause" : "Play", icon: sim.playing ? "pause.fill" : "play.fill",
@@ -177,11 +177,14 @@ private struct SimEmbedWorkspace: View {
     private func expand() {
         if case .inline = sim.manifest.source {
             if !sim.path.isEmpty, SimSessions.cachedManifest(model, id: id).map({ !SimSessions.same($0, sim.manifest) }) ?? true {
-                SimSessions.remember(SimSessions.make(model, id: id, path: [], manifest: sim.manifest), model: model, id: id)
+                SimSessions.remember(Simulation(manifest: sim.manifest), model: model, id: id)
             }
             SimSessions.remember(sim, model: model, id: id)
-        } else if model.sessions[AppModel.sessionKey(id, sim.path)] == nil {
-            SimSessions.remember(sim, model: model, id: id)
+        } else {
+            let cached = model.sessions[AppModel.sessionKey(id, sim.path)]
+            if cached == nil || cached?.parentRate != sim.parentRate {
+                SimSessions.remember(sim, model: model, id: id)
+            }
         }
         model.open(.sim(id, path: sim.path))
     }

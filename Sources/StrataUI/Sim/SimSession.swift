@@ -10,18 +10,17 @@ enum SimSessions {
         return sim.manifest
     }
 
-    static func cached(_ model: AppModel, id: String, path: [String], manifest: Manifest) -> Simulation {
-        if let sim = model.sessions[AppModel.sessionKey(id, path)], same(sim.manifest, manifest) { return sim }
-        return make(model, id: id, path: path, manifest: manifest)
+    static func cached(_ model: AppModel, id: String, path: [String], manifest: Manifest,
+                       parentRate: Double?) -> Simulation {
+        if let sim = model.sessions[AppModel.sessionKey(id, path)],
+           sim.parentRate == parentRate, same(sim.manifest, manifest) { return sim }
+        return Simulation(manifest: manifest, path: path, parentRate: parentRate)
     }
 
-    static func make(_ model: AppModel, id: String, path: [String], manifest: Manifest) -> Simulation {
-        let parentRate = path.last.flatMap { nodeID -> Double? in
-            let parent = model.sessions[AppModel.sessionKey(id, Array(path.dropLast()))]
-            guard let parent, same(parent.manifest, manifest) else { return nil }
-            return parent.frame().nodes[nodeID]?.throughput
-        }
-        return Simulation(manifest: manifest, path: path, parentRate: parentRate)
+    static func drillDestination(_ node: Node, id: String, path: [String]) -> Route? {
+        if let detail = node.detail { return .sim(detail, path: []) }
+        if node.inside != nil { return .sim(id, path: path + [node.id]) }
+        return nil
     }
 
     static func remember(_ sim: Simulation, model: AppModel, id: String) {

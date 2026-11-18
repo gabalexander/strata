@@ -24,6 +24,10 @@ public final class AppModel {
     public private(set) var route: Route = .home
     public private(set) var backStack: [Route] = []
     public private(set) var forwardStack: [Route] = []
+    /// Measured arrivals for the current simulator visit, when opened by drilling into a node.
+    public private(set) var routeParentRate: Double?
+    @ObservationIgnored private var backParentRates: [Double?] = []
+    @ObservationIgnored private var forwardParentRates: [Double?] = []
 
     public var sidebarVisible = true
     public var inspectorVisible = true
@@ -42,16 +46,41 @@ public final class AppModel {
     }
 
     public func open(_ r: Route) {
-        guard r != route else { return }
+        open(r, parentRate: nil)
+    }
+
+    public func open(_ r: Route, parentRate: Double?) {
+        guard r != route || parentRate != routeParentRate else { return }
         overlays.dismissMenu(); overlays.closeTerm()
-        backStack.append(route); forwardStack.removeAll()
-        if backStack.count > 100 { backStack.removeFirst() }
+        backStack.append(route)
+        backParentRates.append(routeParentRate)
+        forwardStack.removeAll()
+        forwardParentRates.removeAll()
+        if backStack.count > 100 {
+            backStack.removeFirst()
+            backParentRates.removeFirst()
+        }
+        routeParentRate = parentRate
         route = r
     }
     /// Swap the current route without a history entry (e.g. renaming the open note).
-    public func replace(_ r: Route) { route = r }
-    public func goBack() { guard let r = backStack.popLast() else { return }; forwardStack.append(route); route = r }
-    public func goForward() { guard let r = forwardStack.popLast() else { return }; backStack.append(route); route = r }
+    public func replace(_ r: Route) { routeParentRate = nil; route = r }
+
+    public func goBack() {
+        guard let r = backStack.popLast() else { return }
+        forwardStack.append(route)
+        forwardParentRates.append(routeParentRate)
+        routeParentRate = backParentRates.removeLast()
+        route = r
+    }
+
+    public func goForward() {
+        guard let r = forwardStack.popLast() else { return }
+        backStack.append(route)
+        backParentRates.append(routeParentRate)
+        routeParentRate = forwardParentRates.removeLast()
+        route = r
+    }
 
     public static func sessionKey(_ id: String, _ path: [String]) -> String { ([id] + path).joined(separator: "|") }
 
@@ -63,6 +92,10 @@ public final class AppModel {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/zsh")
             task.arguments = ["-lc", "\(editor) \(Self.shellQuote(p))"]
+            task.terminationHandler = { [weak self] task in
+                guard task.terminationReason != .exit || task.terminationStatus != 0 else { return }
+                Task { @MainActor in self?.overlays.toast("Couldn’t open code in the configured editor") }
+            }
             do { try task.run(); return } catch {}
         }
         let file = p.split(separator: ":").first.map(String.init) ?? p

@@ -37,11 +37,11 @@ public struct RootView: View {
                 .padding(.leading, 80)
                 .padding(.top, 3)
             }
-            OverlayHost(model: model)
             if model.paletteOpen || model.switcherOpen {
                 CommandPalette(catalog: catalog, switching: model.switcherOpen, recent: $recentPalettePicks)
                     .id(model.switcherOpen)
             }
+            OverlayHost(model: model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .font(Theme.ui())
