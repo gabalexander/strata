@@ -9,6 +9,7 @@ struct SimInspector: View {
     let actions: SimActions
     let selection: StageSelection?
     let select: (StageSelection?) -> Void
+    var pulse: SimPulse?
     var still = false
 
     var body: some View {
@@ -24,28 +25,29 @@ struct SimInspector: View {
             }
             .padding(.horizontal, 14).frame(height: 44)
             Rectangle().fill(Theme.border).frame(height: 1)
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
-                let _ = sim.playing ? 0 : sim.revision
-                SimPanelScroll(still: still) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        switch selection {
-                        case .node(let id):
-                            if let node = sim.level.node(id) { nodePane(node, notePreview: notePreview) }
-                        case .edge(let id):
-                            if let edge = sim.diagramEdge(id) { edgePane(edge) }
-                        case .flow(let id):
-                            if let flow = sim.level.flow(id) { flowPane(flow) }
-                        case nil:
-                            overview
-                        }
+            // Selection changes rebuild this on the same frame; only the SimLive leaves inside tick.
+            SimPanelScroll(still: still, resetOn: selection) {
+                VStack(alignment: .leading, spacing: 16) {
+                    switch selection {
+                    case .node(let id):
+                        if let node = sim.level.node(id) { nodePane(node, notePreview: notePreview) }
+                    case .edge(let id):
+                        if let edge = sim.diagramEdge(id) { edgePane(edge) }
+                    case .flow(let id):
+                        if let flow = sim.level.flow(id) { flowPane(flow) }
+                    case nil:
+                        overview
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
                 }
-                .id(selection)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
             }
         }
         .background(Theme.surface)
+    }
+
+    private func live<Content: View>(@ViewBuilder _ content: @escaping () -> Content) -> some View {
+        SimLive(sim: sim, pulse: pulse, content: content)
     }
 
     private var overview: some View {
@@ -72,11 +74,10 @@ struct SimInspector: View {
         }
     }
 
+    private func nodeState(_ node: Node) -> NodeState { sim.nodeState(node.id) ?? NodeState() }
+
     private func nodePane(_ node: Node, notePreview: String?) -> some View {
-        let state = sim.nodeState(node.id) ?? NodeState()
-        let health = state.health.presentation
-        let availableActions = actions.nodeActions(node, state: state)
-        return Group {
+        Group {
             HStack(alignment: .top, spacing: 9) {
                 glyph(node.icon ?? node.kind.symbol, tint: node.simTint)
                 VStack(alignment: .leading, spacing: 4) {
@@ -92,15 +93,23 @@ struct SimInspector: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if node.kind != .note { SimPill(title: health.title, icon: health.icon, tint: health.tint) }
+                if node.kind != .note {
+                    live {
+                        let health = nodeState(node).health.presentation
+                        SimPill(title: health.title, icon: health.icon, tint: health.tint)
+                    }
+                }
             }
             if let doc = node.doc { SimMarkdown(source: doc, model: model, terms: terms) }
-            if !availableActions.isEmpty {
-                SimSection(title: "Actions") { SimActionButtons(items: availableActions) }
+            live {
+                let items = actions.nodeActions(node, state: nodeState(node))
+                if !items.isEmpty {
+                    SimSection(title: "Actions") { SimActionButtons(items: items) }
+                }
             }
             if node.kind != .note {
-                SimSection(title: "Live metrics") { nodeMetrics(node, state) }
-                if node.kind.role == .buffer { bufferDetails(state) }
+                SimSection(title: "Live metrics") { live { nodeMetrics(node, nodeState(node)) } }
+                if node.kind.role == .buffer { live { bufferDetails(nodeState(node)) } }
             }
             if !node.code.isEmpty {
                 SimSection(title: "Code") {
@@ -185,16 +194,22 @@ struct SimInspector: View {
     }
 
     private func edgePane(_ edge: StrataCore.Edge) -> some View {
-        let state = sim.edgeState(edge.id) ?? EdgeState()
-        let bind = BindTarget.edge(from: edge.from, to: edge.to)
-        let latency = sim.value(StrataCore.Binding(bind, "latency"))?.number ?? edge.latency?.mean ?? 0.001
-        let loss = sim.value(StrataCore.Binding(bind, "loss"))?.number ?? edge.loss ?? 0
-        return Group {
+        Group {
             HStack(spacing: 9) {
                 glyph("arrow.right", tint: Theme.info)
                 Text(actions.edgeTitle(edge)).font(Theme.heading).foregroundStyle(Theme.text)
                 Spacer(minLength: 0)
             }
+            live { edgeDetails(edge) }
+        }
+    }
+
+    private func edgeDetails(_ edge: StrataCore.Edge) -> some View {
+        let state = sim.edgeState(edge.id) ?? EdgeState()
+        let bind = BindTarget.edge(from: edge.from, to: edge.to)
+        let latency = sim.value(StrataCore.Binding(bind, "latency"))?.number ?? edge.latency?.mean ?? 0.001
+        let loss = sim.value(StrataCore.Binding(bind, "loss"))?.number ?? edge.loss ?? 0
+        return Group {
             HStack(spacing: 6) {
                 if let proto = edge.protocol { SimPill(title: proto) }
                 if state.cut { SimPill(title: "Cut", icon: "scissors", tint: Theme.bad) }
@@ -231,10 +246,12 @@ struct SimInspector: View {
         }
     }
 
+    /// Live: the rate follows parameter changes and the stats tick with the pulse.
     private func flowCard(_ flow: Flow, selectable: Bool) -> some View {
-        // Rows of a ForEach over unchanged data are not rebuilt by the panel's timeline, so each row
-        // observes `revision`, which bumps on every parameter change, command and scenario step.
-        let _ = sim.revision
+        live { flowCardContent(flow, selectable: selectable) }
+    }
+
+    private func flowCardContent(_ flow: Flow, selectable: Bool) -> some View {
         let metrics = sim.metrics(flow: flow.id)
         let binding = StrataCore.Binding(.flow(flow.id), "rate")
         let rate = sim.value(binding)?.number ?? metrics.configuredRate

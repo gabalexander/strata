@@ -26,6 +26,7 @@ struct SimDock: View {
     let terms: TermIndex
     let actions: SimActions
     let selection: StageSelection?
+    var pulse: SimPulse?
     var still = false
     @SwiftUI.Binding var tab: SimDockTab
     @State private var filterNode = true
@@ -53,23 +54,20 @@ struct SimDock: View {
             }
             .padding(.horizontal, 12).frame(height: 40)
             Rectangle().fill(Theme.border).frame(height: 1)
-            if still || tab == .glossary || tab == .about {
-                scrollable
-            } else {
-                TimelineView(.periodic(from: .now, by: 0.25)) { _ in scrollable }
-            }
+            scrollable
         }
         .background(Theme.surface)
     }
 
+    /// A tab switch rebuilds this on the same frame. Rows observe what they show themselves:
+    /// `revision` for discrete changes and the pulse for live numbers.
     private var scrollable: some View {
-        let _ = tab == .glossary || tab == .about || sim.playing ? 0 : sim.revision
-        return SimPanelScroll(still: still) {
+        return SimPanelScroll(still: still, resetOn: tab) {
             Group {
                 switch tab {
                 case .controls: controls
                 case .scenarios: scenarios
-                case .log: logContent
+                case .log: SimLive(sim: sim, pulse: nil) { logContent }
                 case .glossary: glossary
                 case .about: about
                 }
@@ -77,7 +75,6 @@ struct SimDock: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14).padding(.vertical, 12)
         }
-        .id(tab)
         .onChange(of: selection) { _, _ in filterNode = true }
     }
 
@@ -167,17 +164,18 @@ struct SimDock: View {
     }
 
     private var scenarios: some View {
-        let frame = sim.frame()
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             if sim.level.scenarios.isEmpty { empty("No scenarios at this level", icon: "flag") }
             ForEach(sim.level.scenarios) { scenario in
-                let _ = sim.revision // see controlCard
+                // `scenario` is observed, so starting or stopping one updates the row on the same frame.
                 let active = sim.scenario == scenario.id
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: "flag").foregroundStyle(active ? Theme.accent : Theme.muted)
                         Text(scenario.label).font(Theme.ui(13, .semibold)).foregroundStyle(Theme.text)
-                        if active { SimPill(title: stepLabel(scenario), tint: Theme.accent) }
+                        if active {
+                            SimLive(sim: sim, pulse: pulse) { SimPill(title: stepLabel(scenario), tint: Theme.accent) }
+                        }
                         Spacer(minLength: 4)
                         SimButton(title: active ? "Stop" : "Run", icon: active ? "stop.fill" : "play.fill", active: active) {
                             if active { sim.stopScenario() }
@@ -185,8 +183,12 @@ struct SimDock: View {
                         }
                     }
                     if let goal = scenario.goal { SimMarkdown(source: goal, model: model, terms: terms, size: 12) }
-                    if active, let next = scenario.steps.filter({ $0.at > sim.now }).min(by: { $0.at < $1.at }) {
-                        Text("Next step at \(SimFormat.seconds(next.at))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    if active {
+                        SimLive(sim: sim, pulse: pulse) {
+                            if let next = scenario.steps.filter({ $0.at > sim.now }).min(by: { $0.at < $1.at }) {
+                                Text("Next step at \(SimFormat.seconds(next.at))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                            }
+                        }
                     }
                     if !scenario.watch.isEmpty {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 173, maximum: 230), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 6) {
@@ -194,8 +196,10 @@ struct SimDock: View {
                                 HStack(spacing: 5) {
                                     Text(name).font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                                     Spacer(minLength: 0)
-                                    Text(watched(name, frame: frame)).font(Theme.mono(11, .medium)).foregroundStyle(Theme.text)
-                                        .lineLimit(1)
+                                    SimLive(sim: sim, pulse: pulse) {
+                                        Text(watched(name)).font(Theme.mono(11, .medium)).foregroundStyle(Theme.text)
+                                            .lineLimit(1)
+                                    }
                                 }
                                 .padding(6)
                                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
@@ -215,11 +219,11 @@ struct SimDock: View {
         return scenario.steps.isEmpty ? "Running" : "Step \(current)/\(scenario.steps.count)"
     }
 
-    private func watched(_ name: String, frame: SimFrame) -> String {
+    private func watched(_ name: String) -> String {
         guard let key = MetricKey.parse(name, in: sim.level) else { return "—" }
         switch key {
         case .node(let id, let metric):
-            guard let state = frame.nodes[id] else { return "—" }
+            guard let state = sim.nodeState(id) else { return "—" }
             if metric == .inflight, let last = sim.series(key).last { return SimFormat.number(last) }
             return state.formatted(metric)
         case .flow(let id, let metric):

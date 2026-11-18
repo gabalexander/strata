@@ -35,12 +35,16 @@ final class StageViewport {
 @MainActor
 private final class StageClock {
     private var last: Date?
+    private var lastBeat: Date?
 
-    func advance(to date: Date, in sim: Simulation) {
+    func advance(to date: Date, in sim: Simulation, pulse: SimPulse?) {
         defer { last = date }
         guard let last else { return }
         let delta = date.timeIntervalSince(last)
         if delta > 0 { sim.tick(delta) }
+        guard let pulse, lastBeat.map({ date.timeIntervalSince($0) >= SimPulse.interval }) ?? true else { return }
+        lastBeat = date
+        pulse.advance()
     }
 
     func suspend() { last = nil }
@@ -71,6 +75,8 @@ struct SimStage: View {
     var onDive: (String) -> Void = { _ in }
     var menu: ((StageSelection?) -> [MenuItem])?
     var onKey: ((NSEvent) -> Bool)?
+    /// Beaten by the frame clock while playing, for the live numbers in the panels around the stage.
+    var pulse: SimPulse?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clock = StageClock()
@@ -186,7 +192,7 @@ struct SimStage: View {
             let _ = sim.playing ? 0 : sim.revision
             TimelineView(.animation(paused: !visible || !sim.playing)) { tick in
                 paint(camera)
-                    .onChange(of: tick.date) { _, date in clock.advance(to: date, in: sim) }
+                    .onChange(of: tick.date) { _, date in clock.advance(to: date, in: sim, pulse: pulse) }
             }
             .onChange(of: sim.playing) { _, _ in clock.suspend() }
             .onChange(of: visible) { _, _ in clock.suspend() }

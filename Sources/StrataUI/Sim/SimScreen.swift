@@ -116,6 +116,7 @@ private struct SimWorkspace: View {
     @State private var presentationOpacity: Double = 1
     @State private var presentationNode: String?
     @State private var noteIDs: Set<String> = []
+    @State private var pulse = SimPulse()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let terms: TermIndex
@@ -141,20 +142,22 @@ private struct SimWorkspace: View {
         GeometryReader { proxy in
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    SimToolbar(model: model, sim: sim, up: up, parent: detailParent.map { ($0.title, out) },
+                    SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
                                still: snapshot != nil)
                     Rectangle().fill(Theme.border).frame(height: 1)
                     stage(actions)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if model.dockVisible {
                         Rectangle().fill(Theme.border).frame(height: 1)
-                        SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, still: snapshot != nil, tab: $tab)
+                        SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, pulse: pulse,
+                                still: snapshot != nil, tab: $tab)
                             .frame(height: min(222, max(133, proxy.size.height * 0.33)))
                     }
                 }
                 if model.inspectorVisible {
                     Rectangle().fill(Theme.border).frame(width: 1)
-                    SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, still: snapshot != nil)
+                    SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select,
+                                 pulse: pulse, still: snapshot != nil)
                         .frame(width: min(Theme.inspectorWidth, max(175, proxy.size.width * 0.34)))
                 }
             }
@@ -176,7 +179,7 @@ private struct SimWorkspace: View {
         SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
                  selection: selection, noteIDs: noteIDs, still: snapshot != nil,
                  onSelect: select, onDive: { if let node = sim.level.node($0) { dive(node) } },
-                 menu: actions.menu, onKey: key)
+                 menu: actions.menu, onKey: key, pulse: pulse)
             .scaleEffect(presentationScale, anchor: viewport.origin(for: presentationNode, in: renderer.layout, compact: false))
             .opacity(presentationOpacity)
             .clipped()
@@ -322,6 +325,7 @@ private struct SimWorkspace: View {
 private struct SimToolbar: View {
     let model: AppModel
     let sim: Simulation
+    let pulse: SimPulse
     let up: (Int) -> Void
     /// Set when this manifest is another manifest's `detail:` deep dive: that level's title and the way out.
     var parent: (title: String, out: () -> Void)?
@@ -373,7 +377,7 @@ private struct SimToolbar: View {
 
     private var transport: some View {
         HStack(spacing: 6) {
-            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            SimLive(sim: sim, pulse: pulse) {
                 Text(SimFormat.seconds(sim.now)).font(Theme.mono(11, .medium)).monospacedDigit()
                     .foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
