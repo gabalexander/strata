@@ -73,6 +73,7 @@ Then build:
   - Edges with `protocol`.
   - Labels as the team says them (`orders-svc`, `ledger-db`).
   - Set `repo:` at the top and `code:` on every node (folder, or `file.go:123` for a key handler).
+  - `ops:` on every service: see [Operations](#operations).
 - **Docs on every node** (`doc`), 2-5 lines:
   - what it owns;
   - key endpoints, topics or tables;
@@ -93,6 +94,33 @@ Then build:
 - **Optionally, notes:** `~/.strata/vault/Maps/<project>.md` with an overview, a ```strata embed
   (`sim: <id>`) and `[[links]]`.
 
+## Operations
+
+Ops are what each node really does, taken from the code. Add one op per query, endpoint, topic or key
+pattern that matters, with `code:` pointing at it. `strata schema` lists the fields for each kind.
+
+- **SQL** (`kind: sql`, `target:` the database): sqlc query files (`-- name: GetPrice :one`), ORM
+  and query-builder calls (GORM, Prisma, SQLAlchemy, ActiveRecord, knex, jOOQ) and raw SQL strings.
+  - Set `access` and `query`. Add `tx: true` when statements share a transaction, and `locks` for
+    `FOR UPDATE` or `SKIP LOCKED`.
+  - Take `tables` and `indexes` from the migrations; don't guess them.
+- **Redis or Valkey** (`kind: cache`): `command` (`GET`, `SET EX 300`, `HINCRBY`, `EVAL`), the key
+  pattern from the key builder (`price:{sku}`), and `ttl`.
+- **Kafka, RabbitMQ or SQS:** producers are `publish` ops and consumers are `consume` ops.
+  - Record `topic` (or exchange or queue), `key` (partition or routing key) and `group`.
+  - Add a `payload` example built from the message schema (protobuf, Avro, a JSON struct).
+- **Endpoints** are inbound: no `target`. Take gRPC methods from `.proto` services
+  (`method: orders.v1.Orders/PlaceOrder`, `streaming`) and HTTP routes from router tables (chi, gin,
+  Express, FastAPI, Rails). Add the `status` codes the handler returns.
+- **Outbound HTTP and gRPC clients** (`kind: http` or `rpc`, `target:` the callee):
+  - `calls: <node>/<op>` names the endpoint the client reaches, so a request can be followed across
+    services. A `publish` can also name its consumer this way.
+  - Timeouts, retries, auth and idempotency go in `facts`.
+- **Live numbers:** put `op:` on the flow step that performs each op: the caller's outbound op, or the
+  callee's endpoint. Put `op:` on each consumer flow for its consume op.
+- **Review** with `strata ops <id>`. Check that every service has its ops, that tables, keys and topics
+  are right, and that the ops you care about are named by a flow. Then run `strata validate`.
+
 ## Lessons (`kind: sim`)
 
 Use a lesson for a technology or pattern: retries vs timeouts, prefetch, cache stampede, outbox,
@@ -110,6 +138,8 @@ consumer lag.
 - `call` targets must be servers. `publish` targets must be `queue` or `topic`. A consumer flow is
   `on: <buffer>` + `by: <consumer>`, with no `rate`.
 - Nested `steps` under a `call` run *at the callee*. Order them as the code does.
+- A step's `op:` resolves on the calling node first, then on the target. Write `node/op` when both
+  have an op with that id.
 - A service holds its slot while it waits on downstream calls (thread-per-request). Set
   `async: true` for event-loop servers (Node, Netty, async Rust).
 - Keep ids stable once the user has notes on them: node notes live at
