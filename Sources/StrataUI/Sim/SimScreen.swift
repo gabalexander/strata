@@ -126,9 +126,9 @@ private struct SimWorkspace: View {
         self.id = id
         self.sim = sim
         self.snapshot = snapshot
-        terms = TermIndex(manifest: sim.manifest)
+        terms = SimSessions.terms(for: sim)
         _arrival = arrival
-        _renderer = State(initialValue: StageRenderer(level: sim.level))
+        _renderer = State(initialValue: SimSessions.renderer(for: sim))
         _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
         _tab = State(initialValue: snapshot?.dockTab ?? .controls)
     }
