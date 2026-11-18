@@ -105,3 +105,14 @@ public enum MetricKey: Sendable, Hashable {
         return nil
     }
 }
+
+/// Live numbers for one operation (steps with `op:` that name it). Zero when nothing references it.
+public struct OpMetrics: Sendable {
+    public var rate = 0.0                // executions per second, recent
+    public var errors = 0.0              // failures per second, recent
+    public var p50: Double?              // seconds, from step start to its result
+    public var p99: Double?
+    public var total = 0
+    public var referenced = false        // some flow step names this op
+    public init() {}
+}
