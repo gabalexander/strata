@@ -1,27 +1,418 @@
+import AppKit
 import SwiftUI
 import StrataCore
 
-// PLACEHOLDER (stage agent). Keep the initialisers.
+@_spi(Snapshots) public struct SimSnapshotOptions {
+    var selectedNode: String?
+    var dockTab: SimDockTab
+    var previewMenu: Bool
 
-/// A full-window simulator: stage, toolbar, breadcrumbs, inspector, dock (controls, scenarios, log, glossary).
+    public init(selectedNode: String? = nil, dockTab: SimDockTab = .controls,
+                previewMenu: Bool = false) {
+        self.selectedNode = selectedNode
+        self.dockTab = dockTab
+        self.previewMenu = previewMenu
+    }
+}
+
+@MainActor
 public struct SimScreen: View {
     let model: AppModel
     let id: String
     let path: [String]
-    public init(model: AppModel, id: String, path: [String]) { self.model = model; self.id = id; self.path = path }
+    private var snapshot: SimSnapshotOptions?
+    @State private var arrival: SimArrival?
+
+    public init(model: AppModel, id: String, path: [String]) {
+        self.model = model
+        self.id = id
+        self.path = path
+    }
+
+    @_spi(Snapshots) public init(model: AppModel, id: String, path: [String], snapshot: SimSnapshotOptions) {
+        self.init(model: model, id: id, path: path)
+        self.snapshot = snapshot
+    }
+
     public var body: some View {
-        Text("Simulator \(id) \(path.joined(separator: " › "))").foregroundStyle(Theme.muted)
-            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.bg)
+        let revision = model.library.revision
+        Group {
+            if let manifest = SimSessions.cachedManifest(model, id: id) {
+                if manifest.level(at: path) != nil {
+                    SimScreenSession(model: model, id: id, path: path, manifest: manifest, revision: revision,
+                                     snapshot: snapshot, arrival: $arrival)
+                } else {
+                    SimLoadIssue(model: model, id: id, invalidPath: path)
+                }
+            } else {
+                SimLoadIssue(model: model, id: id, invalidPath: nil)
+            }
+        }
+        .id(AppModel.sessionKey(id, path))
+        .onChange(of: revision, initial: true) { _, _ in
+            if SimSessions.cachedManifest(model, id: id) == nil { SimSessions.forget(id, from: model) }
+        }
     }
 }
 
-/// A live sim inside a note (a ```strata block): compact stage + toolbar, expandable to SimScreen.
-public struct SimEmbedView: View {
+private struct SimArrival {
+    let destination: Route
+    let forward: Bool
+    let node: String?
+}
+
+@MainActor
+private struct SimScreenSession: View {
     let model: AppModel
-    let embed: Embed
-    let note: String
-    public init(model: AppModel, embed: Embed, note: String) { self.model = model; self.embed = embed; self.note = note }
-    public var body: some View {
-        Text("embedded sim").foregroundStyle(Theme.muted).frame(height: embed.height).frame(maxWidth: .infinity).card()
+    let id: String
+    let path: [String]
+    let manifest: Manifest
+    let revision: Int
+    let snapshot: SimSnapshotOptions?
+    @SwiftUI.Binding var arrival: SimArrival?
+    @State private var sim: Simulation
+
+    init(model: AppModel, id: String, path: [String], manifest: Manifest, revision: Int,
+         snapshot: SimSnapshotOptions?, arrival: SwiftUI.Binding<SimArrival?>) {
+        self.model = model
+        self.id = id
+        self.path = path
+        self.manifest = manifest
+        self.revision = revision
+        self.snapshot = snapshot
+        _arrival = arrival
+        _sim = State(initialValue: SimSessions.cached(model, id: id, path: path, manifest: manifest))
+    }
+
+    var body: some View {
+        SimWorkspace(model: model, id: id, sim: sim, snapshot: snapshot, arrival: $arrival)
+            .id(ObjectIdentifier(sim))
+            .onAppear { SimSessions.remember(sim, model: model, id: id) }
+            .onChange(of: revision) { _, _ in
+                guard !SimSessions.same(sim.manifest, manifest) else { return }
+                sim = SimSessions.make(model, id: id, path: path, manifest: manifest)
+                SimSessions.remember(sim, model: model, id: id)
+            }
+    }
+}
+
+@MainActor
+private struct SimWorkspace: View {
+    let model: AppModel
+    let id: String
+    let sim: Simulation
+    let snapshot: SimSnapshotOptions?
+    @SwiftUI.Binding var arrival: SimArrival?
+    @State private var renderer: StageRenderer
+    @State private var selection: StageSelection?
+    @State private var tab: SimDockTab
+    @State private var viewport = StageViewport()
+    @State private var navigation: Task<Void, Never>?
+    @State private var presentationScale: CGFloat = 1
+    @State private var presentationOpacity: Double = 1
+    @State private var presentationNode: String?
+    @State private var commandID: UUID?
+    @State private var noteIDs: Set<String> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let terms: TermIndex
+
+    init(model: AppModel, id: String, sim: Simulation, snapshot: SimSnapshotOptions?, arrival: SwiftUI.Binding<SimArrival?>) {
+        self.model = model
+        self.id = id
+        self.sim = sim
+        self.snapshot = snapshot
+        terms = TermIndex(manifest: sim.manifest)
+        _arrival = arrival
+        _renderer = State(initialValue: StageRenderer(level: sim.level))
+        _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
+        _tab = State(initialValue: snapshot?.dockTab ?? .controls)
+    }
+
+    private var actions: SimActions {
+        SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive)
+    }
+
+    var body: some View {
+        let actions = actions
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    SimToolbar(model: model, sim: sim, up: up, still: snapshot != nil)
+                    Rectangle().fill(Theme.border).frame(height: 1)
+                    stage(actions)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if model.dockVisible {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                        SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, still: snapshot != nil, tab: $tab)
+                            .frame(height: min(222, max(133, proxy.size.height * 0.33)))
+                    }
+                }
+                if model.inspectorVisible {
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                    SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, still: snapshot != nil)
+                        .frame(width: min(Theme.inspectorWidth, max(175, proxy.size.width * 0.34)))
+                }
+            }
+        }
+        .foregroundStyle(Theme.text)
+        .background(Theme.bg)
+        .onAppear {
+            updateCommands()
+            updateNotes()
+            appear()
+        }
+        .onChange(of: model.vault.revision) { _, _ in updateNotes() }
+        .onChange(of: sim.playing) { _, _ in updateCommands() }
+        .onChange(of: sim.scenario) { _, _ in updateCommands() }
+        .onDisappear {
+            navigation?.cancel()
+            if model.screenCommands.first?.id == commandID { model.screenCommands = [] }
+        }
+    }
+
+    private func stage(_ actions: SimActions) -> some View {
+        SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
+                 selection: selection, noteIDs: noteIDs, still: snapshot != nil,
+                 onSelect: select, onDive: { if let node = sim.level.node($0) { dive(node) } },
+                 menu: actions.menu, onKey: key)
+            .scaleEffect(presentationScale, anchor: viewport.origin(for: presentationNode, in: renderer.layout, compact: false))
+            .opacity(presentationOpacity)
+            .clipped()
+            .overlay(alignment: .center) {
+                if snapshot?.previewMenu == true { SimMenuPreview(items: actions.menu(for: selection)) }
+            }
+    }
+
+    private func select(_ target: StageSelection?) {
+        selection = target
+        model.overlays.dismissMenu()
+    }
+
+    private func updateCommands() {
+        let items = actions.palette()
+        commandID = items.first?.id
+        model.screenCommands = items
+    }
+
+    private func updateNotes() {
+        noteIDs = Set(sim.level.nodes.filter { model.vault.hasNote(actions.notePath($0)) }.map(\.id))
+    }
+
+    private func dive(_ node: Node) {
+        if let detail = node.detail {
+            navigate(.sim(detail, path: []), forward: true, node: node.id)
+        } else if node.inside != nil {
+            navigate(.sim(id, path: sim.path + [node.id]), forward: true, node: node.id)
+        }
+    }
+
+    private func up(_ depth: Int) {
+        guard depth < sim.path.count else { return }
+        navigate(.sim(id, path: Array(sim.path.prefix(depth))), forward: false, node: sim.path[depth])
+    }
+
+    private func navigate(_ route: Route, forward: Bool, node: String) {
+        guard navigation == nil else { return }
+        model.overlays.dismissMenu()
+        model.overlays.closeTerm()
+        guard !reduceMotion else { model.open(route); return }
+        presentationNode = forward ? node : nil
+        withAnimation(Theme.gentle) {
+            presentationScale = forward ? 2.15 : 0.8
+            presentationOpacity = 0
+        }
+        navigation = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(370))
+            guard !Task.isCancelled else { return }
+            arrival = SimArrival(destination: route, forward: forward, node: node)
+            model.open(route)
+            navigation = nil
+        }
+    }
+
+    private func appear() {
+        guard let target = arrival, target.destination == .sim(id, path: sim.path) else { return }
+        arrival = nil
+        guard !reduceMotion else { return }
+        presentationNode = target.forward ? nil : target.node
+        presentationScale = target.forward ? 1.28 : 1.55
+        presentationOpacity = 0
+        navigation = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(20))
+            guard !Task.isCancelled else { return }
+            withAnimation(Theme.gentle) {
+                presentationScale = 1
+                presentationOpacity = 1
+            }
+            navigation = nil
+        }
+    }
+
+    private func key(_ event: NSEvent) -> Bool {
+        guard !model.paletteOpen, !model.switcherOpen else { return false }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if event.keyCode == 53 {
+            if model.overlays.menu != nil { model.overlays.dismissMenu() }
+            else if model.overlays.card != nil { model.overlays.closeTerm() }
+            else if selection != nil { select(nil) }
+            else if !sim.path.isEmpty { up(sim.path.count - 1) }
+            else { return false }
+            return true
+        }
+        guard model.overlays.menu == nil else { return false }
+        if flags == .command && event.keyCode == 126 && !sim.path.isEmpty {
+            up(sim.path.count - 1)
+            return true
+        }
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if flags.isEmpty {
+            switch key {
+            case " ": if !event.isARepeat { sim.playing.toggle() }; return true
+            case ".": sim.pauseAndStep(); return true
+            default: return false
+            }
+        }
+        if flags == [.command, .option], key == "i" { model.inspectorVisible.toggle(); return true }
+        guard flags == .command || flags == [.command, .shift] && key == "+" else { return false }
+        switch key {
+        case "r": sim.reset()
+        case "0": viewport.fit()
+        case "+", "=": viewport.zoom(1.2, layout: renderer.layout, compact: false)
+        case "-", "−": viewport.zoom(1 / 1.2, layout: renderer.layout, compact: false)
+        case "j": model.dockVisible.toggle()
+        default: return false
+        }
+        return true
+    }
+}
+
+@MainActor
+private struct SimToolbar: View {
+    let model: AppModel
+    let sim: Simulation
+    let up: (Int) -> Void
+    var still = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if still {
+                    breadcrumbs
+                } else {
+                    ScrollView(.horizontal) { breadcrumbs }
+                        .scrollIndicators(.hidden)
+                        .defaultScrollAnchor(.trailing)
+                }
+            }
+            .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
+            playback
+            HStack(spacing: 4) {
+                if !model.dockVisible {
+                    SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true) {
+                        model.dockVisible = true
+                    }
+                }
+                SimButton(title: model.inspectorVisible ? "Hide inspector" : "Show inspector",
+                          icon: "sidebar.right", iconOnly: true, active: model.inspectorVisible) {
+                    model.inspectorVisible.toggle()
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(Theme.surface)
+    }
+
+    private var playback: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                if let scenario = sim.scenario {
+                    SimPill(title: sim.level.scenarios.first { $0.id == scenario }?.label ?? scenario, icon: "flag.fill", tint: Theme.accent)
+                }
+                transport
+            }
+            transport
+        }
+        .layoutPriority(1)
+    }
+
+    private var transport: some View {
+        HStack(spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                Text(SimFormat.seconds(sim.now)).font(Theme.mono(11, .medium)).monospacedDigit()
+                    .foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
+            }
+            SimButton(title: sim.playing ? "Pause" : "Play", icon: sim.playing ? "pause.fill" : "play.fill",
+                      iconOnly: true, active: sim.playing) { sim.playing.toggle() }
+            SimButton(title: "Step", icon: "forward.frame", iconOnly: true) { sim.pauseAndStep() }
+            SimSegments(values: [0.25, 0.5, 1, 2, 4], selected: sim.speed, label: speedLabel) { sim.speed = $0 }
+                .accessibilityLabel("Playback speed")
+            SimButton(title: "Reset", icon: "arrow.counterclockwise", iconOnly: true) { sim.reset() }
+        }
+    }
+
+    private var breadcrumbs: some View {
+        HStack(spacing: 7) {
+            Image(systemName: sim.manifest.kind == .architecture ? "point.3.connected.trianglepath.dotted" : "waveform.path")
+                .font(Theme.ui(13, .medium)).foregroundStyle(Theme.accent)
+            crumb(sim.manifest.title, depth: 0)
+            ForEach(Array(sim.path.enumerated()), id: \.offset) { i, id in
+                Image(systemName: "chevron.right").font(Theme.ui(8, .medium)).foregroundStyle(Theme.faint)
+                let label = sim.manifest.level(at: Array(sim.path.prefix(i)))?.node(id)?.label ?? id
+                crumb(label, depth: i + 1)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func crumb(_ title: String, depth: Int) -> some View {
+        Button { up(depth) } label: {
+            Text(title)
+                .font(Theme.ui(13, depth == sim.path.count ? .semibold : .regular))
+                .foregroundStyle(depth == sim.path.count ? Theme.text : Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(depth == sim.path.count ? .isSelected : [])
+    }
+
+    private func speedLabel(_ speed: Double) -> String {
+        switch speed {
+        case 0.25: "¼"
+        case 0.5: "½"
+        default: SimFormat.number(speed) + "×"
+        }
+    }
+}
+
+@MainActor
+private struct SimMenuPreview: View {
+    let items: [MenuItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(items) { item in
+                if item.isSeparator {
+                    Rectangle().fill(Theme.borderStrong).frame(height: 1).padding(.vertical, 4)
+                } else if item.isHeader {
+                    Text(item.title).font(Theme.label).foregroundStyle(Theme.muted).padding(.horizontal, 8).frame(height: 23)
+                } else {
+                    HStack(spacing: 9) {
+                        Image(systemName: item.icon ?? "circle").frame(width: 15).foregroundStyle(Theme.muted)
+                        Text(item.title)
+                        Spacer(minLength: 12)
+                        if !item.submenu.isEmpty { Image(systemName: "chevron.right").font(Theme.ui(9)).foregroundStyle(Theme.muted) }
+                    }
+                    .font(Theme.ui()).foregroundStyle(item.role == .destructive ? Theme.bad : item.enabled ? Theme.text : Theme.faint)
+                    .padding(.horizontal, 8).frame(height: 26)
+                }
+            }
+        }
+        .padding(5).frame(width: 224)
+        .card(Theme.overlay, radius: 8)
+        .shadow(color: .black.opacity(0.45), radius: 16, x: 0, y: 12)
+        .offset(x: 100, y: 15)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
