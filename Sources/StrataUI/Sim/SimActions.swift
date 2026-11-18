@@ -45,11 +45,13 @@ struct SimActions {
             items += nodeActions(node, state: state, full: true)
             let sourceFlows = sim.level.flows.filter { $0.from == node.id }
             if !sourceFlows.isEmpty { items += [.separator] + sourceFlows.map(sendItem) }
-            items.append(.separator)
-            if model.vault.hasNote(notePath(node)) {
-                items.append(command("Open note", icon: "note.text") { model.open(.note(notePath(node))) })
-            } else {
-                items.append(command("Add a note", icon: "note.text.badge.plus") { addNote(node) })
+            if supportsNotes {
+                items.append(.separator)
+                if model.vault.hasNote(notePath(node)) {
+                    items.append(command("Open note", icon: "note.text") { model.open(.note(notePath(node))) })
+                } else {
+                    items.append(command("Add a note", icon: "note.text.badge.plus") { addNote(node) })
+                }
             }
             if let single = node.code.first, node.code.count == 1 {
                 items.append(command("Open code", icon: "chevron.left.forwardslash.chevron.right") { openCode(single) })
@@ -131,17 +133,21 @@ struct SimActions {
         ]
     }
 
+    /// Node notes live under the manifest's library id; a diagram written inline in a note has none.
+    var supportsNotes: Bool {
+        if case .inline = sim.manifest.source { return false }
+        return true
+    }
+
     func notePath(_ node: Node) -> String {
         model.vault.nodeNotePath(sim: sim.manifest.id, levelPath: sim.path, node: node.id)
     }
 
     func addNote(_ node: Node) {
+        guard supportsNotes else { return }
         let path = notePath(node)
         if !model.vault.hasNote(path) {
-            let target: String
-            if case .inline(let note, _) = sim.manifest.source { target = note }
-            else { target = sim.manifest.id }
-            let text = "# \(node.label)\n\n[[\(target)]]\n\n## What it does\n\n## Gotchas\n"
+            let text = "# \(node.label)\n\n[[\(sim.manifest.id)]]\n\n## What it does\n\n## Gotchas\n"
             model.vault.createNote(at: path, text: text)
         }
         model.open(.note(path))

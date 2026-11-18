@@ -116,7 +116,7 @@ struct SimInspector: View {
                     }
                 }
             }
-            nodeNote(node, preview: notePreview)
+            if actions.supportsNotes { nodeNote(node, preview: notePreview) }
             if node.kind != .note { SimParameters(node: node, sim: sim, model: model) }
         }
     }

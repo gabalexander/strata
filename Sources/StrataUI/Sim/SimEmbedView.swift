@@ -200,7 +200,8 @@ private struct SimEmbedWorkspace: View {
             .frame(height: 37)
             Rectangle().fill(Theme.border).frame(height: 1)
             SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
-                     selection: selection, compact: true, visible: visible, still: still, onSelect: { selection = $0 })
+                     selection: selection, compact: true, visible: visible, still: still, onSelect: { selection = $0 },
+                     menu: SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive).menu)
         }
     }
 
@@ -210,8 +211,20 @@ private struct SimEmbedWorkspace: View {
         return sim.manifest.title + " › " + (level.node(node)?.label ?? node)
     }
 
+    /// A deep dive from the embed continues full screen, with this level kept for the way back out.
+    private func dive(_ node: Node) {
+        guard let destination = SimSessions.drillDestination(node, id: id, path: sim.path) else { return }
+        share()
+        model.open(destination, parentRate: sim.nodeState(node.id)?.arrivals)
+    }
+
     /// The full screen continues this embed's simulation, and the embed picks it up again on return.
     private func expand() {
+        share()
+        model.open(.sim(id, path: sim.path))
+    }
+
+    private func share() {
         if case .inline = sim.manifest.source, !sim.path.isEmpty,
            SimSessions.cachedManifest(model, id: id).map({ !SimSessions.same($0, sim.manifest) }) ?? true {
             // Inline manifests live only in sessions: keep the root so breadcrumbs can lead out.
@@ -219,6 +232,5 @@ private struct SimEmbedWorkspace: View {
         }
         SimSessions.remember(sim, model: model, id: id)
         SimSessions.handOff(handoff, model: model)
-        model.open(.sim(id, path: sim.path))
     }
 }
