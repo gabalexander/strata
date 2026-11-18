@@ -8,6 +8,8 @@ struct NoteEditor: NSViewRepresentable {
     let path: String
     let text: String
     let jump: (id: UUID, line: Int)?
+    /// Put the caret in the editor once it is in a window (a new, empty note).
+    var focusOnAppear = false
     let onEdit: (String) -> Void
     let toggleReading: () -> Void
 
@@ -15,6 +17,7 @@ struct NoteEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NoteEditorHost {
         let host = NoteEditorHost()
+        host.focusWhenShown = focusOnAppear
         context.coordinator.attach(host)
         context.coordinator.refresh(self)
         return host
@@ -134,6 +137,10 @@ struct NoteEditor: NSViewRepresentable {
                 default: return false
                 }
             }
+            if completionRange != nil, suggestions.isEmpty, modifiers.isEmpty, event.keyCode == 53 {
+                closeCompletion()
+                return true
+            }
             if !suggestions.isEmpty, modifiers.isEmpty {
                 switch event.keyCode {
                 case 125: selectSuggestion(min(suggestions.count - 1, selectedSuggestion + 1)); return true
@@ -250,7 +257,7 @@ struct NoteEditor: NSViewRepresentable {
             }
             window.makeFirstResponder(view)
             let selected = view.selectedRange().length > 0
-            let sims = editor.model.library.entries.map { entry in
+            let sims = editor.model.library.entries.filter { $0.manifest != nil }.map { entry in
                 MenuItem(entry.title, icon: "play.rectangle") { [weak self] in
                     self?.insert("\n\n```strata\nsim: \(entry.id)\n```\n")
                 }
@@ -344,7 +351,19 @@ final class NoteEditorHost: NSView {
     let textView = NoteTextView(usingTextLayoutManager: true)
     private let scroll = NSScrollView()
     private var panel: NSHostingView<LinkSuggestionView>?
+    var focusWhenShown = false
     override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard focusWhenShown, window != nil else { return }
+        focusWhenShown = false
+        DispatchQueue.main.async { [weak self] in
+            // Another field that asked for focus in the same update (a rename) keeps it.
+            guard let self, let window = self.window, !(window.firstResponder is NSText) else { return }
+            window.makeFirstResponder(self.textView)
+        }
+    }
 
     init() {
         super.init(frame: .zero)
