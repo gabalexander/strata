@@ -141,7 +141,8 @@ struct PaletteResults {
                 let second = recentRanks[b.0.id] ?? .max
                 return first == second ? a.2 < b.2 : first < second
             }
-            return Section(group: group, entries: sorted.prefix(tokens.isEmpty ? 7 : 36).map(\.0))
+            let limit = tokens.isEmpty || groups.count > 1 ? 7 : 36
+            return Section(group: group, entries: sorted.prefix(limit).map(\.0))
         }
     }
 
@@ -157,7 +158,10 @@ struct PaletteResults {
             var next = Array(repeating: Int.min, count: text.count)
             var best = Int.min
             for column in text.indices {
-                if column > 0 { best = max(best, previous[column - 1]) }
+                if column > 0 {
+                    if best != Int.min { best -= 1 }
+                    best = max(best, previous[column - 1])
+                }
                 guard text[column] == character else { continue }
                 let boundary = column == 0 || !text[column - 1].isLetter && !text[column - 1].isNumber
                 let bonus = boundary ? 7 : 0
@@ -165,7 +169,8 @@ struct PaletteResults {
                     next[column] = 10 + bonus + (column == 0 ? 8 : 0) - min(column, 30)
                 } else if best != Int.min {
                     let contiguous = previous[column - 1]
-                    next[column] = 10 + bonus + max(best, contiguous == Int.min ? Int.min : contiguous + 6)
+                    let spaced = best + bonus
+                    next[column] = 10 + max(spaced, contiguous == Int.min ? Int.min : contiguous + 10)
                 }
             }
             previous = next
