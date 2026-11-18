@@ -270,14 +270,20 @@ names its buffer in `topic` or `target`). Override with `direction: in|out`.
 |---|---|
 | `sql`, `search` | `query`, `tables`, `indexes`, `access`, `tx`, `locks` |
 | `cache` (Redis, Valkey, Memcached) | `command`, `key` (pattern), `ttl`, `access` |
-| `publish`, `consume` (Kafka, RabbitMQ, SQS, NATS) | `topic`, `key` (partition/routing), `group`, `payload` |
-| `rpc` (gRPC, Thrift), `http` | `method`, `path`, `request`, `response`, `streaming`, `status`, `calls` |
-| any kind | `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts), `inside` / `detail` |
+| `publish`, `consume` (Kafka, RabbitMQ, SQS, NATS) | `topic`, `key` (partition/routing), `group`, `payload`; `calls` on a publish |
+| `rpc` (gRPC, Thrift), `http`, `llm`, `call` | `method`, `path`, `request`, `response`, `streaming` (`unary`, `server`, `client`, `bidi`), `status`, `calls` |
+| `storage` (S3, GCS, blob) | `key` (object key pattern), `path`, `method`, `access`, `ttl`, `payload` |
+| any kind | `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts, kept in order), `inside` / `detail` |
+
+`code`, `risks`, `tags`, `tables` and `indexes` take one string or a list. `status` items may be bare
+numbers (`[201, 409]`). `payload`, `request` and `response` take text, or a YAML mapping or list that
+is shown as JSON. A field another kind uses (`query` on a `publish`) is a warning.
 
 **Going deeper.**
 
 - `calls: node/op` links an outbound call to the endpoint it reaches, so you can follow a request
-  through the code: gateway → orders-svc `POST /orders` → `INSERT order + outbox`.
+  through the code: gateway → orders-svc `POST /orders` → `INSERT order + outbox`. On a `publish`,
+  it names the `consume` op that handles the message.
 - `inside:` gives an op its own level (for example the lock and transaction sequence of a query),
   and `detail:` opens another manifest.
 
@@ -289,13 +295,25 @@ latency on the op:
   op: insert-order          # resolved on the calling node, then the target; or "orders/insert-order"
 ```
 
+A step's numbers run from the step's start to its result, retries included. A `work` step counts
+its duration, a `parallel` step its slowest branch.
+
+A flow can name an op too, which counts each run of the flow when it finishes, handler failures
+included. On a consumer flow, `op:` names the consume op of its `by` node (`op: on-order-placed`),
+so every message it handles counts. On a source flow, it names an op of its `from` node.
+
 Validation checks:
 
 - op ids are unique within a node;
 - targets exist and fit the kind: `sql` → database or search, `cache` → cache, `publish`/`consume`
-  → queue or topic, `rpc`/`http` → a server;
-- `calls` and step `op` references resolve;
-- an op that no flow step references is fine. It still documents the code.
+  → queue or topic, `rpc`/`http` → a server. An impossible target (a `sql` op on a queue) is an
+  error; a questionable one (a `cache` op on a database) is a warning, and so is a target with no edge;
+- `calls` and step or flow `op` references resolve. It's a warning when they don't line up: `calls`
+  should name an inbound op on the target, and a step should name the op it performs (the caller's
+  outbound op to that target, or the target's inbound op);
+- an op that no flow or step names is fine. It still documents the code.
+
+`strata ops <file|id>` lists every op per level and node, with the flows that name it.
 
 ## Edges
 
