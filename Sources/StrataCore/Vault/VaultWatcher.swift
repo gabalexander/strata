@@ -33,12 +33,17 @@ final class VaultWatcher {
         // Some sandboxes deny access to the FSEvents daemon. Compare metadata on a
         // worker queue in that environment so only changed content reaches the index.
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "strata.vault.metadata"))
-        var previous = Self.metadata(in: root)
+        var previous: [String: Stamp]?
         timer.setEventHandler {
             let current = Self.metadata(in: root)
-            let removed = Set(previous.keys).subtracting(current.keys)
-            let changed = current.keys.filter { current[$0] != previous[$0] }
+            let baseline = previous
             previous = current
+            guard let baseline else {
+                DispatchQueue.main.async { receive([], true) }
+                return
+            }
+            let removed = Set(baseline.keys).subtracting(current.keys)
+            let changed = current.keys.filter { current[$0] != baseline[$0] }
             let paths = Array(removed) + changed
             guard !paths.isEmpty else { return }
             DispatchQueue.main.async { receive(paths, false) }

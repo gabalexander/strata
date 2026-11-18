@@ -45,9 +45,10 @@ import StrataUI
 @MainActor
 private func shellScene(_ name: String, route: Route = .home, query: String = "", includingError: Bool = false,
                         prepare: @escaping (AppModel) -> Void = { _ in }) -> Scene {
-    Scene(name: name, size: CGSize(width: 1280, height: 820), hosted: true) {
+    let graphFixture = route == .graph ? ShellGraphFixture() : nil
+    return Scene(name: name, size: CGSize(width: 1280, height: 820), hosted: true) {
         let library = Library(manifests: shellManifests())
-        let vault = Vault(root: URL(fileURLWithPath: "/tmp/strata-snapshot-vault", isDirectory: true))
+        let vault = graphFixture?.vault ?? Vault(root: URL(fileURLWithPath: "/tmp/strata-snapshot-vault", isDirectory: true))
         let model = AppModel(library: library, vault: vault)
         model.open(route)
         prepare(model)
@@ -58,6 +59,19 @@ private func shellScene(_ name: String, route: Route = .home, query: String = ""
         let entries = includingError ? library.entries + [error] : library.entries
         return AnyView(RootView(model: model, fixtureEntries: entries, fixtureNotes: shellNotes, fixturePaletteQuery: query))
     }
+}
+
+@MainActor
+private final class ShellGraphFixture {
+    private let root = FileManager.default.temporaryDirectory.appendingPathComponent("strata-graph-\(UUID().uuidString)")
+    let vault: Vault
+
+    init() {
+        vault = Vault(root: root)
+        for (path, text) in shellNotes { vault.write(path, text) }
+    }
+
+    deinit { try? FileManager.default.removeItem(at: root) }
 }
 
 private let shellNotes = [

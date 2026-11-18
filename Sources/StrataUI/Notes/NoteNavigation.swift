@@ -1,7 +1,13 @@
 import AppKit
+import CryptoKit
 import Observation
 import SwiftUI
 import StrataCore
+
+struct NoteDraft: Codable {
+    let text: String
+    let base: NoteVersion
+}
 
 @MainActor
 @Observable
@@ -17,7 +23,7 @@ final class NoteWorkspace {
     private static let workspaces = NSMapTable<AppModel, NoteWorkspace>.weakToStrongObjects()
     static func of(_ model: AppModel) -> NoteWorkspace {
         if let workspace = workspaces.object(forKey: model) { return workspace }
-        let workspace = NoteWorkspace()
+        let workspace = NoteWorkspace(vault: model.vault.root)
         workspaces.setObject(workspace, forKey: model)
         return workspace
     }
@@ -26,8 +32,47 @@ final class NoteWorkspace {
     var expanded: Set<String> = []
     var destination: Destination?
     var commandOwner: UUID?
-    @ObservationIgnored var drafts: [String: String] = [:]
+    @ObservationIgnored private var drafts: [String: NoteDraft] = [:]
+    @ObservationIgnored private let draftDirectory: URL
+    @ObservationIgnored private var termination: NoteTerminationObserver?
     @ObservationIgnored weak var session: NoteSession?
+
+    private init(vault: URL) {
+        draftDirectory = StrataPaths.home.appendingPathComponent("drafts")
+            .appendingPathComponent(Self.draftKey(vault.resolvingSymlinksInPath().path))
+        termination = NoteTerminationObserver { [weak self] in self?.session?.flush() }
+    }
+
+    func draft(for path: String) -> NoteDraft? {
+        if let draft = drafts[path] { return draft }
+        guard let data = try? Data(contentsOf: draftURL(path)) else { return nil }
+        return try? JSONDecoder().decode(NoteDraft.self, from: data)
+    }
+
+    func retainDraft(_ draft: NoteDraft, for path: String) -> Bool {
+        drafts[path] = draft
+        do {
+            try FileManager.default.createDirectory(at: draftDirectory, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try JSONEncoder().encode(draft).write(to: draftURL(path), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func clearDraft(for path: String) {
+        drafts.removeValue(forKey: path)
+        try? FileManager.default.removeItem(at: draftURL(path))
+    }
+
+    private func draftURL(_ path: String) -> URL {
+        draftDirectory.appendingPathComponent(Self.draftKey(path) + ".json")
+    }
+
+    private static func draftKey(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 
     func open(_ path: String, at location: Location, model: AppModel) {
         destination = Destination(path: path, location: location)
@@ -60,6 +105,19 @@ final class NoteWorkspace {
     }
 }
 
+private final class NoteTerminationObserver {
+    private let token: NSObjectProtocol
+
+    init(flush: @escaping @MainActor () -> Void) {
+        token = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                                       object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated { flush() }
+        }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(token) }
+}
+
 @MainActor
 enum NoteLinks {
     static func open(_ target: String, heading: String? = nil, from note: String, model: AppModel) {
@@ -75,9 +133,11 @@ enum NoteLinks {
         }
     }
 
+    static let internalScheme = "strata-internal"
+
     static func url(kind: String, items: [URLQueryItem]) -> URL? {
         var components = URLComponents()
-        components.scheme = "strata"
+        components.scheme = internalScheme
         components.host = kind
         components.queryItems = items
         return components.url

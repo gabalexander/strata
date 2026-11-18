@@ -76,7 +76,7 @@ private struct NoteContent: View {
                     }
                 }
             } else {
-                missing
+                unavailable
             }
         }
         .foregroundStyle(Theme.text)
@@ -171,33 +171,35 @@ private struct NoteContent: View {
         else { button.keyboardShortcut("e", modifiers: [.command, .shift]) }
     }
 
-    private var missing: some View {
+    private var unavailable: some View {
         VStack(spacing: 12) {
-            Image(systemName: "doc.badge.plus")
+            Image(systemName: session.unreadable ? "doc.text" : "doc.badge.plus")
                 .font(Theme.ui(24, .medium))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 54, height: 54)
                 .card(Theme.raised)
                 .accessibilityHidden(true)
-            Text("Note not found")
+            Text(session.unreadable ? "Can’t read this note" : "Note not found")
                 .font(Theme.title)
-            Text("Create a Markdown file at this location in your vault.")
+            Text(session.unreadable ? "Strata couldn’t open the file at this location." : "Create a Markdown file at this location in your vault.")
                 .font(Theme.ui())
                 .foregroundStyle(Theme.muted)
                 .multilineTextAlignment(.center)
-            Button {
-                session.create()
-            } label: {
-                Label("Create this note", systemImage: "plus")
-                    .font(Theme.ui(13, .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 13)
-                    .frame(height: 31)
-                    .card(Theme.accent.opacity(0.11), radius: Theme.radiusSmall)
-                    .contentShape(Rectangle())
+            if !session.unreadable {
+                Button {
+                    session.create()
+                } label: {
+                    Label("Create this note", systemImage: "plus")
+                        .font(Theme.ui(13, .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 13)
+                        .frame(height: 31)
+                        .card(Theme.accent.opacity(0.11), radius: Theme.radiusSmall)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 5)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 5)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -251,25 +253,30 @@ final class NoteSession {
     let path: String
     var text: String
     var document: NoteDocument
-    var exists: Bool
-    @ObservationIgnored private var saved: String?
+    private var disk: NoteRead
+    var exists: Bool { disk.text != nil }
+    var unreadable: Bool { disk == .unreadable }
+    @ObservationIgnored private var base: NoteVersion?
+    @ObservationIgnored private var hasPendingDraft: Bool
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var parsedText: String
 
     init(model: AppModel, path: String) {
         self.model = model
         self.path = path
-        let disk = model.vault.read(path)
-        let source = NoteWorkspace.of(model).drafts[path] ?? disk ?? ""
-        saved = disk
+        let disk = model.vault.readNote(path)
+        let draft = NoteWorkspace.of(model).draft(for: path)
+        let source = draft?.text ?? disk.text ?? ""
+        self.disk = disk
+        base = draft?.base ?? disk.version
+        hasPendingDraft = draft != nil
         text = source
         document = NoteDocument(source)
-        exists = disk != nil
         parsedText = source
     }
 
     func resumeDraft() {
-        if exists, let model, NoteWorkspace.of(model).drafts[path] != nil { scheduleSave() }
+        if hasPendingDraft { flush() }
     }
 
     func edit(_ updated: String) {
@@ -289,14 +296,11 @@ final class NoteSession {
     }
 
     func create() {
-        guard let model else { return }
-        if let current = model.vault.read(path) {
-            replaceFromDisk(current)
-        } else if model.vault.save(path, "") {
-            replaceFromDisk("")
-        } else {
-            model.overlays.toast("Couldn’t create note")
-        }
+        guard let model, !isDirty else { return }
+        if model.vault.readNote(path) == .missing { model.vault.createNote(at: path) }
+        let current = model.vault.readNote(path)
+        replaceFromDisk(current)
+        if current == .missing { model.overlays.toast("Couldn’t create note") }
     }
 
     func rename(to name: String) -> String? {
@@ -318,9 +322,9 @@ final class NoteSession {
     }
 
     func refreshFromDisk() {
-        guard let model, text == (saved ?? "") else { return }
-        let current = model.vault.read(path)
-        if current != saved { replaceFromDisk(current) }
+        guard let model, !isDirty else { return }
+        let current = model.vault.readNote(path)
+        if current != disk { replaceFromDisk(current) }
     }
 
     func updateDocument() {
@@ -336,29 +340,31 @@ final class NoteSession {
         saveTask = nil
         guard let model else { return false }
         updateDocument()
+        guard isDirty, let base else { return true }
         let workspace = NoteWorkspace.of(model)
-        guard exists, text != saved else {
-            workspace.drafts.removeValue(forKey: path)
+        switch model.vault.saveEdit(path, text: text, basedOn: base) {
+        case .saved(let saved):
+            workspace.clearDraft(for: path)
+            replaceFromDisk(saved)
             return true
-        }
-        let disk = model.vault.read(path)
-        if disk != saved {
+        case .changed(let disk):
             let copy = model.vault.createNote(in: nil, name: NoteLinks.title(path) + " (local edits)", text: text)
             if !copy.isEmpty {
-                workspace.drafts.removeValue(forKey: path)
+                workspace.clearDraft(for: path)
                 replaceFromDisk(disk)
                 model.overlays.toast("Note changed on disk. Local edits saved to \(NoteLinks.title(copy)).")
-                return disk != nil
+                return exists
             }
-        } else if model.vault.save(path, text) {
-            saved = text
-            workspace.drafts.removeValue(forKey: path)
-            return true
+        case .failed:
+            break
         }
-        workspace.drafts[path] = text
-        model.overlays.toast("Couldn’t save note")
+        hasPendingDraft = true
+        let kept = workspace.retainDraft(NoteDraft(text: text, base: base), for: path)
+        model.overlays.toast(kept ? "Couldn’t save note. Draft kept for recovery." : "Couldn’t save note or keep a recovery draft.")
         return false
     }
+
+    private var isDirty: Bool { hasPendingDraft || text != (disk.text ?? "") }
 
     private func scheduleSave() {
         saveTask?.cancel()
@@ -368,10 +374,11 @@ final class NoteSession {
         }
     }
 
-    private func replaceFromDisk(_ current: String?) {
-        saved = current
-        text = current ?? ""
-        exists = current != nil
+    private func replaceFromDisk(_ current: NoteRead) {
+        disk = current
+        base = current.version
+        hasPendingDraft = false
+        text = current.text ?? ""
         updateDocument()
     }
 }

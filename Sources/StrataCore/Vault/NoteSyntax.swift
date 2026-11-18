@@ -105,7 +105,7 @@ public enum NoteSyntax {
     }
 }
 
-struct IndexedNote {
+struct IndexedNote: Sendable {
     let text: String
     let lines: [String]
     let links: [NoteSyntax.WikiLink]

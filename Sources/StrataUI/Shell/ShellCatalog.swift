@@ -11,19 +11,6 @@ struct ShellCatalog {
     var entries: [Library.Entry] { fixtureEntries ?? model.library.entries }
     var notePaths: [String] { fixtureNotes.map { $0.keys.sorted() } ?? model.vault.allNotes }
 
-    func read(_ path: String) -> String? {
-        if let fixtureNotes { return fixtureNotes[path] }
-        return model.vault.read(path)
-    }
-
-    func resolveNote(_ link: String) -> String? {
-        if let fixtureNotes {
-            let path = link.hasSuffix(".md") ? link : link + ".md"
-            return fixtureNotes[path] != nil ? path : notePaths.first { Self.title($0) == link }
-        }
-        return model.vault.resolve(link: link)
-    }
-
     var maps: [Library.Entry] {
         entries.filter { $0.kind == .architecture }.sorted { first, second in
             if first.builtIn != second.builtIn { return !first.builtIn }

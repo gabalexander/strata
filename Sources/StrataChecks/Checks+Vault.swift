@@ -21,6 +21,66 @@ import StrataCore
                 check(!vault.save("../escaped.md", "no"), "path traversal rejected")
             }
         },
+        CheckCase(name: "vault exact creation preserves files missing from the index") {
+            try withVault { vault in
+                let path = "Sims/shop/db.md"
+                let url = vault.root.appendingPathComponent(path)
+                check(vault.readNote(path) == .missing, "absent path is reported as missing")
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try "外部のメモ".write(to: url, atomically: true, encoding: .utf16)
+                check(!vault.hasNote(path), "external file is ahead of the index")
+                check(vault.readNote(path).text == "外部のメモ", "UTF-16 file opens")
+                check(!vault.createNote(at: path, text: "template"), "exclusive creation rejects an existing note")
+                let original = try String(contentsOf: url, encoding: .utf16)
+                check(original == "外部のメモ", "original bytes are preserved")
+                let blocked = "Blocked.md"
+                try FileManager.default.createDirectory(at: vault.root.appendingPathComponent(blocked), withIntermediateDirectories: false)
+                check(vault.readNote(blocked) == .unreadable, "existing non-file is reported as unreadable")
+                check(!vault.createNote(at: blocked), "exclusive creation rejects an existing directory")
+                let hidden = vault.root.appendingPathComponent("Unreadable.md")
+                try Data("private".utf8).write(to: hidden)
+                try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: hidden.path)
+                if geteuid() != 0 {
+                    let rescanned = Vault(root: vault.root)
+                    check(rescanned.hasNote("Unreadable.md"), "an unreadable file remains in the tree")
+                    check(rescanned.readNote("Unreadable.md") == .unreadable, "permission failure is not a missing note")
+                }
+                check(vault.createNote(at: "Empty.md"), "can create a missing note")
+                check(vault.read("Empty.md") == "", "new empty note opens")
+            }
+        },
+        CheckCase(name: "vault rejects edits based on a stale note version") {
+            try withVault { vault in
+                let path = "Versioned.md"
+                let url = vault.root.appendingPathComponent(path)
+                vault.write(path, "original")
+                guard let version = vault.readNote(path).version else {
+                    check(false, "the readable note has a version")
+                    return
+                }
+                let encoded = try JSONEncoder().encode(version)
+                let restored = try JSONDecoder().decode(NoteVersion.self, from: encoded)
+                let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+                guard let modified = attrs[.modificationDate] as? Date else {
+                    check(false, "the readable note has a modification date")
+                    return
+                }
+                try "external".write(to: url, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+                if case .changed(let disk) = vault.saveEdit(path, text: "local draft", basedOn: restored) {
+                    check(disk.text == "external", "the content hash catches an external edit with the same mtime")
+                } else {
+                    check(false, "saving a stale draft reports a conflict")
+                }
+                check(vault.read(path) == "external", "the external note survives")
+                if let current = vault.readNote(path).version {
+                    try FileManager.default.setAttributes([.modificationDate: modified.addingTimeInterval(30)], ofItemAtPath: url.path)
+                    if case .changed = vault.saveEdit(path, text: "local draft", basedOn: current) {} else {
+                        check(false, "a new mtime also changes the version")
+                    }
+                }
+            }
+        },
         CheckCase(name: "vault resolve and backlinks") {
             try withVault { vault in
                 vault.write("Group/Guide.md", "# First")
@@ -55,6 +115,32 @@ import StrataCore
                 check(!vault.hasNote("Platform/New.md") && vault.hasNote("Platform/new.md"), "tree uses new spelling")
             }
         },
+        CheckCase(name: "vault rename preserves resolution of unrelated short links") {
+            try withVault { vault in
+                vault.write("Z/Guide.md", "# Guide")
+                vault.write("A/Runbook.md", "# Runbook")
+                vault.write("Source.md", "[[Guide#Start|original]] [[Runbook]]")
+                check(vault.resolve(link: "Guide") == "Z/Guide.md", "initial short link resolves to the guide")
+                check(vault.rename("A/Runbook.md", to: "Guide") == "A/Guide.md", "rename to a colliding basename")
+                check(vault.read("Source.md") == "[[Z/Guide#Start|original]] [[A/Guide]]", "both targets survive the collision")
+                check(vault.backlinks(to: "Z/Guide.md") == ["Source.md"], "unrelated note retains its backlink")
+                check(vault.backlinks(to: "A/Guide.md") == ["Source.md"], "renamed note retains its backlink")
+            }
+        },
+        CheckCase(name: "vault rename reconciles unindexed backlinks") {
+            try withVault { vault in
+                vault.write("Tracked.md", "# Tracked")
+                vault.write("Updated.md", "unrelated")
+                let root = vault.root
+                try "[[Tracked]]".write(to: root.appendingPathComponent("New.md"), atomically: true, encoding: .utf16)
+                try "[[Tracked.md#Heading]]".write(to: root.appendingPathComponent("Updated.md"), atomically: true, encoding: .utf8)
+                check(!vault.hasNote("New.md") && vault.backlinks(to: "Tracked.md").isEmpty, "both disk edits precede watcher delivery")
+                check(vault.rename("Tracked.md", to: "Renamed") == "Renamed.md", "rename succeeds")
+                check(vault.read("New.md") == "[[Renamed]]", "newly created backlink was rewritten")
+                check(vault.read("Updated.md") == "[[Renamed.md#Heading]]", "new backlink in an existing note was rewritten")
+                check(vault.backlinks(to: "Renamed.md") == ["New.md", "Updated.md"], "index reflects the rewrites")
+            }
+        },
         CheckCase(name: "vault search ranking and excerpts") {
             try withVault { vault in
                 vault.write("A.md", "# A\n\(String(repeating: "short line padding ", count: 14))QUORUM stays visible")
@@ -63,6 +149,36 @@ import StrataCore
                 check(hits.map(\.path) == ["Quorum.md", "A.md"], "title first even when another note sorts earlier")
                 check(hits.last?.line == 2 && hits.last?.excerpt.contains("QUORUM") == true, "1-based line and centered excerpt")
                 check(vault.search("  ").isEmpty, "blank query")
+            }
+        },
+        CheckCase(name: "vault background startup and search") {
+            try withVault { fixture in
+                fixture.write("A.md", String(repeating: "a quorum of replicas\n", count: 385))
+                fixture.write("Quorum.md", "replication settings")
+                let vault = Vault(root: fixture.root, loadImmediately: false)
+                check(vault.allNotes.isEmpty, "deferred startup returns before reading the vault")
+                vault.startWatching()
+                vault.write("B.md", "a local edit during startup")
+                check(waitForChange { vault.allNotes.count == 3 }, "worker publishes the full index and keeps the concurrent local write")
+
+                var result: Result<[NoteSearchGroup], Error>?
+                let cancelled = Task { try await vault.searchNotes("replicas") }
+                cancelled.cancel()
+                let latest = Task { @MainActor in
+                    do {
+                        do {
+                            _ = try await cancelled.value
+                            check(false, "a cancelled search must not return hits")
+                        } catch is CancellationError {}
+                        result = .success(try await vault.searchNotes("QUORUM"))
+                    } catch { result = .failure(error) }
+                }
+                defer { latest.cancel() }
+                check(waitForChange { result != nil }, "the latest query completes")
+                if let groups = try result?.get() {
+                    check(groups.map(\.path) == ["Quorum.md", "A.md"], "background search keeps title-first ranking")
+                    check(groups.last?.hits.last?.line == 385, "search includes matches across multiple line batches")
+                }
             }
         },
         CheckCase(name: "vault seed and embed extraction") {

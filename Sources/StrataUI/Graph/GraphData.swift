@@ -44,7 +44,8 @@ struct GraphData {
 
     @MainActor
     init(catalog: ShellCatalog) {
-        let notes = catalog.notePaths
+        let vault = catalog.model.vault
+        let notes = vault.allNotes
         let simulators = catalog.entries.filter { $0.manifest != nil }
         let noteNodes = notes.map { Node(route: .note($0), title: ShellCatalog.title($0), symbol: "note.text") }
         let simNodes = simulators.map { Node(route: .sim($0.id, path: []), title: $0.title, symbol: $0.shellSymbol) }
@@ -52,19 +53,26 @@ struct GraphData {
         let byRoute = Dictionary(nodes.enumerated().map { ($0.element.route, $0.offset) }, uniquingKeysWith: { first, _ in first })
         var edges = Set<Edge>()
         for (index, note) in notes.enumerated() {
-            guard let text = catalog.read(note) else { continue }
-            let references = GraphReferences(text, note: note)
-            for link in references.links {
-                let resolved = catalog.resolveNote(link).flatMap { byRoute[.note($0)] }
-                if let target = resolved ?? byRoute[.sim(link, path: [])], target != index {
+            for link in vault.outgoingLinks(from: note) {
+                let resolved = vault.resolve(link: link.target).flatMap { byRoute[.note($0)] }
+                if let target = resolved ?? byRoute[.sim(link.target, path: [])], target != index {
                     edges.insert(Edge(index, target))
                 }
             }
-            for sim in references.embeds {
+            for sim in vault.embeddedSimIDs(in: note) {
                 if let target = byRoute[.sim(sim, path: [])] { edges.insert(Edge(index, target)) }
             }
         }
         self.init(nodes: nodes, edges: edges.sorted())
+    }
+
+    func hasSameLinks(as other: GraphData) -> Bool {
+        if nodes.elementsEqual(other.nodes, by: { $0.route == $1.route }) { return edges == other.edges }
+        return linksByRoute == other.linksByRoute
+    }
+
+    private var linksByRoute: Set<Set<Route>> {
+        Set(edges.map { [nodes[$0.a].route, nodes[$0.b].route] })
     }
 
     func filtered(notes: Bool, sims: Bool, orphans: Bool) -> GraphData {
@@ -88,55 +96,5 @@ struct GraphData {
             guard let a = remap[edge.a], let b = remap[edge.b] else { return nil }
             return Edge(a, b)
         })
-    }
-}
-
-private struct GraphReferences {
-    private struct Fence {
-        let marker: Character
-        let count: Int
-        let isStrata: Bool
-        var lines: [Substring] = []
-    }
-
-    private static let wikiLink = #/\[\[([^\]\n]+)\]\]/#
-    var links: Set<String> = []
-    var embeds: Set<String> = []
-
-    init(_ text: String, note: String) {
-        var fence: Fence?
-        var embedIndex = 0
-        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
-            let trimmed = line.drop(while: \.isWhitespace)
-            if var open = fence {
-                let marks = trimmed.prefix { $0 == open.marker }
-                if marks.count >= open.count, trimmed.dropFirst(marks.count).allSatisfy(\.isWhitespace) {
-                    if open.isStrata {
-                        let (embed, _) = ManifestParser.parseEmbed(open.lines.joined(separator: "\n"), note: note, index: embedIndex)
-                        if case .library(let id) = embed?.target { embeds.insert(id) }
-                        embedIndex += 1
-                    }
-                    fence = nil
-                } else if open.isStrata {
-                    open.lines.append(line)
-                    fence = open
-                }
-                continue
-            }
-
-            if let marker = trimmed.first, marker == "`" || marker == "~" {
-                let marks = trimmed.prefix { $0 == marker }
-                if marks.count >= 3 {
-                    let info = trimmed.dropFirst(marks.count).trimmingCharacters(in: .whitespaces)
-                    fence = Fence(marker: marker, count: marks.count, isStrata: info == "strata")
-                    continue
-                }
-            }
-
-            for match in line.matches(of: Self.wikiLink) {
-                let target = match.1.prefix { $0 != "|" && $0 != "#" }.trimmingCharacters(in: .whitespaces)
-                if !target.isEmpty { links.insert(target) }
-            }
-        }
     }
 }

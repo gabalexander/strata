@@ -50,7 +50,7 @@ struct GraphScreen: View {
         .padding(.bottom, 20)
         .task(id: Revision(library: model.library.revision, vault: model.vault.revision)) {
             graph = GraphData(catalog: catalog)
-            rebuildLayout()
+            rebuildLayout(preserveUnchangedLinks: true)
         }
         .onChange(of: filters) { rebuildLayout() }
         .task(id: layoutRun) {
@@ -203,10 +203,19 @@ struct GraphScreen: View {
         }
     }
 
-    private func rebuildLayout() {
+    private func rebuildLayout(preserveUnchangedLinks: Bool = false) {
+        let visible = graph.filtered(notes: filters.notes, sims: filters.sims, orphans: filters.orphans)
+        if preserveUnchangedLinks, !layout.graph.nodes.isEmpty, layout.graph.hasSameLinks(as: visible) {
+            if !layout.graph.nodes.elementsEqual(visible.nodes, by: { $0.route == $1.route }) {
+                drag = nil
+                hoverPoint = nil
+            }
+            layout.updateGraph(visible)
+            return
+        }
         drag = nil
         hoverPoint = nil
-        layout = ForceLayout(graph: graph.filtered(notes: filters.notes, sims: filters.sims, orphans: filters.orphans))
+        layout = ForceLayout(graph: visible)
         if catalog.fixtureNotes != nil {
             while layout.advance() {}
         }
