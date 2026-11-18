@@ -121,6 +121,29 @@ pattern that matters, with `code:` pointing at it. `strata schema` lists the fie
 - **Review** with `strata ops <id>`. Check that every service has its ops, that tables, keys and topics
   are right, and that the ops you care about are named by a flow. Then run `strata validate`.
 
+## Pressure
+
+`strata analyze <id>` prints what the app's Pressure tab shows:
+
+- per node: slots, hold time, calls/s and utilization;
+- per flow: calls per second and per day, its max rate and the node that caps it (the bottleneck);
+- a scale plan, the load on each database and cache by op and table, and the blast radius of the
+  top bottleneck.
+
+`--rates place-order=120/s,...` asks "what if", and `--json` is for scripts. Put the real numbers on
+flows: `traffic: { peak: 120/s, daily: 4M }` (the scale plan uses `peak`) and `slo: { p99: 300ms, errors: 0.1% }`.
+
+Sanity-check the result against reality before you hand the map over, and tell the user what you found:
+
+- **The bottleneck** should be the component the team knows hurts: the DB pool, a worker count, a
+  partner's rate limit. If it isn't, a pool size, replica count or latency is probably wrong. Fix the
+  params, not the conclusion.
+- **Max rates** should be in the range production has survived. A max far below the real peak means
+  the map is too pessimistic, or production is close to falling over: ask.
+- **Database pressure** should name the queries the team would call the heavy ones.
+- **The simulation agrees:** `strata simulate <id>` at the same rates should show similar utilization.
+  The analysis uses means, so heavy tails and timeouts only show up in the simulation.
+
 ## Lessons (`kind: sim`)
 
 Use a lesson for a technology or pattern: retries vs timeouts, prefetch, cache stampede, outbox,
