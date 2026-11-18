@@ -307,6 +307,13 @@ private extension CapacityReport {
             check(breach?.subject == "requests" && breach?.severity == .critical &&
                   breach?.message.contains("requests p99 1") == true && breach?.message.contains("> SLO 50 ms") == true &&
                   breach?.message.contains("> SLO 1%") == true, "SLO breach: \(String(describing: breach?.message))")
+
+            let guarded = Simulation(manifest: manifest(level([node("svc", .service), node("pay", .external) { $0.errors = 1 }],
+                                                              [source(20, [call("svc", [call("pay") { $0.breaker = Breaker(failures: 3, cooldown: 5) }])])])))
+            guarded.run(seconds: 2)
+            let open = guarded.culprits().first { $0.kind == .breakerOpen }
+            check(open?.subject == "svc->pay" && open?.message.hasPrefix("Breaker open on svc → pay") == true,
+                  "breaker culprit: \(guarded.culprits().map(\.message))")
         },
         CheckCase(name: "analysis culprits on the checkout map agree with the static model") {
             let checkout = try bundled("checkout")
@@ -340,6 +347,12 @@ private extension CapacityReport {
             let each = (Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18) / 200 * 1000
             print(String(format: "Culprits on checkout: %.3f ms per call", each))
             check(each < 2, "culprits took \(each) ms")
+            let reportStart = clock.now
+            for _ in 0..<10 { _ = sim.capacityReport() }
+            let reportElapsed = reportStart.duration(to: clock.now).components
+            let report = (Double(reportElapsed.seconds) + Double(reportElapsed.attoseconds) * 1e-18) / 10 * 1000
+            print(String(format: "Capacity report on checkout: %.2f ms per call", report))
+            check(report < 100, "capacityReport took \(report) ms")
         },
         CheckCase(name: "analysis cli prints capacity, flows, plan, pressure and blast radius") {
             guard let path = StrataResources.url("Examples/checkout.yaml")?.path else { throw CocoaError(.fileNoSuchFile) }

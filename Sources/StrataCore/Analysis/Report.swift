@@ -143,14 +143,15 @@ extension CapacityModel {
             var unbounded = model
             unbounded.nodes[node].unlimited = true
             let next = unbounded.saturation(plan)
-            let horizon = min(next?.scale ?? 100, 100)
-            // Service-time demand: right at the next node's saturation its queue would inflate this one's hold.
-            let demandThen = unbounded.evaluate(plan.map { $0 * horizon }, queueing: false).demand[node]
             func needed(_ demand: Double) -> Int {
                 guard demand.isFinite else { return SimulationLimits.replicas }
                 return Int(min(1e6, (demand / (0.7 * Double(concurrency))).rounded(.up)))
             }
-            let wanted = max(replicas + 1, needed(before.demand[node]), needed(demandThen))
+            var wanted = max(replicas + 1, needed(before.demand[node]))
+            if let next {
+                // Service-time demand: right at the next node's saturation its queue would inflate this one's hold.
+                wanted = max(wanted, needed(unbounded.evaluate(plan.map { $0 * next.scale }, queueing: false).demand[node]))
+            }
             var target = min(SimulationLimits.replicas, wanted)
             model.nodes[node].params.replicas = target
             var after = model.saturation(plan)
@@ -181,7 +182,8 @@ extension CapacityModel {
             }
             step.reason = reason + "."
             steps.append(step)
-            guard after != nil else { break }
+            // Nothing new to learn once no other node limits growth.
+            guard let after, after.node != node else { break }
         }
         return steps
     }
