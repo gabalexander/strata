@@ -150,19 +150,49 @@ private struct TermCardOverlay: View {
     private func relatedTerms(_ terms: [Term], index: TermIndex) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             StrataSectionLabel("Related terms")
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(Array(terms.enumerated()), id: \.offset) { _, term in
-                        Button {
-                            overlays.showTerm(term, anchor: card.anchor, pinned: true, index: index)
-                        } label: {
-                            StrataChip(term.term, tint: Theme.accent)
-                        }
-                        .buttonStyle(.plain)
+            ChipFlow(spacing: 4) {
+                ForEach(Array(terms.enumerated()), id: \.offset) { _, term in
+                    Button {
+                        overlays.showTerm(term, anchor: card.anchor, pinned: true, index: index)
+                    } label: {
+                        StrataChip(term.term, tint: Theme.accent)
                     }
+                    .buttonStyle(.plain)
                 }
             }
-            .scrollIndicators(.hidden)
         }
+    }
+}
+
+/// Lays chips out in rows, wrapping at the card's width.
+private struct ChipFlow: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        rows(proposal.width ?? .infinity, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, frame) in zip(subviews, rows(bounds.width, subviews).frames) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func rows(_ width: CGFloat, _ subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0, used: CGFloat = 0
+        var frames: [CGRect] = []
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += row + spacing
+                row = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            used = max(used, x + size.width)
+            x += size.width + spacing
+            row = max(row, size.height)
+        }
+        return (CGSize(width: used, height: y + row), frames)
     }
 }
