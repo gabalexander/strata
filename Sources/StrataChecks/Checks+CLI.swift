@@ -1,4 +1,5 @@
 import Foundation
+import StrataCore
 
 @MainActor func cliChecks() -> [CheckCase] {
     [
@@ -62,6 +63,47 @@ import Foundation
                 let excessive = try invokeCLI(builtCLI, ["simulate", rate.path, "--seconds", "0.01"], cwd: root)
                 check(excessive.status == 1 && excessive.output.contains("a flow rate cannot exceed 10000/s"),
                       "simulate did not reject the excessive rate: \(excessive.output)")
+            }
+        },
+        CheckCase(name: "cli ops lists every op per level with the flows that name it") {
+            try withCLIDirectory { root in
+                guard let checkout = StrataResources.url("Examples/checkout.yaml") else {
+                    check(false, "missing checkout example")
+                    return
+                }
+                let text = try invokeCLI(builtCLI, ["ops", checkout.path], cwd: root)
+                check(text.status == 0 && text.output.contains("checkout (root)") && text.output.contains("checkout › orders") &&
+                      text.output.contains("checkout › orders#insert-order") == false,
+                      "ops text output: \(text.output)")
+                let rows = text.output.components(separatedBy: "\n")
+                check(rows.contains { $0.hasPrefix("orders ") && $0.contains("insert-order") && $0.contains("orders, order_items, outbox") &&
+                                      $0.contains("place-order") },
+                      "insert-order row is missing its tables or flow: \(text.output)")
+
+                let json = try invokeCLI(builtCLI, ["ops", checkout.path, "--json"], cwd: root)
+                let listings = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as? [[String: Any]] ?? []
+                func listing(_ level: String, _ node: String, _ id: String) -> [String: Any]? {
+                    listings.first { $0["level"] as? String == level && $0["node"] as? String == node && $0["id"] as? String == id }
+                }
+                let consume = listing("", "mailer", "on-order-placed")
+                check(json.status == 0 && consume?["direction"] as? String == "in" && consume?["flows"] as? [String] == ["email"],
+                      "flow-level op missing from --json: \(String(describing: consume))")
+                let insert = listing("", "orders", "insert-order")
+                check(insert?["tx"] as? Bool == true && insert?["inside"] as? Bool == true &&
+                      (insert?["facts"] as? [[String: String]])?.map { $0["key"] } == ["isolation", "pool"],
+                      "sql op fields or fact order: \(String(describing: insert))")
+                check(listing("orders", "relay", "poll-outbox")?["flows"] as? [String] == ["relay-polls"] &&
+                      listing("", "smtp", "send-mail")?["flows"] as? [String] == [], "deep dive op or unreferenced op")
+
+                let empty = root.appendingPathComponent("empty.yaml")
+                try Data("strata: 1\nid: empty\ntitle: Empty\nnodes: [{ id: a, kind: service }]\n".utf8).write(to: empty)
+                let none = try invokeCLI(builtCLI, ["ops", empty.path], cwd: root)
+                check(none.status == 0 && none.output.contains("No operations in empty."), "empty manifest: \(none.output)")
+                let broken = root.appendingPathComponent("broken.yaml")
+                try Data("strata: 1\nid: broken\ntitle: Broken\nnodes: [{ id: a, kind: service, ops: [{ id: x, kind: sql, label: X, target: nope }] }]\n".utf8)
+                    .write(to: broken)
+                let failed = try invokeCLI(builtCLI, ["ops", broken.path], cwd: root)
+                check(failed.status == 1 && failed.output.contains("unknown node 'nope'"), "invalid manifest: \(failed.output)")
             }
         },
     ]
