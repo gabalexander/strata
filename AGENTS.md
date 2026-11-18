@@ -10,3 +10,4 @@ which is also the simulation semantics) and docs/design.md (visual language) bef
 - Contract files (marked CONTRACT FILE) change only additively; list any change in your report.
 - No third-party packages, no network.
 - Never use `.contextMenu`, `.popover`, `.help`, `.sheet`, `.alert` or `NSMenu` in views. Use `Overlays` (in-window) so screen sharing never sees a separate window.
+- Render any manifest on the real stage: `STRATA_SNAP_MANIFEST=Resources/Examples/x.yaml [STRATA_SNAP_SCENARIO=id] [STRATA_SNAP_T=10] [STRATA_SNAP_SELECT=node] swift run --disable-sandbox StrataSnapshot build/snapshots manifest-`.
