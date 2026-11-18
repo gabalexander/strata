@@ -42,18 +42,19 @@ struct Sidebar: View {
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            StrataSectionLabel("Notes")
-                            Spacer()
-                            StrataIconButton("plus", title: "New note ⌘N") { ShellCommand.newNote.perform(on: model) }
-                        }
-                        .padding(.leading, 8)
-                        .padding(.trailing, 2)
                         if catalog.fixtureNotes != nil {
+                            HStack {
+                                StrataSectionLabel("Notes")
+                                Spacer()
+                                StrataIconButton("plus", title: "New note ⌘N") { ShellCommand.newNote.perform(on: model) }
+                            }
+                            .padding(.leading, 8)
+                            .padding(.trailing, 2)
                             ForEach(catalog.notePaths, id: \.self) { path in
                                 quickLink(ShellCatalog.title(path), symbol: "note.text", route: .note(path))
                             }
                         } else {
+                            // The tree draws its own header, with the creation menu on right-click.
                             NotesTree(model: model)
                         }
                     }
