@@ -522,7 +522,9 @@ private struct SimPressureScale: View {
                      tries: [SimPressureState.Tried]) -> some View {
         let state = SimPressureState.of(sim)
         let tried = tries.first { $0.node == step.node && $0.to == step.replicas }
-        let from = tried?.from ?? state.replicas(step.node, sim: sim)
+        // Steps build on each other: a node scaled earlier in the plan starts from that step's replicas.
+        let earlier = plan.prefix(offset).last { $0.node == step.node }?.replicas
+        let from = tried?.from ?? earlier ?? state.replicas(step.node, sim: sim)
         // The why: the reason's first sentence ("mailer is over capacity at peak.").
         let why = step.reason.components(separatedBy: ". ").first.map { $0.hasSuffix(".") ? $0 : $0 + "." } ?? ""
         return HStack(alignment: .center, spacing: 12) {

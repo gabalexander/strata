@@ -37,7 +37,7 @@ struct SimPressureStores: View {
             if stores.isEmpty {
                 SimPressureEmpty(message: "No database or cache load at this level", icon: "cylinder.split.1x2")
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 390), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 560), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                     ForEach(stores, id: \.self) { id in
                         SimPressureStoreCard(sim: sim, model: model, store: id, capacity: analysis.nodes[id],
                                              sources: analysis.report.pressure[id] ?? [], select: select)
@@ -147,8 +147,12 @@ private struct SimPressureStoreCard: View {
                 } else {
                     Text(SimPressureFormat.percent(capacity.utilization)).font(Theme.mono(11, .medium))
                         .foregroundStyle(SimPressureStyle.calm(capacity.utilization))
-                    Text("busy · \(SimPressureFormat.slots(slots, kind: node.kind)) · \(SimPressureFormat.latency(capacity.holdTime)) hold")
-                        .font(Theme.small).foregroundStyle(Theme.muted).lineLimit(1)
+                    ViewThatFits(in: .horizontal) {
+                        Text("busy · \(SimPressureFormat.slots(slots, kind: node.kind)) · \(SimPressureFormat.latency(capacity.holdTime)) hold")
+                        Text("busy · \(SimPressureFormat.slots(slots, kind: node.kind))")
+                        Text("busy")
+                    }
+                    .font(Theme.small).foregroundStyle(Theme.muted).lineLimit(1)
                 }
             }
         }
@@ -189,9 +193,10 @@ private struct SimPressureStoreCard: View {
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
                 if let access = access(source) { SimOpAccessBadge(access: access) }
-                Text(title).font(Theme.ui(12)).foregroundStyle(Theme.text).lineLimit(1).layoutPriority(1)
-                Text("· \(sim.pressureLabel(source.node))").font(Theme.ui(11)).foregroundStyle(Theme.muted).lineLimit(1)
-                Spacer(minLength: 8)
+                // Wraps rather than truncates when the card is narrow.
+                Text("\(Text(title).font(Theme.ui(12)).foregroundStyle(Theme.text))  \(Text(sim.pressureLabel(source.node)).font(Theme.ui(11)).foregroundStyle(Theme.muted))")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(SimPressureFormat.rate(source.rate)).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     .monospacedDigit().frame(width: 58, alignment: .trailing)
                 Text(SimPressureFormat.perDay(source.daily > 0 ? source.daily : source.rate * 86_400))
