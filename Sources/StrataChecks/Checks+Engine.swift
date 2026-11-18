@@ -47,12 +47,24 @@ private func manifest(_ nodes: [Node], _ flows: [Flow], edges: [Edge] = [], scen
     sim.frame().nodes[id]!
 }
 
+private func op(_ id: String, _ kind: OpKind, target: String? = nil) -> StrataCore.Operation {
+    var op = StrataCore.Operation(id: id, kind: kind, direction: target == nil || kind == .consume ? .inbound : .outbound)
+    op.target = target
+    return op
+}
+
+private func named(_ op: String, _ step: Step) -> Step {
+    var step = step
+    step.op = op
+    return step
+}
+
 private func measure(_ format: String, _ values: CVarArg...) {
     print(String(format: format, arguments: values))
 }
 
 @MainActor func engineChecks() -> [CheckCase] {
-    [
+    opEngineChecks() + [
         CheckCase(name: "engine runtime clamps allocating counts") {
             let sim = sim([node("worker", .worker)], [])
             sim.perform([.scale("worker", Int.max, relative: true)])
@@ -665,4 +677,106 @@ private func measure(_ format: String, _ values: CVarArg...) {
     check(sim.metrics(flow: "requests").totalFailed == 1 && state(sim, "db").throughput > 0,
           "the caller should already have failed while the work still completed")
     return tokens.first ?? TokenView(id: -1, edge: "", progress: 0, reverse: false, kind: .request, color: 1, flow: "")
+}
+
+@MainActor private func opEngineChecks() -> [CheckCase] {
+    [
+        CheckCase(name: "engine op metrics follow the steps that name them") {
+            var api = node("api", .service)
+            api.ops = [op("serve", .http), op("read", .sql, target: "db"), op("unused", .cache, target: "db")]
+            let db = node("db", .database) { $0.latency = .fixed(0.005) }
+            let flow = source(.perSecond(10), [named("serve", call("api", [named("read", call("db"))]))])
+            let sim = sim([api, db], [flow], seed: 3)
+            sim.run(seconds: 30)
+            let serve = sim.opMetrics(node: "api", op: "serve")
+            let read = sim.opMetrics(node: "api", op: "read")
+            let unused = sim.opMetrics(node: "api", op: "unused")
+            measure("Op at 10/s: serve %.2f/s p50 %.2f ms, read %.2f/s p50 %.2f ms p99 %.2f ms, %d total",
+                    serve.rate, (serve.p50 ?? 0) * 1000, read.rate, (read.p50 ?? 0) * 1000, (read.p99 ?? 0) * 1000, read.total)
+            check(serve.referenced && read.referenced && (8...12).contains(serve.rate) && (8...12).contains(read.rate),
+                  "a 10/s flow should report about 10/s on its ops: serve \(serve.rate), read \(read.rate)")
+            check((250...350).contains(read.total) && read.total == serve.total && read.errors == 0 && serve.errors == 0,
+                  "op totals or errors: read \(read.total), serve \(serve.total)")
+            check(abs((read.p50 ?? 0) - 0.007) < 0.0005 && (serve.p50 ?? 0) > (read.p50 ?? 0),
+                  "op latency should run from step start to its result: read p50 \(read.p50 ?? -1)")
+            check(!unused.referenced && unused.rate == 0 && unused.total == 0 && unused.p50 == nil, "an unreferenced op reported numbers")
+            check(!sim.opMetrics(node: "api", op: "missing").referenced && !sim.opMetrics(node: "db", op: "read").referenced,
+                  "a missing op reported numbers")
+            let rates = sim.opSeries(node: "api", op: "read", metric: "rate")
+            check(rates.count == 120 && (8...12).contains(rates.last ?? 0) && (sim.opSeries(node: "api", op: "read", metric: "p99").last ?? 0) > 0,
+                  "op series should hold one sample per 0.25 s: \(rates.count)")
+            check(sim.opSeries(node: "api", op: "serve", metric: "errors").allSatisfy { $0 == 0 } &&
+                  sim.opSeries(node: "api", op: "read", metric: "p50").count == 120, "errors or p50 series")
+            check(sim.opSeries(node: "api", op: "unused", metric: "rate").isEmpty &&
+                  sim.opSeries(node: "api", op: "read", metric: "throughput").isEmpty, "unreferenced op or unknown metric has a series")
+            let report = sim.report()
+            check(report.contains("Op     Node  rate/s  err/s  p50 ms  p99 ms") && report.contains("\nread   ") && !report.contains("unused"),
+                  "report has no ops table:\n\(report)")
+            sim.reset()
+            check(sim.opMetrics(node: "api", op: "read").total == 0 && sim.opSeries(node: "api", op: "read", metric: "rate").isEmpty,
+                  "reset kept op numbers")
+            check(!Simulation(manifest: manifest([node("db", .database)], [source(.perSecond(10), [call("db")])])).report().contains("Op"),
+                  "a report without referenced ops shows an ops table")
+        },
+        CheckCase(name: "engine op errors count failed steps") {
+            var api = node("api", .service)
+            api.ops = [op("serve", .http), op("read", .sql, target: "db")]
+            let db = node("db", .database) { $0.errors = 0.5 }
+            let sim = sim([api, db], [source(.perSecond(10), [named("serve", call("api", [named("read", call("db"))]))])], seed: 9)
+            sim.run(seconds: 30)
+            let read = sim.opMetrics(node: "api", op: "read")
+            let serve = sim.opMetrics(node: "api", op: "serve")
+            measure("Op errors at 50%%: read %.2f/s of %.2f/s, serve %.2f/s", read.errors, read.rate, serve.errors)
+            check((0.3...0.7).contains(read.errors / max(read.rate, 1)), "op errors should track the 50% failure rate: \(read.errors) of \(read.rate)")
+            check(abs(serve.errors - read.errors) < 1e-9, "a failed nested step should fail the calling op too")
+            sim.perform([.kill("db")])
+            sim.run(seconds: 6)
+            let down = sim.opMetrics(node: "api", op: "read")
+            check(down.rate > 7 && abs(down.errors - down.rate) < 1e-9, "refused calls must count as op errors: \(down.errors) of \(down.rate)")
+        },
+        CheckCase(name: "engine op attribution for work, parallel, consumer and cache steps") {
+            var api = node("api", .service) { $0.latency = .fixed(0.001) }
+            api.ops = [op("think", .call), op("fanout", .call), op("lookup", .cache, target: "cache"), op("emit", .publish, target: "queue")]
+            var worker = node("worker", .worker) { $0.concurrency = 4 }
+            worker.ops = [op("handle", .consume, target: "queue")]
+            let steps = [
+                named("think", Step(.work(.fixed(0.02)))),
+                named("fanout", Step(.parallel([Step(.work(.fixed(0.01))), Step(.work(.fixed(0.03)))]))),
+                named("lookup", call("cache")),
+                named("emit", Step(.publish(target: "queue"))),
+            ]
+            var jobs = consumer("jobs", "queue", "worker")
+            jobs.steps = [named("handle", Step(.work(.fixed(0.005))))]
+            let sim = sim([api, node("cache", .cache), node("queue", .queue), worker],
+                          [source(.every(0.1), [call("api", steps)]), jobs], seed: 5)
+            sim.run(seconds: 10)
+            let metrics = ["think", "fanout", "lookup", "emit"].map { sim.opMetrics(node: "api", op: $0) }
+            let handle = sim.opMetrics(node: "worker", op: "handle")
+            check(metrics.allSatisfy { $0.referenced && abs($0.rate - 10) < 0.5 && $0.errors == 0 } && abs(handle.rate - 10) < 0.5,
+                  "every step kind should count: \(metrics.map(\.rate)), handle \(handle.rate)")
+            check(abs((metrics[0].p50 ?? 0) - 0.02) < 0.0005 && abs((metrics[1].p50 ?? 0) - 0.03) < 0.0005 &&
+                  abs((handle.p50 ?? 0) - 0.005) < 0.0002, "work or parallel op latency: \(metrics.map { $0.p50 ?? -1 })")
+            sim.perform([.kill("cache")])
+            sim.run(seconds: 6)
+            let lookup = sim.opMetrics(node: "api", op: "lookup")
+            check(lookup.rate > 9 && abs(lookup.errors - lookup.rate) < 1e-9 && sim.metrics(flow: "requests").failed == 0,
+                  "a down cache should fail its op while the step falls back to a miss: \(lookup.errors) of \(lookup.rate)")
+        },
+        CheckCase(name: "engine op attribution stays within the performance budget") {
+            var nodes = (1...5).map { hop in node("hop\(hop)", .service) { $0.concurrency = 128; $0.latency = .fixed(0.002) } }
+            for index in nodes.indices { nodes[index].ops = [op("serve", .rpc)] }
+            // Nested hops share the op id, so name each one as node/op (a bare id resolves on the caller first).
+            let pipeline = nodes.reversed().reduce([Step]()) { [named("\($1.id)/serve", call($1.id, $0))] }
+            let sim = sim(nodes, [source(.perSecond(1000), pipeline)], seed: 14)
+            let clock = ContinuousClock()
+            let start = clock.now
+            sim.run(seconds: 10)
+            let elapsed = start.duration(to: clock.now).components
+            let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18
+            let tail = sim.opMetrics(node: "hop5", op: "serve")
+            measure("Five hops with ops, 10 s simulated in %.3f s, hop5 op %.1f/s, p50 %.2f ms", seconds, tail.rate, (tail.p50 ?? 0) * 1000)
+            check(tail.rate > 950 && tail.total > 9000, "op attribution skipped work: \(tail.rate)/s")
+            check(seconds < 1, "10 s headless with ops took \(seconds) s")
+        },
+    ]
 }
