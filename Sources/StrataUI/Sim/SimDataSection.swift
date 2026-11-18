@@ -44,9 +44,7 @@ struct SimDataSection: View {
                     Text("Data").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                     Text("\(tables.count) tables").font(Theme.mono(10)).foregroundStyle(Theme.faint)
                     Spacer(minLength: 0)
-                    if open == nil {
-                        Text("Click a table to open it").font(Theme.small).foregroundStyle(Theme.faint).lineLimit(1)
-                    }
+                    if open == nil { SimDataHint(text: "Click a table to open it") }
                 }
                 SimDataDiagram(index: state.index, node: node.id, open: open, join: join, still: still,
                                tap: { state.toggleTable($0) },
@@ -250,9 +248,7 @@ struct SimDataTableView: View {
                 Text("Sample rows").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                 Text(sampleCount).font(Theme.mono(10)).foregroundStyle(Theme.faint).lineLimit(1)
                 Spacer(minLength: 0)
-                if hasKeys, focus == nil {
-                    Text("Click a key to follow it").font(Theme.small).foregroundStyle(Theme.faint).lineLimit(1)
-                }
+                if hasKeys, focus == nil { SimDataHint(text: "Click a key to follow it") }
             }
             if schema.rows.isEmpty {
                 Text("No sample rows.").font(Theme.small).foregroundStyle(Theme.faint)
@@ -427,6 +423,18 @@ private struct SimDataOpLine: View {
         .simOpsMenu(still: still, menu)
         .accessibilityLabel("\(entry.node.label), \(entry.op.label)")
         .accessibilityHint("Opens the operation")
+    }
+}
+
+/// A faint how-to beside a section title, left out rather than truncated when the panel is narrow.
+struct SimDataHint: View {
+    let text: String
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Text(text).font(Theme.small).foregroundStyle(Theme.faint).lineLimit(1).fixedSize()
+            Color.clear.frame(width: 0, height: 0)
+        }
     }
 }
 
