@@ -26,6 +26,37 @@ nodes:
     doc: |
       Reads through Redis and calls the miss handler when Redis has no usable value.
       When Redis is down, every request takes the database path.
+    ops:
+      - id: get-object
+        kind: http
+        label: GET /objects/{id}
+        method: GET
+        path: /objects/{id}
+        response: '{ "id": "obj_7", "body": "…", "etag": "W/\"3f\"" }'
+        status: ["200 ok", "503 database read rejected"]
+      - id: lookup
+        kind: cache
+        target: cache
+        label: GET object
+        command: GET
+        key: "obj:{id}"
+        access: read
+        doc: A refused or failed GET counts as a miss, so a Redis outage sends every read to the miss path.
+      - id: fill
+        kind: cache
+        target: cache
+        label: SET object
+        command: SET EX 60
+        key: "obj:{id}"
+        ttl: 1m
+        access: write
+        doc: Not simulated; the lesson models the warm hit rate directly. Every concurrent miss for one key writes it again.
+        risks: [without a per-key lock, every concurrent miss for a hot key reads Postgres]
+      - id: load-on-miss
+        kind: call
+        target: gate
+        label: Load object on miss
+        calls: gate/load
   - id: cache
     kind: cache
     label: Hot object cache
@@ -48,6 +79,22 @@ nodes:
     doc: |
       Holds one slot for each database read until Postgres replies.
       It sheds excess misses when its own waiting room fills, keeping that work away from Postgres.
+    ops:
+      - id: load
+        kind: call
+        label: Load object (bulkhead)
+        doc: Takes a permit, reads Postgres, releases the permit. A full waiting room fails fast.
+        facts:
+          permits: gate.concurrency
+          waiting room: 32 callers
+      - id: select-object
+        kind: sql
+        target: db
+        label: SELECT object
+        access: read
+        tables: [objects]
+        indexes: [objects_pkey]
+        query: SELECT body, etag FROM objects WHERE id = $1;
   - id: db
     kind: database
     label: Postgres
@@ -72,13 +119,16 @@ flows:
     rate: 5000/s
     steps:
       - call: reader
+        op: get-object
         steps:
           - call: cache
             label: Look up object
+            op: lookup
             miss:
               - call: gate
+                op: load
                 steps:
-                  - { call: db, label: Fetch object }
+                  - { call: db, label: Fetch object, op: select-object }
 
 controls:
   - label: Redis hit rate

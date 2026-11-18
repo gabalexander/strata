@@ -15,6 +15,18 @@ nodes:
     doc: |
       Appends one event per publish to the shared topic.
       During a broker outage, new events cannot enter the log.
+    ops:
+      - id: produce-event
+        kind: publish
+        target: events
+        label: Produce activity event
+        topic: user-activity
+        key: user_id
+        payload: '{ "user_id": "u_17", "type": "page_view", "path": "/pricing", "ts": "2026-11-19T10:04:00Z" }'
+        doc: Keys by user, so one user's events stay in order on one partition.
+        facts:
+          acks: all
+          partitioner: murmur2 of user_id
   - id: events
     kind: topic
     label: Activity log
@@ -36,6 +48,17 @@ nodes:
     doc: |
       Indexes each event for search and advances its own group cursor.
       Its 10 ms handler keeps up even when analytics falls behind.
+    ops:
+      - id: index-event
+        kind: consume
+        target: events
+        label: Index activity event
+        topic: user-activity
+        group: search-indexer
+        key: user_id
+        doc: Upserts the event into the search index, then commits the group offset.
+        facts:
+          commit: after each indexed record
   - id: analytics
     kind: worker
     label: Analytics
@@ -46,6 +69,18 @@ nodes:
     doc: |
       Aggregates events with a 120 ms handler, about eight records per second per consumer.
       If lag outruns the retention window, the group skips records the log evicted.
+    ops:
+      - id: aggregate-event
+        kind: consume
+        target: events
+        label: Aggregate activity event
+        topic: user-activity
+        group: analytics
+        key: user_id
+        doc: Adds the event to per-user hourly counters. Its own group offset lets it fall behind without slowing search.
+        risks: [records that age out of retention before this group reads them are skipped for good]
+        facts:
+          offset reset: earliest still retained
 
 edges:
   - { from: producer, to: events, protocol: kafka, latency: fixed 5ms }
@@ -53,9 +88,9 @@ edges:
   - { from: events, to: analytics, label: Analytics, latency: fixed 2ms }
 
 flows:
-  - { id: produce, label: Published events, from: producer, rate: 4/s, steps: [{ publish: events }] }
-  - { id: search-index, label: Search indexing, on: events, by: search, color: 3, steps: [] }
-  - { id: aggregate, label: Analytics, on: events, by: analytics, color: 2, steps: [] }
+  - { id: produce, label: Published events, from: producer, rate: 4/s, steps: [{ publish: events, op: produce-event }] }
+  - { id: search-index, label: Search indexing, on: events, by: search, color: 3, op: index-event, steps: [] }
+  - { id: aggregate, label: Analytics, on: events, by: analytics, color: 2, op: aggregate-event, steps: [] }
 
 controls:
   - label: Producer rate

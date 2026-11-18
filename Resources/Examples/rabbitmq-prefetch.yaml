@@ -18,6 +18,19 @@ nodes:
     doc: |
       Publishes one job at a time in steady state or a batch in the experiments.
       A full work queue rejects new jobs.
+    ops:
+      - id: publish-job
+        kind: publish
+        target: jobs
+        label: basic.publish resize job
+        topic: jobs
+        key: jobs
+        payload: '{ "job_id": "j_42", "image": "uploads/42.png", "sizes": [64, 256] }'
+        doc: Publishes to the default exchange, which routes by queue name, so the routing key is the queue.
+        facts:
+          exchange: default ("")
+          delivery mode: 2 (persistent)
+          confirms: publisher confirms on; a nack or full queue fails the publish
   - id: jobs
     kind: queue
     label: Work queue
@@ -42,6 +55,17 @@ nodes:
     doc: |
       Finishes a job in 20 ms before acknowledging it in manual mode.
       Prefetch of one makes this worker wait for each new delivery.
+    ops:
+      - id: resize
+        kind: consume
+        target: jobs
+        label: Resize image
+        topic: jobs
+        group: fast
+        doc: Resizes the image and acknowledges the delivery only after the output is stored.
+        facts:
+          qos: basic.qos(prefetch_count = fast.prefetch)
+          ack: basic.ack after success; basic.nack(requeue) on failure
   - id: slow
     kind: worker
     label: Slow worker
@@ -54,6 +78,17 @@ nodes:
     doc: |
       Takes 100 ms per job, five times as long as the fast worker.
       A high prefetch can leave jobs in its inbox while the fast worker is idle.
+    ops:
+      - id: resize
+        kind: consume
+        target: jobs
+        label: Resize image
+        topic: jobs
+        group: slow
+        doc: The same handler on older hardware. Deliveries it prefetches wait in its inbox, out of the fast worker's reach.
+        facts:
+          qos: basic.qos(prefetch_count = slow.prefetch)
+          ack: slow.ack (manual or auto)
   - id: dead
     kind: queue
     label: Dead letters
@@ -72,9 +107,9 @@ edges:
   - { from: jobs, to: dead, label: DLQ, latency: fixed 5ms }
 
 flows:
-  - { id: submit, label: Submit jobs, from: producer, rate: 6/s, steps: [{ publish: jobs }] }
-  - { id: fast-jobs, label: Fast worker jobs, on: jobs, by: fast, color: 3, steps: [] }
-  - { id: slow-jobs, label: Slow worker jobs, on: jobs, by: slow, color: 2, steps: [] }
+  - { id: submit, label: Submit jobs, from: producer, rate: 6/s, steps: [{ publish: jobs, op: publish-job }] }
+  - { id: fast-jobs, label: Fast worker jobs, on: jobs, by: fast, color: 3, op: resize, steps: [] }
+  - { id: slow-jobs, label: Slow worker jobs, on: jobs, by: slow, color: 2, op: resize, steps: [] }
 
 controls:
   - label: Fast worker prefetch
