@@ -171,7 +171,7 @@ struct SimOpDetail: View {
 
     private var live: some View {
         SimLive(sim: sim, pulse: pulse) {
-            let metrics = SimOpsMetrics.metrics(sim, entry.ref)
+            let metrics = sim.opMetrics(node: entry.node.id, op: entry.op.id)
             if metrics.referenced {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
@@ -180,7 +180,7 @@ struct SimOpDetail: View {
                         stat("p50", SimFormat.latency(metrics.p50))
                         stat("p99", SimFormat.latency(metrics.p99))
                     }
-                    SimSparkline(points: SimOpsMetrics.series(sim, entry.ref, "rate"), tint: Theme.good).frame(height: 22)
+                    SimSparkline(points: sim.opSeries(node: entry.node.id, op: entry.op.id, metric: "rate"), tint: Theme.good).frame(height: 22)
                 }
                 .padding(9)
                 .card()
@@ -217,7 +217,7 @@ struct SimOpDetail: View {
 
     @ViewBuilder
     private var query: some View {
-        if let query = op.query {
+        if let query = op.query.map(SimOpsCode.trimmed) {
             SimOpsCodeBlock(title: op.kind == .search ? "Query" : "SQL",
                             text: op.kind == .sql ? SimOpsCode.sql(query) : SimOpsCode.message(query).text,
                             raw: query, copyTitle: "Copy query", overlays: model.overlays, still: still)
@@ -283,7 +283,8 @@ struct SimOpDetail: View {
         }
     }
 
-    private func block(_ title: String, _ text: String, copy: String) -> some View {
+    private func block(_ title: String, _ source: String, copy: String) -> some View {
+        let text = SimOpsCode.trimmed(source)
         let formatted = SimOpsCode.message(text)
         return SimOpsCodeBlock(title: title, text: formatted.text, raw: SimOpsCode.json(text) ?? text, copyTitle: copy,
                                overlays: model.overlays, caption: formatted.isJSON ? "json" : nil, still: still)

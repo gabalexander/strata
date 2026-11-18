@@ -4,7 +4,7 @@ import StrataCore
 @_spi(Snapshots) import StrataUI
 
 // Operations: the inspector section, op details, reverse views, the stage path and the menus, on
-// `Fixtures.checkoutWithOps`. The engine's op metrics are stood in for, so rows show live numbers.
+// `Fixtures.checkoutWithOps`, with the engine's live op numbers.
 
 @MainActor func opsScenes() -> [Scene] {
     let size = CGSize(width: 1400, height: 880)
@@ -34,26 +34,11 @@ import StrataCore
     ]
 }
 
-private let opsMetrics: [String: (rate: Double, p99: Double)] = [
-    "api/create-order": (5.0, 0.048),
-    "orders/create-order": (5.0, 0.044),
-    "orders/price": (5.0, 0.0009),
-    "orders/select-price": (0.5, 0.0062),
-    "orders/insert-order": (5.0, 0.0124),
-    "orders/charge": (5.0, 0.212),
-    "orders/order-placed": (5.0, 0.0011),
-    "payments/charge": (5.0, 0.19),
-    "mailer/order-placed": (4.9, 0.213),
-    "mailer/send-email": (4.9, 0.18),
-    "reporting/daily-totals": (0.5, 0.034),
-]
-
 @MainActor private func opsScene(_ name: String, size: CGSize, path: [String] = [], selected: String? = nil,
                                  paused: Bool = false, prepare: @escaping (Simulation) -> Void = { _ in }) -> Scene {
     Scene(name: name, size: size) {
         let manifest = opsManifest()
         let model = opsModel(manifest)
-        SimOpsSnapshot.metrics(opsMetrics)
         let sim = Simulation(manifest: manifest, path: path)
         if !path.isEmpty { model.open(.sim(manifest.id, path: path)) }
         advance(sim)
@@ -71,7 +56,6 @@ private let opsMetrics: [String: (rate: Double, p99: Double)] = [
     Scene(name: "ops-node-menu", size: size, hosted: true) {
         let manifest = opsManifest()
         let model = opsModel(manifest)
-        SimOpsSnapshot.metrics(opsMetrics)
         model.open(.sim(manifest.id, path: []))
         let sim = Simulation(manifest: manifest)
         advance(sim)
@@ -98,7 +82,6 @@ private let opsMetrics: [String: (rate: Double, p99: Double)] = [
     Scene(name: "ops-palette", size: size, hosted: true) {
         let manifest = opsManifest()
         let model = opsModel(manifest)
-        SimOpsSnapshot.metrics(opsMetrics)
         model.open(.sim(manifest.id, path: []))
         let sim = Simulation(manifest: manifest)
         advance(sim)

@@ -57,15 +57,16 @@ struct SimOpsIndex {
     /// Every op of the level, in node then op order.
     let all: [Entry]
     private let byRef: [OpRef: Entry]
-    /// `calls:` reversed: the outbound ops that reach an endpoint.
+    /// `calls:` reversed: the ops that reach an endpoint (or, for a publish, the consumer it feeds).
     private(set) var linkedCallers: [OpRef: [OpRef]] = [:]
-    /// The op an outbound call reaches through `calls:`.
+    /// The op an op's `calls:` reaches (`Level.resolveCalls`).
     private(set) var linked: [OpRef: OpRef] = [:]
-    /// From flows: the ops performed while handling this one (steps nested under a step that performs it).
+    /// From flows: the ops performed while handling this one (steps nested under a step that performs
+    /// it, or the steps of a flow whose `op:` it is).
     private(set) var nested: [OpRef: [OpRef]] = [:]
     private(set) var nestedIn: [OpRef: [OpRef]] = [:]
-    /// Flow ids whose steps perform this op (and, for a consumer op, the consumer flow it drives).
-    private(set) var flows: [OpRef: [String]] = [:]
+    /// Flow ids that name this op, on the flow or on a step (`Level.opReferences`).
+    let flows: [OpRef: [String]]
 
     init(level: Level) {
         self.level = level
@@ -75,19 +76,19 @@ struct SimOpsIndex {
         }
         all = entries
         byRef = Dictionary(entries.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
+        flows = Dictionary(level.opReferences().compactMap { key, ids in
+            Self.ref(key).map { ($0, ids) }
+        }, uniquingKeysWith: { first, _ in first })
         for entry in entries {
-            guard let calls = entry.op.calls, let target = resolve(calls, near: entry.peer) else { continue }
+            guard let target = level.resolveCalls(entry.op).map({ OpRef(node: $0.node, op: $0.op.id) }) else { continue }
             linked[entry.ref] = target
             linkedCallers[target, default: []].append(entry.ref)
         }
         for flow in level.flows {
-            if let on = flow.on, let by = flow.by {
-                let consumer = entries.first { $0.node.id == by && $0.op.kind == .consume && $0.peer == on }?.ref
-                if let consumer { use(consumer, in: flow.id) }
-                walk(flow.steps, at: by, flow: flow.id, parent: consumer)
-            } else if let from = flow.from {
-                walk(flow.steps, at: from, flow: flow.id, parent: nil)
-            }
+            // A flow's own `op:` is resolved on its `by` (consumers) or `from` node, as the engine does.
+            let root = flow.op.flatMap { resolve($0, caller: flow.by ?? flow.from, target: nil) }
+            guard let start = flow.from ?? flow.by else { continue }
+            walk(flow.steps, at: start, parent: root)
         }
     }
 
@@ -133,60 +134,42 @@ struct SimOpsIndex {
         return result
     }
 
-    /// `node/op`, or an op id on `near` (the caller's target).
-    func resolve(_ name: String, near: String?) -> OpRef? {
-        if let slash = name.firstIndex(of: "/") {
-            let ref = OpRef(node: String(name[..<slash]), op: String(name[name.index(after: slash)...]))
-            return byRef[ref] == nil ? nil : ref
-        }
-        guard let near else { return nil }
-        let ref = OpRef(node: near, op: name)
-        return byRef[ref] == nil ? nil : ref
+    /// `Level.resolveOp` as a ref.
+    private func resolve(_ reference: String, caller: String?, target: String?) -> OpRef? {
+        level.resolveOp(reference, caller: caller, target: target).map { OpRef(node: $0.node, op: $0.op.id) }
     }
 
-    /// A step's `op:`: on the calling node, then the target, or `node/op`.
-    private func resolveStep(_ name: String, caller: String, target: String?) -> OpRef? {
-        if name.contains("/") { return resolve(name, near: nil) }
-        return resolve(name, near: caller) ?? resolve(name, near: target)
+    private static func ref(_ key: String) -> OpRef? {
+        guard let slash = key.firstIndex(of: "/") else { return nil }
+        return OpRef(node: String(key[..<slash]), op: String(key[key.index(after: slash)...]))
     }
 
-    private mutating func walk(_ steps: [Step], at node: String, flow: String, parent: OpRef?) {
+    /// Walks steps the way `Level.opReferences` does, remembering which op each one runs inside.
+    private mutating func walk(_ steps: [Step], at node: String, parent: OpRef?) {
         for step in steps {
             switch step.action {
             case .call(let target, let inner, let miss):
-                let ref = step.op.flatMap { resolveStep($0, caller: node, target: target) }
-                if let ref { record(ref, flow: flow, parent: parent) }
+                let ref = step.op.flatMap { resolve($0, caller: node, target: target) }
+                if let ref { record(ref, parent: parent) }
                 // Steps nested in the call run at the target, while handling the endpoint it reached.
-                let handler = ref.map { ref in
-                    byRef[ref]?.op.direction == .inbound ? ref : linked[ref] ?? ref
-                }
-                walk(inner, at: target, flow: flow, parent: handler)
-                walk(miss, at: node, flow: flow, parent: parent)
+                let handler = ref.map { ref in byRef[ref]?.op.direction == .inbound ? ref : linked[ref] ?? ref }
+                walk(inner, at: target, parent: handler ?? parent)
+                walk(miss, at: node, parent: parent)
             case .publish(let target):
-                if let ref = step.op.flatMap({ resolveStep($0, caller: node, target: target) }) {
-                    record(ref, flow: flow, parent: parent)
-                }
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: target) }) { record(ref, parent: parent) }
             case .work:
-                if let ref = step.op.flatMap({ resolveStep($0, caller: node, target: nil) }) {
-                    record(ref, flow: flow, parent: parent)
-                }
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent) }
             case .parallel(let inner):
-                walk(inner, at: node, flow: flow, parent: parent)
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent) }
+                walk(inner, at: node, parent: parent)
             }
         }
     }
 
-    private mutating func record(_ ref: OpRef, flow: String, parent: OpRef?) {
-        use(ref, in: flow)
-        // A call's flow also runs the endpoint its `calls:` reaches.
-        if let endpoint = linked[ref] { use(endpoint, in: flow) }
+    private mutating func record(_ ref: OpRef, parent: OpRef?) {
         guard let parent, parent != ref else { return }
         if !(nested[parent]?.contains(ref) ?? false) { nested[parent, default: []].append(ref) }
         if !(nestedIn[ref]?.contains(parent) ?? false) { nestedIn[ref, default: []].append(parent) }
-    }
-
-    private mutating func use(_ ref: OpRef, in flow: String) {
-        if !(flows[ref]?.contains(flow) ?? false) { flows[ref, default: []].append(flow) }
     }
 
     private func unique(_ refs: [OpRef]) -> [OpRef] {
@@ -292,17 +275,18 @@ enum SimOpsText {
         return parts.compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// `5/s · 12 ms`: a row's live rate and p99, short enough to leave the label its room.
+    /// `10/s · 8 ms`: a row's live rate and p99, short enough to leave the label its room (the detail
+    /// shows them precisely).
     static func rate(_ metrics: OpMetrics) -> String {
         guard metrics.referenced else { return "—" }
-        return "\(SimFormat.number(metrics.rate))/s · \(latency(metrics.p99))"
+        let rate = SimFormat.number(metrics.rate >= 10 ? metrics.rate.rounded() : metrics.rate)
+        return "\(rate)/s · \(latency(metrics.p99))"
     }
 
-    /// `900 µs`, `6.2 ms`, `12 ms`, `1.4 s`.
+    /// `900 µs`, `8 ms`, `1.4 s`.
     static func latency(_ seconds: Double?) -> String {
         guard let seconds else { return "—" }
         if seconds < 0.001 { return "\(Int((seconds * 1_000_000).rounded())) µs" }
-        if seconds < 0.01 { return "\(SimFormat.number(seconds * 1000)) ms" }
         if seconds < 1 { return "\(Int((seconds * 1000).rounded())) ms" }
         return "\(seconds.formatted(.number.precision(.fractionLength(0...1)))) s"
     }

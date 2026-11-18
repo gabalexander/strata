@@ -51,7 +51,11 @@ struct SimOpsSection: View {
             SimOpsGroupBox(title: group.title, count: rows.count) {
                 ForEach(Array(rows.enumerated()), id: \.element.ref) { offset, entry in
                     if offset > 0 { SimOpsHairline() }
-                    row(entry, callers: group == .endpoints ? index.linkedCallers[entry.ref] ?? [] : [])
+                    switch group {
+                    case .endpoints: row(entry, links: index.linkedCallers[entry.ref] ?? [])
+                    case .publishes: row(entry, links: index.linked[entry.ref].map { [$0] } ?? [], forward: true)
+                    default: row(entry)
+                    }
                 }
             }
         }
@@ -129,7 +133,9 @@ struct SimOpsSection: View {
                 SimOpsGroupBox(title: title, count: rows.count) {
                     ForEach(Array(rows.enumerated()), id: \.element.ref) { offset, entry in
                         if offset > 0 { SimOpsHairline() }
-                        row(entry, owner: true, preview: entry.op.payload.map(SimOpsText.preview))
+                        // Producer → consumer: the consume op a publish's `calls:` names.
+                        row(entry, owner: true, preview: entry.op.payload.map(SimOpsText.preview),
+                            links: entry.op.kind == .publish ? index.linked[entry.ref].map { [$0] } ?? [] : [], forward: true)
                     }
                 }
             }
@@ -137,11 +143,12 @@ struct SimOpsSection: View {
     }
 
     /// `owner` rows belong to other nodes and talk to this one (the reverse view).
+    /// `links` are sub-rows: the callers of an endpoint, or (`forward`) the consumer a publish feeds.
     private func row(_ entry: SimOpsIndex.Entry, owner: Bool = false, preview: String? = nil,
-                     callers: [OpRef] = []) -> some View {
+                     links: [OpRef] = [], forward: Bool = false) -> some View {
         SimOpRow(sim: sim, entry: entry, owner: owner, summary: owner ? SimOpsText.reverseSummary(entry) : nil,
                  preview: preview,
-                 callers: callers.compactMap(index.entry), pinned: state.isPinned(entry.ref, at: selection), pulse: pulse,
+                 links: links.compactMap(index.entry), forward: forward, pinned: state.isPinned(entry.ref, at: selection), pulse: pulse,
                  still: still,
                  open: { state.open($0, from: selection) },
                  menu: { SimOpsMenus.row(index.entry($0) ?? entry, sim: sim, model: model, anchor: selection) },
@@ -159,7 +166,10 @@ struct SimOpRow: View {
     /// The second line, instead of the op's own summary.
     var summary: String?
     var preview: String?
-    var callers: [SimOpsIndex.Entry] = []
+    /// Sub-rows: an endpoint's callers (`↳ api-gateway · CreateOrder`), or with `forward` the ops this
+    /// one reaches (`→ mailer · OrderPlaced`).
+    var links: [SimOpsIndex.Entry] = []
+    var forward = false
     /// Its path is pinned on the stage ("Highlight path").
     var pinned = false
     /// Beats the live rate and p99 (SimLive); nothing else in the row refreshes with it.
@@ -179,40 +189,32 @@ struct SimOpRow: View {
                         .font(Theme.ui(11, .medium))
                         .foregroundStyle(hovered ? Theme.text : Theme.muted)
                         .frame(width: 16, height: 16)
-                    VStack(alignment: .leading, spacing: 3) {
+                    SimOpRowLines {
                         HStack(spacing: 6) {
                             Text(op.label).font(Theme.ui(12, .medium)).foregroundStyle(Theme.text)
                                 .lineLimit(1).truncationMode(.tail)
-                                .layoutPriority(1)
                             if !op.risks.isEmpty {
                                 Circle().fill(Theme.warn).frame(width: 5, height: 5)
                                     .accessibilityLabel("\(op.risks.count) risks")
                             }
-                            Spacer(minLength: 4)
+                        }
+                        HStack(spacing: 6) {
                             if pinned {
                                 Image(systemName: "pin.fill").font(Theme.ui(9)).foregroundStyle(Theme.accent)
                                     .accessibilityLabel("Path pinned")
                             }
-                            if !owner { SimLive(sim: sim, pulse: pulse) { SimOpRate(sim: sim, ref: entry.ref) } }
                             if let access = SimOpsText.access(op) { SimOpAccessBadge(access: access) }
                         }
-                        .frame(height: 16)
-                        if owner {
-                            HStack(spacing: 5) {
+                        HStack(spacing: 5) {
+                            if owner {
                                 Text(entry.node.label).font(Theme.ui(11, .medium)).foregroundStyle(Theme.muted)
                                     .lineLimit(1).layoutPriority(1)
-                                if !secondLine.isEmpty {
-                                    Text("· " + secondLine).font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                                        .lineLimit(1).truncationMode(.tail)
-                                }
-                                Spacer(minLength: 4)
-                                SimLive(sim: sim, pulse: pulse) { SimOpRate(sim: sim, ref: entry.ref) }
                             }
-                        } else {
-                            Text(secondLine)
-                                .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                            let rest = owner && !secondLine.isEmpty ? "· " + secondLine : secondLine
+                            Text(rest).font(Theme.mono(10)).foregroundStyle(Theme.muted)
                                 .lineLimit(1).truncationMode(.tail)
                         }
+                        SimLive(sim: sim, pulse: pulse) { SimOpRate(sim: sim, ref: entry.ref) }
                         if let preview {
                             Text(preview).font(Theme.mono(10)).foregroundStyle(Theme.faint)
                                 .lineLimit(1).truncationMode(.tail)
@@ -233,8 +235,8 @@ struct SimOpRow: View {
             .onDisappear { hover(nil, leaving: entry.ref) }
             .accessibilityLabel("\(owner ? entry.node.label + ", " : "")\(op.label), \(secondLine)")
             .accessibilityHint("Opens the operation")
-            ForEach(callers, id: \.ref) { caller in
-                SimOpCallerRow(caller: caller, sim: sim, still: still, open: open, menu: menu, overlays: overlays)
+            ForEach(links, id: \.ref) { link in
+                SimOpLinkRow(link: link, forward: forward, sim: sim, still: still, open: open, menu: menu, overlays: overlays)
             }
         }
     }
@@ -247,10 +249,12 @@ struct SimOpRow: View {
     }
 }
 
-/// A caller under an endpoint: `↳ api-gateway · CreateOrder`.
+/// A caller under an endpoint (`↳ api-gateway · CreateOrder`) or a consumer under a producer
+/// (`→ mailer · OrderPlaced`).
 @MainActor
-private struct SimOpCallerRow: View {
-    let caller: SimOpsIndex.Entry
+private struct SimOpLinkRow: View {
+    let link: SimOpsIndex.Entry
+    let forward: Bool
     let sim: Simulation
     let still: Bool
     let open: (OpRef) -> Void
@@ -259,10 +263,11 @@ private struct SimOpCallerRow: View {
     @State private var hovered = false
 
     var body: some View {
-        Button { open(caller.ref) } label: {
+        Button { open(link.ref) } label: {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right").font(Theme.ui(9, .medium)).foregroundStyle(Theme.faint)
-                Text("\(caller.node.label) · \(caller.op.label)")
+                Image(systemName: forward ? "arrow.right" : "arrow.turn.down.right")
+                    .font(Theme.ui(9, .medium)).foregroundStyle(Theme.faint)
+                Text("\(link.node.label) · \(link.op.label)")
                     .font(Theme.ui(11)).foregroundStyle(hovered ? Theme.text : Theme.muted)
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
@@ -274,10 +279,10 @@ private struct SimOpCallerRow: View {
         .onHover { inside in
             hovered = inside
             let state = SimOpsState.of(sim)
-            if inside { state.hovered = caller.ref } else if state.hovered == caller.ref { state.hovered = nil }
+            if inside { state.hovered = link.ref } else if state.hovered == link.ref { state.hovered = nil }
         }
-        .simOpsMenu(still: still) { overlays.showMenu(menu(caller.ref), at: $0) }
-        .accessibilityLabel("Called by \(caller.node.label), \(caller.op.label)")
+        .simOpsMenu(still: still) { overlays.showMenu(menu(link.ref), at: $0) }
+        .accessibilityLabel("\(forward ? "Reaches" : "Called by") \(link.node.label), \(link.op.label)")
     }
 }
 
@@ -288,7 +293,7 @@ struct SimOpRate: View {
     let ref: OpRef
 
     var body: some View {
-        let metrics = SimOpsMetrics.metrics(sim, ref)
+        let metrics = sim.opMetrics(node: ref.node, op: ref.op)
         Text(SimOpsText.rate(metrics))
             .font(Theme.mono(10)).monospacedDigit()
             .foregroundStyle(metrics.referenced ? Theme.text.opacity(0.78) : Theme.faint)
@@ -313,6 +318,56 @@ struct SimOpAccessBadge: View {
     }
 }
 
+
+/// The lines of an op row: the label and its badge on line one, the summary on line two, an optional
+/// preview below. The live numbers sit beside the label when the label still fits, and otherwise end
+/// line two, so the label is the last thing to truncate.
+/// Subviews, in order: label, badge, summary, numbers, then any extra full-width lines.
+private struct SimOpRowLines: Layout {
+    private let gap: CGFloat = 6
+    private let lineSpacing: CGFloat = 3
+    private let firstLine: CGFloat = 16
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 260
+        return CGSize(width: width, height: arrange(width, subviews).map(\.maxY).max() ?? firstLine)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, frame) in zip(subviews, arrange(bounds.width, subviews)) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func arrange(_ width: CGFloat, _ subviews: Subviews) -> [CGRect] {
+        guard subviews.count >= 4 else { return subviews.map { _ in .zero } }
+        let label = subviews[0].sizeThatFits(.unspecified)
+        let badge = subviews[1].sizeThatFits(.unspecified)
+        let numbers = subviews[3].sizeThatFits(.unspecified)
+        let badgeRoom = badge.width > 0 ? badge.width + gap : 0
+        let inline = label.width + gap + numbers.width + badgeRoom <= width
+        func centred(_ size: CGSize, x: CGFloat, line: CGRect) -> CGRect {
+            CGRect(x: x, y: line.minY + (line.height - size.height) / 2, width: size.width, height: size.height)
+        }
+        let one = CGRect(x: 0, y: 0, width: width, height: firstLine)
+        let labelWidth = min(label.width, width - badgeRoom - (inline ? numbers.width + gap : 0))
+        var frames = [centred(CGSize(width: max(0, labelWidth), height: label.height), x: 0, line: one),
+                      centred(badge, x: width - badge.width, line: one)]
+        let summaryWidth = max(0, inline ? width : width - numbers.width - gap)
+        let summary = subviews[2].sizeThatFits(ProposedViewSize(width: summaryWidth, height: nil))
+        let two = CGRect(x: 0, y: one.maxY + lineSpacing, width: width, height: max(summary.height, numbers.height))
+        frames.append(CGRect(x: 0, y: two.minY, width: summaryWidth, height: summary.height))
+        frames.append(inline ? centred(numbers, x: width - badgeRoom - numbers.width, line: one)
+                             : centred(numbers, x: width - numbers.width, line: two))
+        var y = two.maxY
+        for view in subviews.dropFirst(4) {
+            let size = view.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            frames.append(CGRect(x: 0, y: y + lineSpacing, width: width, height: size.height))
+            y += lineSpacing + size.height
+        }
+        return frames
+    }
+}
 
 /// A labelled card of rows.
 struct SimOpsGroupBox<Content: View>: View {

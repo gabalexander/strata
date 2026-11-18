@@ -107,24 +107,7 @@ final class SimOpsState {
     }
 }
 
-/// Live numbers for ops. The engine fills `opMetrics`/`opSeries`; snapshots can stand in for it.
-@MainActor
-enum SimOpsMetrics {
-    static var snapshotMetrics: ((OpRef) -> OpMetrics?)?
-    static var snapshotSeries: ((OpRef) -> [Double])?
-
-    static func metrics(_ sim: Simulation, _ ref: OpRef) -> OpMetrics {
-        snapshotMetrics?(ref) ?? sim.opMetrics(node: ref.node, op: ref.op)
-    }
-
-    static func series(_ sim: Simulation, _ ref: OpRef, _ metric: String) -> [Double] {
-        if let series = snapshotSeries?(ref) { return series }
-        return sim.opSeries(node: ref.node, op: ref.op, metric: metric)
-    }
-}
-
-/// Offscreen snapshots: open an op detail, hover or pin an op, and supply live numbers before the
-/// engine produces them.
+/// Offscreen snapshots: open an op detail, hover or pin an op, and show a node's menu.
 @_spi(Snapshots) @MainActor
 public enum SimOpsSnapshot {
     public static func open(_ sim: Simulation, node: String, op: String, from anchor: String?) {
@@ -147,27 +130,5 @@ public enum SimOpsSnapshot {
     /// Selects a node of the open root level once the sim screen appears.
     public static func select(_ node: String, in id: String, model: AppModel) {
         SimFocus.of(model).reveal(node, in: id, path: [], model: model)
-    }
-
-    /// Stand-in live numbers, keyed by "node/op": (rate per second, p99 seconds).
-    public static func metrics(_ values: [String: (rate: Double, p99: Double)]) {
-        SimOpsMetrics.snapshotMetrics = { ref in
-            var metrics = OpMetrics()
-            guard let value = values["\(ref.node)/\(ref.op)"] else { return metrics }
-            metrics.referenced = true
-            metrics.rate = value.rate
-            metrics.p50 = value.p99 * 0.35
-            metrics.p99 = value.p99
-            metrics.total = Int(value.rate * 30)
-            return metrics
-        }
-        SimOpsMetrics.snapshotSeries = { ref in
-            guard let value = values["\(ref.node)/\(ref.op)"] else { return [] }
-            return (0..<48).map { (i: Int) -> Double in
-                let t = Double(i)
-                let wave: Double = 0.18 * sin(t * 0.55) + 0.06 * cos(t * 1.7)
-                return value.rate * (0.82 + wave)
-            }
-        }
     }
 }

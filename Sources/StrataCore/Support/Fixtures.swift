@@ -106,7 +106,7 @@ public enum Fixtures {
     /// `checkout` with operations on every node that does something (docs/manifest.md, Operations):
     /// HTTP and gRPC endpoints linked by `calls:`, SQL in a transaction, Redis reads and writes, a
     /// Kafka publish and two consumers, a second service writing the same table, risks, facts, and
-    /// an op with its own `inside:` level. Steps name the ops they perform.
+    /// an op with its own `inside:` level. Steps name the ops they perform; the email flow names its consume op.
     public static var checkoutWithOps: Manifest {
         var m = checkout
         m.id = "checkout-ops"
@@ -160,11 +160,11 @@ public enum Fixtures {
             switch root.nodes[index].id {
             case "api":
                 root.nodes[index].ops = [
-                    op("create-order", .rpc, "CreateOrder", target: "orders") {
+                    op("forward-create-order", .rpc, "CreateOrder", target: "orders") {
                         $0.method = "orders.v1.Orders/Create"; $0.streaming = "unary"; $0.calls = "orders/create-order"
                         $0.facts = [("deadline", "2s"), ("auth", "JWT, verified at the edge")]
                     },
-                    op("get-order", .rpc, "GetOrder", target: "orders") {
+                    op("forward-get-order", .rpc, "GetOrder", target: "orders") {
                         $0.method = "orders.v1.Orders/Get"; $0.calls = "orders/get-order"
                     },
                 ]
@@ -225,7 +225,7 @@ public enum Fixtures {
                         $0.code = ["services/orders/payments/client.go:54"]
                     },
                     op("order-placed", .publish, "OrderPlaced", target: "events") {
-                        $0.topic = "order-events"; $0.key = "order_id"
+                        $0.topic = "order-events"; $0.key = "order_id"; $0.calls = "mailer/order-placed"
                         $0.payload = #"{"type":"OrderPlaced","order_id":"ord_91x","user_id":"u_17","total":4200,"items":[{"sku":"A-1","qty":2}]}"#
                         $0.doc = "Published by the outbox relay after the transaction commits. Keyed by order id, so events for one order stay in order."
                         $0.code = ["services/orders/outbox/relay.go:52"]
@@ -284,6 +284,7 @@ public enum Fixtures {
             publish,
         ])])]
         var email = root.flows[1]
+        email.op = "order-placed"
         email.steps = [call("smtp", "send", op: "send-email")]
         var nightly = Flow(id: "nightly", label: "Nightly report")
         nightly.from = "reporting"; nightly.rate = .every(2); nightly.color = 5

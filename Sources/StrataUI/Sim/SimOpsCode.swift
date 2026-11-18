@@ -20,6 +20,13 @@ enum SimOpsCode {
         "MERGE", "USING", "MATCHED", "LATERAL", "WINDOW", "OVER", "PARTITION", "COUNT", "SUM", "MIN", "MAX",
     ]
 
+    /// Without the trailing newlines a YAML block scalar keeps.
+    static func trimmed(_ source: String) -> String {
+        var text = source
+        while let last = text.last, last.isWhitespace { text.removeLast() }
+        return text
+    }
+
     static func sql(_ source: String) -> AttributedString {
         var out = AttributedString()
         let chars = Array(source)
