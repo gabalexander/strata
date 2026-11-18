@@ -198,6 +198,9 @@ private struct SimWorkspace: View {
             }
     }
 
+    /// The zoom out of a level runs `Theme.gentle`; the next level opens just before it finishes.
+    private static let routeSwitchDelay = Duration.milliseconds(200)
+
     private func select(_ target: StageSelection?) {
         selection = target
         model.overlays.dismissMenu()
@@ -231,7 +234,7 @@ private struct SimWorkspace: View {
             presentationOpacity = 0
         }
         navigation = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(370))
+            try? await Task.sleep(for: SimWorkspace.routeSwitchDelay)
             guard !Task.isCancelled else { return }
             arrival = SimArrival(destination: destination, forward: false, node: parent.node)
             model.goBack()
@@ -266,7 +269,7 @@ private struct SimWorkspace: View {
             presentationOpacity = 0
         }
         navigation = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(370))
+            try? await Task.sleep(for: SimWorkspace.routeSwitchDelay)
             guard !Task.isCancelled else { return }
             arrival = SimArrival(destination: route, forward: forward, node: node)
             model.open(route, parentRate: parentRate)
