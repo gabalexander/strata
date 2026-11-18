@@ -124,7 +124,7 @@ private func table(_ rows: [[String]]) -> String {
             let numeric = cell == "–" || cell == "∞" || Double(cell.prefix { $0.isNumber || $0 == "." }) != nil
             let left = index == row.count - 1 || !numeric
             return left ? cell + padding : padding + cell
-        }.joined(separator: "  ").trimmingCharacters(in: .whitespaces)
+        }.joined(separator: "  ").replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
     }.joined(separator: "\n")
 }
 
