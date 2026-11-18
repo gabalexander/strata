@@ -105,6 +105,20 @@ nodes:
     doc: |
       Fetches missed objects through 20 database connections.
       Each read takes 5 ms, so sustained arrivals above 4,000 per second fill the queue.
+    schema:
+      - table: objects
+        doc: The hot objects behind the cache, written by the content admin. Row counts are estimates.
+        columns:
+          - { name: id, type: text, pk: true, note: "obj_ prefix" }
+          - { name: body, type: jsonb }
+          - { name: etag, type: text }
+          - { name: updated_at, type: timestamptz }
+        indexes: ["objects_pkey (id)"]
+        rows:
+          - [obj_7, { title: Winter sale banner, slot: home-hero }, 'W/"3f"', "2025-11-12 08:00"]
+          - [obj_8, { title: Free shipping strip, slot: header }, 'W/"41"', "2025-11-10 17:30"]
+          - [obj_12, { title: Gift guide, slot: home-grid }, 'W/"1a"', "2025-11-14 09:05"]
+        volume: { rows: 2M, growth: 5k/day }
 
 edges:
   - { from: clients, to: reader, protocol: https, latency: fixed 10ms }
@@ -117,6 +131,8 @@ flows:
     label: Object read
     from: clients
     rate: 5000/s
+    traffic: { peak: 7k/s, daily: 260M }
+    slo: { p50: 30ms, p99: 80ms, errors: 0.1% }
     steps:
       - call: reader
         op: get-object

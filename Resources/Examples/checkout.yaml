@@ -104,6 +104,34 @@ nodes:
         facts:
           deadline: inherits the gateway timeout
           idempotency: unique index on orders.idempotency_key
+      - id: get-order
+        kind: rpc
+        label: GetOrder
+        method: orders.v1.Orders/GetOrder
+        streaming: unary
+        request: '{ "order_id": "o_9k2" }'
+        response: '{ "order_id": "o_9k2", "status": "paid", "items": [{ "sku": "A-1", "qty": 2 }], "payment": { "status": "captured" } }'
+        status: [OK, NOT_FOUND, PERMISSION_DENIED order of another user]
+        code: services/orders/grpc/server.go:112
+        doc: Loads the Order aggregate for the order page. Not part of checkout, so no flow names it.
+      - id: load-order
+        kind: sql
+        target: db
+        label: SELECT order aggregate
+        access: read
+        tables: [orders, order_items, payments, users]
+        indexes: [orders_pkey, order_items_pkey, payments_order_id_key, users_pkey]
+        query: |
+          -- name: LoadOrder :many
+          SELECT o.id, o.status, o.total_cents, o.currency, u.email, u.display_name,
+                 i.sku, i.qty, i.price_cents, p.status AS payment_status
+          FROM orders o
+          JOIN users u ON u.id = o.user_id
+          JOIN order_items i ON i.order_id = o.id
+          LEFT JOIN payments p ON p.order_id = o.id
+          WHERE o.id = $1;
+        code: services/orders/db/queries/orders.sql:41
+        doc: One round trip for the whole aggregate. The order page polls it while a payment is pending.
       - id: get-price
         kind: cache
         target: cache
@@ -141,19 +169,21 @@ nodes:
         target: db
         label: INSERT order + outbox
         access: write
-        tables: [orders, order_items, outbox]
-        indexes: [orders_idempotency_key_key, outbox_unpublished_idx]
+        tables: [orders, order_items, payments, outbox]
+        indexes: [orders_idempotency_key_key, payments_order_id_key, outbox_unpublished_idx]
         tx: true
         locks: row
         query: |
           BEGIN;
-          INSERT INTO orders (id, user_id, total_cents, idempotency_key) VALUES ($1, $2, $3, $4);
+          INSERT INTO orders (id, user_id, status, total_cents, currency, idempotency_key)
+            VALUES ($1, $2, 'placed', $3, 'EUR', $4);
           INSERT INTO order_items (order_id, sku, qty, price_cents)
             SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
+          INSERT INTO payments (id, order_id, token, amount_cents, status) VALUES ($9, $1, $10, $3, 'authorized');
           INSERT INTO outbox (topic, key, payload) VALUES ('order-events', $1, $8);
           COMMIT;
         code: services/orders/db/queries/orders.sql:12
-        doc: Writes the order, its items and the outbox row in one transaction, so the event exists only if the order does.
+        doc: Writes the order, its items, the authorized payment and the outbox row in one transaction, so the event exists only if the order does.
         risks:
           - a duplicate idempotency key aborts the whole transaction (ALREADY_EXISTS)
           - a slow COMMIT holds an orders-svc slot and a pool connection
@@ -161,7 +191,7 @@ nodes:
           isolation: read committed
           pool: pgxpool, 20 connections per replica
         inside:
-          narration: "One commit runs three inserts on one pooled connection. The orders row stays locked until COMMIT, so a retry with the same idempotency key waits for it."
+          narration: "One commit runs four inserts on one pooled connection. The orders row stays locked until COMMIT, so a retry with the same idempotency key waits for it."
           nodes:
             - id: conn
               kind: port
@@ -175,7 +205,7 @@ nodes:
               at: [1, 1]
               doc: |
                 Runs the statements in order on one connection.
-                Any failed insert rolls back all three.
+                Any failed insert rolls back all four.
             - id: orders-row
               kind: database
               label: orders
@@ -188,16 +218,23 @@ nodes:
               latency: 1.5ms
               at: [2, 1]
               doc: One row per cart line, inserted with unnest in a single statement.
+            - id: payment-row
+              kind: database
+              label: payments
+              latency: 0.5ms
+              at: [2, 2]
+              doc: The authorized payment. The provider's webhook, which is not on this map, marks it captured later.
             - id: outbox-row
               kind: database
               label: outbox
               latency: 0.5ms
-              at: [2, 2]
+              at: [2, 3]
               doc: The OrderPlaced row the relay publishes after COMMIT.
           edges:
             - { from: conn, to: txn, protocol: sql }
             - { from: txn, to: orders-row, label: INSERT }
             - { from: txn, to: items-rows, label: INSERT }
+            - { from: txn, to: payment-row, label: INSERT }
             - { from: txn, to: outbox-row, label: INSERT }
           flows:
             - id: commit
@@ -209,6 +246,7 @@ nodes:
                   steps:
                     - { call: orders-row, label: INSERT orders }
                     - { call: items-rows, label: INSERT order_items }
+                    - { call: payment-row, label: INSERT payments }
                     - { call: outbox-row, label: INSERT outbox }
       - id: order-placed
         kind: publish
@@ -216,7 +254,7 @@ nodes:
         label: OrderPlaced
         topic: order-events
         key: order_id
-        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "total_cents": 4200, "currency": "EUR" }'
+        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
         calls: mailer/on-order-placed
         code: services/orders/events/producer.go:29
         doc: In production the outbox relay publishes this row after COMMIT. The overview publishes at commit to show the route.
@@ -224,6 +262,16 @@ nodes:
           acks: all
           idempotent producer: "yes"
           schema: orders.v1.OrderPlaced (protobuf)
+    entities:
+      - name: Order
+        root: orders
+        includes: [order_items, payments, users]
+        doc: The aggregate PlaceOrder writes in one transaction and GetOrder loads in one query. Items and the payment belong to the order; the customer is a reference to the accounts data.
+        code: services/orders/domain/order.go:14
+      - name: Price
+        root: prices
+        doc: The value cached under price:{sku} for five minutes. A cache miss loads it with GetPrice.
+        code: services/orders/pricing/price.go:9
     inside:
       narration: "Follow the handler through validation to the SQL transaction. Watch the relay poll that same table on its own schedule."
       nodes:
@@ -383,6 +431,129 @@ nodes:
     doc: |
       Handles price reads on cache misses and commits every successful order.
       When it refuses a write, the request fails before publication.
+      Row counts and growth are estimates.
+    schema:
+      - table: users
+        doc: Customer accounts. The accounts service writes them; orders-svc only reads them.
+        columns:
+          - { name: id, type: text, pk: true, note: "u_ prefix" }
+          - { name: email, type: citext, unique: true }
+          - { name: display_name, type: text }
+          - { name: created_at, type: timestamptz }
+        indexes: ["users_pkey (id)", "users_email_key UNIQUE (email)"]
+        rows:
+          - [u_17, ada.k@example.com, Ada K., "2024-02-11 09:30"]
+          - [u_18, noor.s@example.net, Noor S., "2024-06-03 18:02"]
+          - [u_21, teo.m@example.org, Teo M., "2025-01-19 07:45"]
+          - [u_34, lin.w@example.com, Lin W., "2025-08-30 21:10"]
+        volume: { rows: 9.5M, growth: 6k/day }
+      - table: prices
+        doc: Current price per SKU. The catalog admin writes them; orders-svc caches them in Redis.
+        columns:
+          - { name: sku, type: text, pk: true }
+          - { name: amount_cents, type: integer }
+          - { name: currency, type: char(3) }
+          - { name: updated_at, type: timestamptz }
+        indexes: ["prices_pkey (sku)"]
+        rows:
+          - [A-1, 1250, EUR, "2025-10-01 08:00"]
+          - [B-7, 1700, EUR, "2025-10-01 08:00"]
+          - [C-3, 899, EUR, "2025-11-03 12:15"]
+          - [D-4, 4999, EUR, "2025-09-12 16:40"]
+        volume: { rows: 18k, growth: 40/day }
+      - table: orders
+        doc: One row per checkout, written by PlaceOrder.
+        columns:
+          - { name: id, type: text, pk: true, note: "o_ prefix" }
+          - { name: user_id, type: text, ref: users.id }
+          - { name: status, type: text, note: "placed | paid | shipped | cancelled" }
+          - { name: total_cents, type: bigint }
+          - { name: currency, type: char(3) }
+          - { name: idempotency_key, type: uuid, unique: true, note: the gateway's Idempotency-Key }
+          - { name: created_at, type: timestamptz }
+        indexes:
+          - orders_pkey (id)
+          - orders_idempotency_key_key UNIQUE (idempotency_key)
+          - orders_user_id_created_at_idx (user_id, created_at DESC)
+        rows:
+          - [o_9k2, u_17, paid, 4200, EUR, 7f3c2a90-1b4e-4c1d-9a55-0e8b1f6c2d17, "2025-11-14 10:02"]
+          - [o_9k3, u_18, cancelled, 899, EUR, 2d81c4e7-5f60-4a3b-8c19-b7e2d4f09a63, "2025-11-14 10:05"]
+          - [o_9k4, u_17, shipped, 7499, EUR, c94b0f18-3e7a-4d25-a6f1-58d2e9c7b304, "2025-11-14 10:11"]
+          - [o_9k7, u_21, placed, 1700, EUR, 61e5a3d2-9c84-4f07-b2e6-0a7f3c1d8e95, "2025-11-14 10:19"]
+        volume: { rows: 140M, growth: 400k/day }
+      - table: order_items
+        doc: One row per cart line. The price is copied from prices when the order is placed.
+        columns:
+          - { name: order_id, type: text, pk: true, ref: orders.id }
+          - { name: sku, type: text, pk: true, ref: prices.sku }
+          - { name: qty, type: integer }
+          - { name: price_cents, type: integer }
+        indexes: ["order_items_pkey (order_id, sku)"]
+        rows:
+          - [o_9k2, A-1, 2, 1250]
+          - [o_9k2, B-7, 1, 1700]
+          - [o_9k3, C-3, 1, 899]
+          - [o_9k4, D-4, 1, 4999]
+          - [o_9k4, A-1, 2, 1250]
+          - [o_9k7, B-7, 1, 1700]
+        volume: { rows: 350M, growth: 1M/day }
+      - table: payments
+        doc: One authorization per order, inserted with it. The provider's webhook, which is not on this map, captures or refunds it later.
+        columns:
+          - { name: id, type: text, pk: true, note: "p_ prefix" }
+          - { name: order_id, type: text, unique: true, ref: orders.id }
+          - { name: token, type: text, note: the provider's payment token }
+          - { name: amount_cents, type: bigint }
+          - { name: status, type: text, note: "authorized | captured | refunded | failed" }
+          - { name: created_at, type: timestamptz }
+        indexes: ["payments_pkey (id)", "payments_order_id_key UNIQUE (order_id)"]
+        rows:
+          - [p_5x1, o_9k2, tok_1Qa8, 4200, captured, "2025-11-14 10:02"]
+          - [p_5x2, o_9k3, tok_1Qb2, 899, refunded, "2025-11-14 10:05"]
+          - [p_5x3, o_9k4, tok_1Qc5, 7499, captured, "2025-11-14 10:11"]
+          - [p_5x4, o_9k7, tok_1Qd9, 1700, authorized, "2025-11-14 10:19"]
+        volume: { rows: 140M, growth: 400k/day }
+      - table: outbox
+        doc: OrderPlaced rows waiting for the relay. Published rows are deleted after seven days.
+        columns:
+          - { name: id, type: bigserial, pk: true }
+          - { name: topic, type: text }
+          - { name: key, type: text, ref: orders.id, note: "Kafka key: the order id (no foreign key constraint)" }
+          - { name: payload, type: jsonb }
+          - { name: created_at, type: timestamptz }
+          - { name: claimed_at, type: timestamptz, nullable: true }
+          - { name: published_at, type: timestamptz, nullable: true }
+        indexes: ["outbox_pkey (id)", "outbox_unpublished_idx (id) WHERE published_at IS NULL"]
+        rows:
+          - id: 88120
+            topic: order-events
+            key: o_9k2
+            payload: { order_id: o_9k2, user_id: u_17, email: ada.k@example.com, total_cents: 4200, currency: EUR }
+            created_at: "2025-11-14 10:02"
+            claimed_at: "2025-11-14 10:02"
+            published_at: "2025-11-14 10:02"
+          - id: 88121
+            topic: order-events
+            key: o_9k3
+            payload: { order_id: o_9k3, user_id: u_18, email: noor.s@example.net, total_cents: 899, currency: EUR }
+            created_at: "2025-11-14 10:05"
+            claimed_at: "2025-11-14 10:05"
+            published_at: "2025-11-14 10:05"
+          - id: 88127
+            topic: order-events
+            key: o_9k4
+            payload: { order_id: o_9k4, user_id: u_17, email: ada.k@example.com, total_cents: 7499, currency: EUR }
+            created_at: "2025-11-14 10:11"
+            claimed_at: "2025-11-14 10:11"
+            published_at: "2025-11-14 10:11"
+          - id: 88139
+            topic: order-events
+            key: o_9k7
+            payload: { order_id: o_9k7, user_id: u_21, email: teo.m@example.org, total_cents: 1700, currency: EUR }
+            created_at: "2025-11-14 10:19"
+            claimed_at: null
+            published_at: null
+        volume: { rows: 2.8M, growth: 400k/day }
   - id: events
     kind: topic
     label: Order events
@@ -409,7 +580,7 @@ nodes:
         topic: order-events
         group: mailer
         key: order_id
-        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "total_cents": 4200, "currency": "EUR" }'
+        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
         code: services/mailer/consumer.go:40
         facts:
           commit: offset committed after SendGrid accepts the email
@@ -427,6 +598,13 @@ nodes:
         facts:
           timeout: 5s
           auth: bearer API key from Vault
+    entities:
+      - name: OrderPlaced
+        source: db
+        root: outbox
+        includes: [orders, users]
+        doc: The event the mailer handles, traced to where it starts. The outbox row's payload carries the order and the customer's email, so the mailer never queries Orders DB.
+        code: services/mailer/consumer.go:40
   - id: smtp
     kind: external
     label: Email provider
@@ -468,6 +646,8 @@ flows:
     label: Place order
     from: web
     rate: 12/s
+    traffic: { peak: 35/s, daily: 400k }
+    slo: { p50: 100ms, p99: 250ms, errors: 0.1% }
     color: 1
     op: submit-order
     steps:

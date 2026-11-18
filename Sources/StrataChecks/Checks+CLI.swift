@@ -76,7 +76,7 @@ import StrataCore
                       text.output.contains("checkout › orders#insert-order") == false,
                       "ops text output: \(text.output)")
                 let rows = text.output.components(separatedBy: "\n")
-                check(rows.contains { $0.hasPrefix("orders ") && $0.contains("insert-order") && $0.contains("orders, order_items, outbox") &&
+                check(rows.contains { $0.hasPrefix("orders ") && $0.contains("insert-order") && $0.contains("orders, order_items, payments, outbox") &&
                                       $0.contains("place-order") },
                       "insert-order row is missing its tables or flow: \(text.output)")
 
@@ -104,6 +104,55 @@ import StrataCore
                     .write(to: broken)
                 let failed = try invokeCLI(builtCLI, ["ops", broken.path], cwd: root)
                 check(failed.status == 1 && failed.output.contains("unknown node 'nope'"), "invalid manifest: \(failed.output)")
+            }
+        },
+        CheckCase(name: "cli data prints tables, sample rows and assembled entities") {
+            try withCLIDirectory { root in
+                guard let checkout = StrataResources.url("Examples/checkout.yaml") else {
+                    check(false, "missing checkout example")
+                    return
+                }
+                let text = try invokeCLI(builtCLI, ["data", checkout.path], cwd: root)
+                let lines = text.output.components(separatedBy: "\n")
+                check(text.status == 0 && text.output.contains("checkout (root) › db  Orders DB · database · Postgres") &&
+                      text.output.contains("orders · 140M rows · +400k/day · written by orders") &&
+                      lines.contains { $0.contains("id PK") && $0.contains("user_id → users.id") } &&
+                      lines.contains { $0.contains("o_9k7") && $0.contains("placed") } &&
+                      text.output.contains("referenced by: order_items.order_id, payments.order_id, outbox.key"),
+                      "data tables: \(text.output)")
+                check(lines.contains { $0.hasPrefix("    orders #0  id=o_9k2") } &&
+                      lines.contains { $0.hasPrefix("      ↳ order_items #0  via order_items.order_id → orders.id") } &&
+                      lines.contains { $0.hasPrefix("      ↑ users #0  via orders.user_id → users.id") } &&
+                      lines.contains { $0.hasPrefix("        ↑ users #0") } && lines.contains("6 tables on 1 node, 3 entities"),
+                      "data entity trees: \(text.output)")
+
+                let json = try invokeCLI(builtCLI, ["data", checkout.path, "--json"], cwd: root)
+                let report = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as? [String: Any]
+                let schemas = report?["schemas"] as? [[String: Any]] ?? []
+                let tables = schemas.first?["tables"] as? [[String: Any]] ?? []
+                let orders = tables.first { $0["name"] as? String == "orders" }
+                check(json.status == 0 && schemas.map { $0["node"] as? String } == ["db"] && tables.count == 6, "data --json schemas")
+                check(orders?["owners"] as? [String] == ["orders"] && (orders?["rows"] as? [[Any]])?.count == 4 &&
+                      (orders?["joins"] as? [[String: Any]])?.first?["other"] as? String == "db.users.id" &&
+                      (orders?["volume"] as? [String: Double])?["growthPerDay"] == 400_000, "orders table json: \(String(describing: orders))")
+                let outbox = tables.first { $0["name"] as? String == "outbox" }
+                check(((outbox?["rows"] as? [[Any]])?.last?.last).map { $0 is NSNull } == true, "NULL is null in json")
+                let entities = report?["entities"] as? [[String: Any]] ?? []
+                let order = entities.first { $0["name"] as? String == "Order" }
+                let tree = order?["tree"] as? [String: Any]
+                check(order?["source"] as? String == "db" && tree?["table"] as? String == "orders" &&
+                      (tree?["children"] as? [[String: Any]])?.compactMap { $0["table"] as? String } == ["order_items", "order_items", "payments", "users"],
+                      "entity json: \(String(describing: order))")
+
+                let empty = root.appendingPathComponent("empty.yaml")
+                try Data("strata: 1\nid: empty\ntitle: Empty\nnodes: [{ id: a, kind: service }]\n".utf8).write(to: empty)
+                let none = try invokeCLI(builtCLI, ["data", empty.path], cwd: root)
+                check(none.status == 0 && none.output.contains("No schemas or entities in empty."), "empty manifest: \(none.output)")
+                let broken = root.appendingPathComponent("broken.yaml")
+                try Data("strata: 1\nid: broken\ntitle: Broken\nnodes: [{ id: db, kind: database, schema: [{ table: t, columns: [{ name: a }], rows: [[1, 2]] }] }]\n".utf8)
+                    .write(to: broken)
+                let failed = try invokeCLI(builtCLI, ["data", broken.path], cwd: root)
+                check(failed.status == 1 && failed.output.contains("row has 2 values but 't' has 1 column"), "invalid manifest: \(failed.output)")
             }
         },
     ]
