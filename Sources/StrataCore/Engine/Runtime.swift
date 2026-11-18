@@ -57,6 +57,7 @@ enum Failure {
 struct CallRecord {
     let caller: RecordID
     let step: Int
+    let started: Double
     var number = 0
     var waiting = false
     var timeout: Double = 0
@@ -91,6 +92,8 @@ struct Job {
     var call: RecordID?
     var started = false
     var queuedForAdmission = false
+    /// A running `parallel` step that names an op: its op slot and start time.
+    var parallelOp: (slot: Int, started: Double)?
 
     var tracksNode: Bool {
         switch end {
@@ -256,6 +259,8 @@ struct ProgramStep {
 
     let spec: Step
     let action: Action
+    /// Index into `ProgramTopology.ops` of the op this step names.
+    let op: Int?
 
     var target: Int? {
         switch action {
@@ -277,11 +282,21 @@ struct ProgramTopology {
     var programs: [[Int]] = [[]]
     var steps: [ProgramStep] = []
     var flowPrograms: [Int] = []
+    /// Every op of every node of the level, in node order, and whether any step names it.
+    var ops: [(node: String, op: String, referenced: Bool)] = []
+    /// "node/op" → index into `ops`.
+    var opIndex: [String: Int] = [:]
 
     init(_ level: Level) {
         self.level = level
         nodeIndex = Dictionary(level.nodes.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         flowIndex = Dictionary(level.flows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for node in level.nodes where nodeIndex[node.id] != nil {
+            for op in node.ops where opIndex["\(node.id)/\(op.id)"] == nil {
+                opIndex["\(node.id)/\(op.id)"] = ops.count
+                ops.append((node.id, op.id, false))
+            }
+        }
         var known = Set(level.edges.map(\.id))
         for flow in level.flows {
             if let on = flow.on, let by = flow.by { addEdge(on, by, known: &known) }
@@ -305,21 +320,31 @@ struct ProgramTopology {
         var indices: [Int] = []
         for step in sequence {
             let action: ProgramStep.Action
+            var targetID: String?
             switch step.action {
             case .call(let target, let nested, let miss):
+                targetID = target
                 addEdge(from, target, known: &known)
                 action = .call(target: nodeIndex[target], program: compile(nested, from: target, known: &known),
                                miss: compile(miss, from: from, known: &known))
             case .publish(let target):
+                targetID = target
                 addEdge(from, target, known: &known)
                 action = .publish(target: nodeIndex[target])
             case .work(let dist): action = .work(dist)
             case .parallel(let branches): action = .parallel(compile(branches, from: from, known: &known))
             }
             indices.append(steps.count)
-            steps.append(ProgramStep(spec: step, action: action))
+            steps.append(ProgramStep(spec: step, action: action, op: resolveOp(step.op, caller: from, target: targetID)))
         }
         programs.append(indices)
         return programs.count - 1
+    }
+
+    private mutating func resolveOp(_ reference: String?, caller: String?, target: String?) -> Int? {
+        guard let reference, let resolved = level.resolveOp(reference, caller: caller, target: target),
+              let index = opIndex["\(resolved.node)/\(resolved.op.id)"] else { return nil }
+        ops[index].referenced = true
+        return index
     }
 }
