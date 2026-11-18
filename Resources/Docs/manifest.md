@@ -317,6 +317,70 @@ Validation checks:
 
 `strata ops <file|id>` lists every op per level and node, with the flows that name it.
 
+## Data
+
+Show what the data looks like.
+
+- A database or store node can describe its tables: columns, keys, sample rows and volume.
+- A service can name the entities it works with: the domain objects assembled from those tables.
+
+The inspector draws the tables with their foreign keys. Clicking a key value highlights the rows
+it joins to, and an entity is shown as the object the code sees, each field coloured by the table
+it comes from.
+
+```yaml
+- id: db
+  kind: postgres
+  schema:
+    - table: users
+      columns:
+        - { name: id, type: uuid, pk: true }
+        - { name: email, type: text, unique: true }
+      rows:
+        - [u-42, ada@example.com]
+    - table: orders
+      doc: One row per checkout.
+      columns:
+        - { name: id, type: uuid, pk: true }
+        - { name: user_id, type: uuid, ref: users.id }
+        - { name: status, type: text, note: "pending | paid | shipped" }
+        - { name: total_cents, type: bigint }
+      indexes: ["orders_user_id_idx (user_id)"]
+      rows:
+        - [o-9f1c, u-42, paid, 4200]
+        - { id: o-77ab, user_id: u-42, status: pending, total_cents: 1999 }   # a map works too
+      volume: { rows: 12M, growth: 40k/day }
+    - table: order_items
+      columns:
+        - { name: order_id, type: uuid, ref: orders.id }
+        - { name: sku, type: text }
+        - { name: qty, type: int }
+      rows:
+        - [o-9f1c, A-1, 2]
+        - [o-9f1c, B-7, 1]
+- id: orders
+  kind: service
+  entities:
+    - name: Order
+      source: db                 # the database node (default: the one database this node has ops on)
+      root: orders
+      includes: [order_items, users]
+      doc: The aggregate orders-svc loads and saves as one unit.
+      code: services/orders/domain/order.go:14
+```
+
+- **Rows** are lists in column order, or maps from column name to value. `null` is SQL NULL.
+- **Sample rows are illustrative.** Make them realistic, but never copy production data.
+- **`ref`** is `table.column` in the same database node. Use `node.table.column` across nodes.
+- **Volumes** use counts with `k`, `M` or `B` suffixes (`12M`, `40k/day`).
+- **`owner`** names the node that writes the table. It defaults from the ops whose `tables` include
+  it with write access.
+- **Entities** follow `ref` columns from the root to each included table, in either direction:
+  `order_items.order_id → orders.id` makes items children of an order, and `orders.user_id → users.id`
+  makes the user its parent.
+- **Validation** checks that refs resolve, row widths match the columns, entities' tables exist in
+  their source, and op `tables` exist in the target's schema when it has one (a warning).
+
 ## Edges
 
 ```yaml
@@ -431,6 +495,42 @@ Messages (`publish` and consumer flows):
 - A buffer spends its own `latency × slow` handling a publish after it crosses the producer's
   edge. With probability `errors`, ingress fails without storing the message. The publisher waits
   for ingress to complete. Consumers run independently.
+
+## Traffic, SLOs and pressure
+
+Flows can carry the real numbers you know from production. The Pressure tab compares them with the simulation.
+
+```yaml
+flows:
+  - id: place-order
+    from: web
+    rate: 20/s                     # what the simulation runs
+    traffic: { peak: 120/s, daily: 4M }
+    slo: { p99: 300ms, errors: 0.1% }
+```
+
+The **Pressure** tab answers where the architecture hurts. It combines a static capacity analysis
+of the level with live culprits from the running simulation.
+
+- **Capacity.**
+  - Each node has `slots = concurrency × replicas`.
+  - A request *holds* a slot for its own latency. Unless the node is `async`, it also holds it for
+    every downstream call it waits on: network both ways plus the callee's hold time, retries
+    included.
+  - *Visits* per request come from the flow steps, with `p`, cache `miss` probability and retries
+    counted.
+  - Demand is `Σ rate × visits × hold time` busy slots, and utilization is `demand / slots`.
+  - A flow saturates at the rate where its first node reaches 100%. That node is its **bottleneck**.
+- **What to scale.** Scale the bottleneck until it stops being one. The tab shows the replicas
+  needed, the new max rate, and the next bottleneck, repeated up to a few steps.
+- **Backpressure and blast radius.** Slowness travels *up* synchronous call chains, because
+  callers hold their slots while they wait, so they saturate next. It stops at queues and topics,
+  where it becomes depth and consumer lag downstream. Selecting a node shows its blast radius on the stage.
+- **Database pressure.** For every database, cache and search node: which ops from which nodes
+  use its busy time (rate × hold time), split into reads and writes and grouped by table.
+- **Volumes.** Calls per second and per day for flows and ops. `traffic.daily` wins when it is declared.
+- **Culprits (live).** Saturated nodes, growing queues, rising lag, timeouts, error bursts, open
+  breakers, down nodes and SLO breaches, worst first. Each one links to its node or flow.
 
 ## Controls
 

@@ -212,6 +212,10 @@ public struct Node: Sendable, Identifiable {
     /// What this node does, operation by operation: the queries it runs, endpoints it serves,
     /// messages it publishes or consumes, keys it reads (docs/manifest.md, Operations).
     public var ops: [Operation] = []
+    /// Databases and stores: tables with columns, foreign keys, sample rows and volumes (docs/manifest.md, Data).
+    public var schema: [TableSchema] = []
+    /// Services: the domain objects they load and save, assembled from tables (docs/manifest.md, Data).
+    public var entities: [Entity] = []
     public var line: Int?               // source line, for diagnostics
 
     public init(id: String, kind: NodeKind, label: String? = nil) {
@@ -257,6 +261,9 @@ public struct Flow: Sendable, Identifiable {
     /// The op each run of this flow performs, counted when the run finishes (a consumer flow's
     /// consume op on its `by` node, or an op on its `from` node); an op id on that node, or "node/op".
     public var op: String?
+    /// Real-world numbers for this traffic, compared against the simulation in the Pressure tab.
+    public var traffic: FlowTraffic?
+    public var slo: SLO?
     public var line: Int?
     public init(id: String, label: String? = nil) { self.id = id; self.label = label ?? id }
 
@@ -521,4 +528,66 @@ public struct Diagnostic: Error, Sendable, Hashable, CustomStringConvertible {
         if let path { s += " \(path)" }
         return s + ": " + message
     }
+}
+
+
+// MARK: - Data (schemas, sample rows, entities)
+
+public struct Column: Sendable, Hashable {
+    public var name: String
+    public var type: String?
+    public var pk = false
+    public var ref: String?              // "table.column" (same database node), or "node.table.column"
+    public var nullable: Bool?
+    public var unique = false
+    public var note: String?
+    public init(name: String) { self.name = name }
+}
+
+/// A count with an optional per-day growth, e.g. `rows: 12M`, `growth: 40k/day`.
+public struct TableVolume: Sendable, Hashable {
+    public var rows: Double?
+    public var growthPerDay: Double?
+    public init() {}
+}
+
+public struct TableSchema: Sendable, Identifiable {
+    public var id: String { name }
+    public var name: String
+    public var doc: String?
+    public var columns: [Column] = []
+    public var indexes: [String] = []
+    /// Sample rows in column order; nil is SQL NULL. Synthetic, never copied from production.
+    public var rows: [[String?]] = []
+    public var volume: TableVolume?
+    public var owner: String?            // node id that writes it (inferred from ops when nil)
+    public var line: Int?
+    public init(name: String) { self.name = name }
+}
+
+public struct Entity: Sendable, Identifiable {
+    public var id: String { name }
+    public var name: String
+    public var source: String?           // database node id (default: the one database this node has ops on)
+    public var root: String              // root table
+    public var includes: [String] = []   // tables joined to the root through ref columns
+    public var doc: String?
+    public var code: [String] = []
+    public var line: Int?
+    public init(name: String, root: String) { self.name = name; self.root = root }
+}
+
+// MARK: - Traffic and SLOs
+
+public struct FlowTraffic: Sendable, Hashable {
+    public var peak: Double?             // requests per second at peak
+    public var daily: Double?            // requests per day
+    public init() {}
+}
+
+public struct SLO: Sendable, Hashable {
+    public var p50: Double?              // seconds
+    public var p99: Double?              // seconds
+    public var errors: Double?           // max error ratio, 0...1
+    public init() {}
 }
