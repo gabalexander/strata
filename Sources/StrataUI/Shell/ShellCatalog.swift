@@ -33,16 +33,32 @@ struct ShellCatalog {
             if case .note(let path) = route, paths.contains(path) { return path }
             return nil
         }
+        var seen = Set<String>()
+        return Array((visited + recentlyEdited(notes)).filter { seen.insert($0).inserted }.prefix(4))
+    }
+
+    private struct EditedKey: Equatable {
+        let root: URL
+        let revision: Int
+        let notes: [String]
+    }
+    private static var edited: (key: EditedKey, paths: [String])?
+
+    /// The four most recently modified notes. Reading every note's modification date is a disk call
+    /// per note, so the answer is kept until the vault changes instead of redone on every render.
+    private func recentlyEdited(_ notes: [String]) -> [String] {
+        let key = EditedKey(root: model.vault.root, revision: model.vault.revision, notes: notes)
+        if let edited = Self.edited, edited.key == key { return edited.paths }
         let dates: [(path: String, modified: Date)] = notes.map { path in
             let url = model.vault.root.appendingPathComponent(path)
             let properties = try? url.resourceValues(forKeys: [.contentModificationDateKey])
             return (path, properties?.contentModificationDate ?? Date.distantPast)
         }
-        let edited = dates.sorted { a, b in
+        let paths = Array(dates.sorted { a, b in
             a.modified == b.modified ? a.path < b.path : a.modified > b.modified
-        }.map(\.path)
-        var seen = Set<String>()
-        return Array((visited + edited).filter { seen.insert($0).inserted }.prefix(4))
+        }.map(\.path).prefix(4))
+        Self.edited = (key, paths)
+        return paths
     }
 
     static func title(_ note: String) -> String {
