@@ -285,6 +285,7 @@ private struct SimWorkspace: View {
         if event.keyCode == 53 {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }
             else if model.overlays.card != nil { model.overlays.closeTerm() }
+            else if SimOpsState.of(sim).escape(selection) { return true }
             else if selection != nil { select(nil) }
             else if !sim.path.isEmpty { up(sim.path.count - 1) }
             else if detailParent != nil { out() }
@@ -401,7 +402,7 @@ private struct SimToolbar: View {
             crumb(sim.manifest.title, depth: 0)
             ForEach(Array(sim.path.enumerated()), id: \.offset) { i, id in
                 Image(systemName: "chevron.right").font(Theme.ui(8, .medium)).foregroundStyle(Theme.faint)
-                let label = sim.manifest.level(at: Array(sim.path.prefix(i)))?.node(id)?.label ?? id
+                let label = SimOpsPath.crumb(id, in: sim.manifest.level(at: Array(sim.path.prefix(i))))
                 crumb(label, depth: i + 1)
             }
         }

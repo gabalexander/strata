@@ -26,7 +26,8 @@ final class StageViewport {
     }
 
     func origin(for node: String?, in layout: StageLayout, compact: Bool) -> UnitPoint {
-        guard let node, let rect = layout.cardsByID[node]?.rect, size.width > 0, size.height > 0 else { return .center }
+        guard let node = node.map(SimOpsPath.node), let rect = layout.cardsByID[node]?.rect,
+              size.width > 0, size.height > 0 else { return .center }
         let screen = current(layout, in: size, compact: compact).screen(rect)
         return UnitPoint(x: min(1, max(0, screen.midX / size.width)), y: min(1, max(0, screen.midY / size.height)))
     }
@@ -70,6 +71,7 @@ struct SimStage: View {
     @State private var dragStart: StageCamera?
 
     var body: some View {
+        let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
         GeometryReader { proxy in
             let camera = viewport.current(renderer.layout, in: proxy.size, compact: compact)
             let canvas = stageCanvas(camera)
@@ -181,10 +183,11 @@ struct SimStage: View {
     }
 
     private func paint(_ camera: StageCamera) -> some View {
-        Canvas(opaque: true) { context, size in
+        let highlight = SimOpsState.of(sim).highlight(for: selection)   // an op row's path (SimOpsState)
+        return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,
-                          hovered: hovered, notes: noteIDs, labels: sim.speed <= 2)
+                          hovered: hovered, notes: noteIDs, labels: sim.speed <= 2, highlight: highlight)
         }
     }
 

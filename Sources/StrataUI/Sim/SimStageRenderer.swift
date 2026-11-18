@@ -36,7 +36,8 @@ final class StageRenderer {
     }
 
     func draw(_ source: GraphicsContext, size: CGSize, camera: StageCamera, frame: SimFrame,
-              selected: StageSelection?, hovered: StageSelection?, notes: Set<String>, labels: Bool) {
+              selected: StageSelection?, hovered: StageSelection?, notes: Set<String>, labels: Bool,
+              highlight: StageHighlight? = nil) {
         source.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.bg))
         drawGrid(in: source, size: size, camera: camera)
         var context = source
@@ -44,6 +45,10 @@ final class StageRenderer {
         context.scaleBy(x: camera.zoom, y: camera.zoom)
         let viewport = CGRect(origin: camera.world(.zero), size: CGSize(width: size.width / camera.zoom, height: size.height / camera.zoom))
             .insetBy(dx: -35, dy: -35)
+        // An op's path (SimOpsState): its nodes and edges draw lit, everything else slightly dimmed.
+        var dimmed = context
+        dimmed.opacity = 0.4
+        func edgeContext(_ id: String) -> GraphicsContext { highlight.map { $0.edges.contains(id) } == false ? dimmed : context }
 
         for region in layout.regions where viewport.intersects(region.rect) { drawRegion(region, in: context) }
 
@@ -52,12 +57,14 @@ final class StageRenderer {
         let visibleEdges = routes.filter { viewport.intersects($0.path.boundingRect.insetBy(dx: -1, dy: -1)) }
         for route in visibleEdges {
             let hit = StageSelection.edge(route.edge.id)
-            drawEdge(route, state: frame.edges[route.edge.id] ?? EdgeState(), selected: selected == hit,
-                     hovered: hovered == hit, in: context)
+            drawEdge(route, state: frame.edges[route.edge.id] ?? EdgeState(),
+                     selected: selected == hit || highlight?.edges.contains(route.edge.id) == true,
+                     hovered: hovered == hit, in: edgeContext(route.edge.id))
         }
 
         // One fill per color and mark keeps dense traffic from issuing a draw call for each token.
         var marks = Array(repeating: TokenMarks(), count: flowColors.count * 2 + 1)
+        var offPath = marks   // tokens off a highlighted op path, drawn dimmed
         var focusToken: (token: TokenView, point: CGPoint)?
         for token in frame.tokens {
             guard let route = layout.routesByID[token.edge] ?? runtimeRoutes[token.edge] else { continue }
@@ -70,23 +77,31 @@ final class StageRenderer {
             case .orphan: index + flowColors.count
             default: index
             }
-            marks[layer].add(token.kind, at: point, focused: focused)
+            if highlight.map({ $0.edges.contains(token.edge) }) == false {
+                offPath[layer].add(token.kind, at: point, focused: focused)
+            } else {
+                marks[layer].add(token.kind, at: point, focused: focused)
+            }
             if focusToken == nil, labels, focused, token.label != nil, frame.tokens.count < 24 { focusToken = (token, point) }
         }
 
-        for i in marks.indices where !marks[i].halo.isEmpty {
-            let tint = i == marks.count - 1 ? Theme.bad : flowColors[i % flowColors.count]
-            let faded = i >= flowColors.count && i < marks.count - 1
-            marks[i].draw(in: context, color: tint, alpha: faded ? 0.34 : 1, dense: frame.tokens.count >= 120)
+        for (set, layer) in [(offPath, dimmed), (marks, context)] {
+            for i in set.indices where !set[i].halo.isEmpty {
+                let tint = i == set.count - 1 ? Theme.bad : flowColors[i % flowColors.count]
+                let faded = i >= flowColors.count && i < set.count - 1
+                set[i].draw(in: layer, color: tint, alpha: faded ? 0.34 : 1, dense: frame.tokens.count >= 120)
+            }
         }
 
         for route in visibleEdges {
-            drawEdgeLabel(route, state: frame.edges[route.edge.id] ?? EdgeState(), in: context)
+            drawEdgeLabel(route, state: frame.edges[route.edge.id] ?? EdgeState(), in: edgeContext(route.edge.id))
         }
         for card in layout.cards where viewport.intersects(card.rect) {
             let hit = StageSelection.node(card.node.id)
+            let lit = highlight.map { $0.nodes.contains(card.node.id) }
             drawNode(card, state: frame.nodes[card.node.id] ?? NodeState(), time: frame.t,
-                     selected: selected == hit, hovered: hovered == hit, note: notes.contains(card.node.id), in: context)
+                     selected: selected == hit, hovered: hovered == hit, lit: lit == true, note: notes.contains(card.node.id),
+                     in: lit == false && selected != hit ? dimmed : context)
         }
         if let focusToken, let label = focusToken.token.label {
             pill(label, at: focusToken.point + CGPoint(x: 9, y: -18), width: 144, color: Theme.borderStrong,
@@ -188,7 +203,7 @@ final class StageRenderer {
     }
 
     private func drawNode(_ card: StageLayout.Card, state: NodeState, time: Double, selected: Bool,
-                          hovered: Bool, note: Bool, in context: GraphicsContext) {
+                          hovered: Bool, lit: Bool = false, note: Bool, in context: GraphicsContext) {
         let node = card.node
         let r = card.rect
         let shape = Path(roundedRect: r, cornerRadius: Theme.radius)
@@ -200,9 +215,13 @@ final class StageRenderer {
             let halo = Path(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: Theme.radius + 3)
             context.fill(halo, with: .color(Theme.accent.opacity(0.10)))
             context.stroke(halo, with: .color(Theme.accent.opacity(0.12)), lineWidth: 3)
+        } else if lit {
+            let halo = Path(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: Theme.radius + 3)
+            context.fill(halo, with: .color(Theme.accent.opacity(0.06)))
         }
         context.fill(shape, with: .color(node.kind == .note ? Theme.surface : Theme.raised))
-        let stroke = selected ? Theme.accent : down ? Theme.bad.opacity(0.38) : hovered ? Theme.text.opacity(0.37) : Theme.borderStrong
+        let stroke = selected ? Theme.accent : lit ? Theme.accent.opacity(0.62) : down ? Theme.bad.opacity(0.38) :
+            hovered ? Theme.text.opacity(0.37) : Theme.borderStrong
         let dashes: [CGFloat] = node.kind == .external && !selected ? [4, 3] : []
         context.stroke(shape, with: .color(stroke), style: StrokeStyle(lineWidth: selected ? 1.5 : 1, dash: dashes))
         if flash > 0 || state.health == .failing {
@@ -211,7 +230,7 @@ final class StageRenderer {
         }
 
         var content = context
-        content.opacity = down ? 0.45 : 1
+        content.opacity = context.opacity * (down ? 0.45 : 1)
         let glyph = CGRect(x: r.minX + 10, y: r.minY + 9, width: 28, height: 28)
         content.fill(Path(roundedRect: glyph, cornerRadius: Theme.radiusSmall), with: .color(tint.opacity(0.14)))
         symbol(node.icon ?? node.kind.symbol, at: CGPoint(x: glyph.midX, y: glyph.midY), size: 15, tint: tint, in: content)
@@ -238,11 +257,25 @@ final class StageRenderer {
             return
         }
 
+        // The ops count ("6 ops") follows the tech badge when the row has room for it.
+        let opsLabel = node.ops.isEmpty || down ? nil : text(node.ops.count == 1 ? "1 op" : "\(node.ops.count) ops", .badge, in: content)
+        let opsWidth = opsLabel.map { $0.measure(in: CGSize(width: 80, height: 14)).width + 8 } ?? 0
+        let replicaDots = min(5, state.replicas)
+        let rowEnd = r.maxX - 10 - (state.replicas > 1 && !down ? CGFloat((replicaDots - 1) * 5 + 7 + (state.replicas > 5 ? 20 : 0)) : 0)
+        var techEnd = x
         if let tech = node.tech, !tech.isEmpty {
-            badge(tech, at: CGPoint(x: x, y: r.minY + 31), width: down ? 64 : 84, in: content)
+            let room = opsLabel == nil ? (down ? 64 : 84) : max(40, min(84, rowEnd - x - opsWidth - 5))
+            techEnd = badge(tech, at: CGPoint(x: x, y: r.minY + 31), width: room, in: content)
         } else {
-            content.draw(text(node.kind.rawValue, .mutedLive, in: content),
-                         at: CGPoint(x: x, y: r.minY + 31), anchor: .leading)
+            let kind = text(node.kind.rawValue, .mutedLive, in: content)
+            content.draw(kind, at: CGPoint(x: x, y: r.minY + 31), anchor: .leading)
+            techEnd = x + kind.measure(in: CGSize(width: 120, height: 14)).width
+        }
+        if let opsLabel, techEnd + 5 + opsWidth <= rowEnd {
+            let box = CGRect(x: techEnd + 5, y: r.minY + 25, width: opsWidth, height: 12)
+            content.fill(Path(roundedRect: box, cornerRadius: 4), with: .color(lit || selected ? Theme.accent.opacity(0.14) : Theme.hover))
+            content.stroke(Path(roundedRect: box, cornerRadius: 4), with: .color(Theme.border), lineWidth: 0.5)
+            content.draw(opsLabel, at: CGPoint(x: box.minX + 4, y: box.midY), anchor: .leading)
         }
         if down {
             pill("down", at: CGPoint(x: r.maxX - 27, y: r.minY + 32), width: 42,
@@ -308,12 +341,14 @@ final class StageRenderer {
         }
     }
 
-    private func badge(_ label: String, at point: CGPoint, width: CGFloat, in context: GraphicsContext) {
+    @discardableResult
+    private func badge(_ label: String, at point: CGPoint, width: CGFloat, in context: GraphicsContext) -> CGFloat {
         let label = text(label, .badge, width: width - 8, in: context)
         let s = label.measure(in: CGSize(width: width - 8, height: 14))
         let r = CGRect(x: point.x, y: point.y - 6, width: s.width + 8, height: 12)
         context.fill(Path(roundedRect: r, cornerRadius: 4), with: .color(Theme.hover))
         context.draw(label, at: point + CGPoint(x: 4, y: 0), anchor: .leading)
+        return r.maxX
     }
 
     private func pill(_ value: String, at point: CGPoint, width: CGFloat, color: Color, fill: Color,

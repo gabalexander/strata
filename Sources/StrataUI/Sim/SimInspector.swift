@@ -44,6 +44,7 @@ struct SimInspector: View {
                 }
                 .id(selection)
             }
+            .overlay { SimOpsDetailHost(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, still: still) }
         }
         .background(Theme.surface)
     }
@@ -98,6 +99,7 @@ struct SimInspector: View {
             if !availableActions.isEmpty {
                 SimSection(title: "Actions") { SimActionButtons(items: availableActions) }
             }
+            SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, still: still)
             if node.kind != .note {
                 SimSection(title: "Live metrics") { nodeMetrics(node, state) }
                 if node.kind.role == .buffer { bufferDetails(state) }
