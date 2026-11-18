@@ -3,7 +3,8 @@ import SwiftUI
 import StrataCore
 
 /// Laid over the inspector's content: draws nothing until an op detail is open for the current
-/// selection, then replaces it. The content underneath keeps its scroll position for Back.
+/// selection, then replaces it. The content underneath keeps its scroll position for Back. Selecting
+/// anything else closes the detail (`SimOpsState.selectionChanged`, called by the workspace).
 @MainActor
 struct SimOpsDetailHost: View {
     let model: AppModel
@@ -17,15 +18,10 @@ struct SimOpsDetailHost: View {
 
     var body: some View {
         let state = SimOpsState.of(sim)
-        ZStack {
-            Color.clear
-                .allowsHitTesting(false)
-                .onChange(of: selection) { _, next in state.selectionChanged(to: next) }
-            if let detail = state.detail(for: selection), let entry = state.index.entry(detail.current) {
-                SimOpDetail(model: model, sim: sim, terms: terms, actions: actions, entry: entry, detail: detail,
-                            select: select, pulse: pulse, still: still)
-                    .background(Theme.surface)
-            }
+        if let detail = state.detail(for: selection), let entry = state.index.entry(detail.current) {
+            SimOpDetail(model: model, sim: sim, terms: terms, actions: actions, entry: entry, detail: detail,
+                        select: select, pulse: pulse, still: still)
+                .background(Theme.surface)
         }
     }
 }
@@ -65,8 +61,8 @@ struct SimOpDetail: View {
                         }
                     }
                 }
-                links("Called by", index.callers(of: entry.ref), symbol: "arrow.down.right")
-                links("Reaches", index.reaches(entry.ref), symbol: "arrow.up.right")
+                links("Called by", index.callers(of: entry.ref))
+                links("Reaches", index.reaches(entry.ref))
                 flows
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -326,7 +322,7 @@ struct SimOpDetail: View {
     }
 
     @ViewBuilder
-    private func links(_ title: String, _ refs: [OpRef], symbol: String) -> some View {
+    private func links(_ title: String, _ refs: [OpRef]) -> some View {
         let entries = refs.compactMap(index.entry)
         if !entries.isEmpty {
             SimSection(title: title) {

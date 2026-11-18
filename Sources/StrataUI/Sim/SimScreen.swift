@@ -203,6 +203,7 @@ private struct SimWorkspace: View {
 
     private func select(_ target: StageSelection?) {
         selection = target
+        SimOpsState.of(sim).selectionChanged(to: target)
         model.overlays.dismissMenu()
     }
 
