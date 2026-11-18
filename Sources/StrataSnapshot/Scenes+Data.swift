@@ -101,7 +101,7 @@ import StrataCore
         model.sessions[AppModel.sessionKey(manifest.id, [])] = sim
         model.paletteOpen = true
         return AnyView(RootView(model: model, fixtureEntries: model.library.entries, fixtureNotes: [:],
-                                fixturePaletteQuery: "order"))
+                                fixturePaletteQuery: "order_items"))
     }
 }
 

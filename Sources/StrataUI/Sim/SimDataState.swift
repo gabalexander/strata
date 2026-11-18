@@ -251,8 +251,9 @@ enum SimDataPalette {
         let index = model.sessions[key].map { SimDataState.of($0).index } ?? SimDataIndex(level: level)
         let tables = index.tables.compactMap { ref -> PaletteEntry? in
             guard let node = level.node(ref.node), let schema = index.table(ref) else { return nil }
-            let subtitle = [SimDataText.volume(schema.volume).map { "\($0) rows" }, "\(schema.columns.count) columns"]
-                .compactMap { $0 }.joined(separator: " · ")
+            let subtitle = [schema.volume?.rows.map { "\(SimDataText.count($0)) rows" },
+                            schema.volume?.growthPerDay.flatMap { $0 > 0 ? "+\(SimDataText.count($0))/day" : nil },
+                            "\(schema.columns.count) columns"].compactMap { $0 }.joined(separator: " · ")
             return PaletteEntry(id: "table/\(key)/\(ref.id)", group: .data, title: "\(node.label) · \(ref.table)",
                                 symbol: "tablecells", subtitle: subtitle,
                                 keywords: ([node.id, ref.table, "table"] + schema.columns.map(\.name)).joined(separator: " ")) {
@@ -263,7 +264,7 @@ enum SimDataPalette {
         let entities = level.nodes.flatMap { node in
             node.entities.map { entity in
                 PaletteEntry(id: "entity/\(key)/\(node.id)/\(entity.name)", group: .data, title: "\(node.label) · \(entity.name)",
-                             symbol: "cube", subtitle: ([entity.root] + entity.includes).joined(separator: ", "),
+                             symbol: "cube", subtitle: "entity · " + ([entity.root] + entity.includes).joined(separator: ", "),
                              keywords: ([node.id, entity.name, "entity"] + [entity.root] + entity.includes).joined(separator: " ")) {
                     if let sim = model.sessions[key] { SimDataNav.open(entity: entity.name, on: node.id, sim: sim, model: model, select: nil) }
                     else { SimFocus.of(model).reveal(node.id, in: id, path: path, model: model) }
