@@ -15,7 +15,7 @@ func check(_ cond: @autoclosure () -> Bool, _ msg: @autoclosure () -> String, fi
 
 let filter = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil
 MainActor.assumeIsolated {
-    let all = parserChecks() + engineChecks() + vaultChecks() + cliChecks() + opsPathChecks()
+    let all = parserChecks() + engineChecks() + vaultChecks() + cliChecks() + opsPathChecks() + analysisChecks()
     var ran = 0
     for c in all where filter.map({ c.name.contains($0) }) ?? true {
         currentCase = c.name; ran += 1
