@@ -32,6 +32,7 @@ extension LevelValidation {
                 field["target"].diagnose("an op cannot target its own node; name the node it talks to", .warning)
             } else if let other = nodes[target] {
                 targetFit(op, other, at: field["target"])
+                opTables(op, in: other, at: field["tables"])
                 if !edges.contains("\(node.id)->\(target)"), !edges.contains("\(target)->\(node.id)") {
                     field["target"].diagnose("no edge connects '\(node.id)' and '\(target)'; declare it in edges", .warning)
                 }

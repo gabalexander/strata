@@ -488,6 +488,10 @@ private func specManifest(_ snippet: String) -> String {
               - {from: orders, to: payments}
             """
     }
+    if text.hasPrefix("- id: db"), text.contains("\n  schema:") {
+        // The data example: a database with tables and a service with an entity assembled from them.
+        return header + "nodes:\n" + indent(text, 2)
+    }
     if text.hasPrefix("- call:"), text.contains("op: insert-order") {
         // A step that names an op of the calling node.
         return header + """

@@ -52,7 +52,8 @@ enum Decode {
     }
 
     static func node(_ field: Field) -> Node? {
-        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops"]
+        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops",
+                                  "schema", "entities"]
         let behaviour = Set(ParameterType.node.keys).subtracting(["up", "slow"])
         guard field.mapping(keys.union(behaviour)) else { return nil }
         let id = field["id"].id(required: true)
@@ -80,6 +81,8 @@ enum Decode {
         if field["inside"].present, field["detail"].present { field["detail"].diagnose("use either inside or detail for a deep dive") }
         node.actions = field["actions"].items(named: true).enumerated().compactMap { action($0.element, index: $0.offset) }
         node.ops = field["ops"].items(named: true).compactMap(operation)
+        node.schema = field["schema"].items(named: true, nameKey: "table").compactMap(table)
+        node.entities = field["entities"].items(named: true, nameKey: "name").compactMap(entity)
         return node
     }
 
@@ -137,7 +140,7 @@ enum Decode {
     }
 
     static func flow(_ field: Field) -> Flow? {
-        guard field.mapping(["id", "label", "from", "on", "by", "rate", "color", "deadline", "steps", "op"]) else { return nil }
+        guard field.mapping(["id", "label", "from", "on", "by", "rate", "color", "deadline", "steps", "op", "traffic", "slo"]) else { return nil }
         var flow = Flow(id: field["id"].id(required: true) ?? "", label: field["label"].text())
         flow.line = field.line
         flow.color = field["color"].integer(in: 1...6)
@@ -148,6 +151,8 @@ enum Decode {
         flow.deadline = field["deadline"].duration()
         flow.steps = field["steps"].items().compactMap(step)
         flow.op = field["op"].scalar { try Syntax.opReference($0, qualified: false) }
+        flow.traffic = traffic(field["traffic"])
+        flow.slo = slo(field["slo"])
         return flow
     }
 
