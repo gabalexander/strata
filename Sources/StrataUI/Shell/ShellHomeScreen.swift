@@ -161,7 +161,7 @@ private struct LibraryCard: View {
 
     var body: some View {
         Button {
-            if entry.manifest != nil { model.open(.sim(entry.id, path: [])) }
+            model.open(.sim(entry.id, path: []))
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {

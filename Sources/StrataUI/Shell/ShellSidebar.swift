@@ -110,12 +110,13 @@ struct Sidebar: View {
 
     private func libraryRow(_ entry: Library.Entry) -> some View {
         let selected = switch model.route {
-        case .sim(let id, _): id == entry.id && entry.manifest != nil
+        case .sim(let id, _): id == entry.id
         default: false
         }
+        // A broken manifest opens its error screen, which lists every problem with its line.
         return SidebarRow(title: entry.title, symbol: entry.shellSymbol, selected: selected,
                           trailingInset: entry.firstError != nil ? 20 : 0) {
-            if entry.manifest != nil { model.open(.sim(entry.id, path: [])) }
+            model.open(.sim(entry.id, path: []))
         }
         .overlay(alignment: .trailing) {
             if let error = entry.firstError { DiagnosticDot(entry: entry, diagnostic: error, overlays: model.overlays) }

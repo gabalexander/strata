@@ -85,30 +85,50 @@ struct SimLoadIssue: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle").font(Theme.title).foregroundStyle(Theme.warn)
-                Text(invalidPath == nil ? "Simulator unavailable" : "Level unavailable")
-                    .font(Theme.title).foregroundStyle(Theme.text)
-                Text(invalidPath.map { "“\($0.joined(separator: " › "))” is no longer in \(entry?.title ?? id)." } ??
-                     entry?.title ?? id)
-                    .font(Theme.ui()).foregroundStyle(Theme.muted)
+                Text(title(entry)).font(Theme.title).foregroundStyle(Theme.text)
+                Text(message(entry)).font(Theme.ui()).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let url {
-                    Text(url.path).font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    Text(url.path).font(Theme.mono(11)).foregroundStyle(Theme.muted).textSelection(.enabled)
+                        .strataCopyMenu("Copy path", text: url.path, overlays: model.overlays)
                 }
-                if let entry {
-                    ForEach(Array(entry.diagnostics.enumerated()), id: \.offset) { _, diagnostic in
-                        HStack(alignment: .firstTextBaseline, spacing: 9) {
-                            Text(diagnostic.line.map(String.init) ?? "—")
-                                .font(Theme.mono(11)).foregroundStyle(diagnostic.severity == .error ? Theme.bad : Theme.warn)
-                                .frame(minWidth: 28, alignment: .leading)
-                            Text(diagnostic.message).font(Theme.ui()).foregroundStyle(Theme.text)
+                if let entry, invalidPath == nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(entry.diagnostics.enumerated()), id: \.offset) { _, diagnostic in
+                            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                                Text(diagnostic.line.map { "line \($0)" } ?? "—")
+                                    .font(Theme.mono(11))
+                                    .foregroundStyle(diagnostic.severity == .error ? Theme.bad : Theme.warn)
+                                    .frame(minWidth: 52, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(diagnostic.message).font(Theme.ui()).foregroundStyle(Theme.text)
+                                    if let path = diagnostic.path {
+                                        Text(path).font(Theme.mono(11)).foregroundStyle(Theme.faint)
+                                    }
+                                }
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
                         }
-                        .fixedSize(horizontal: false, vertical: true)
                     }
+                    .padding(.top, 4)
                 }
-                if invalidPath != nil {
-                    SimButton(title: "Open root level", icon: "arrow.up") { model.open(.sim(id, path: [])) }
+                HStack(spacing: 6) {
+                    if invalidPath != nil {
+                        SimButton(title: "Open root level", icon: "arrow.up") { model.open(.sim(id, path: [])) }
+                    }
+                    if let entry, !entry.builtIn {
+                        SimButton(title: "Open file", icon: "doc.text") { model.openCode(entry.url.path, repo: nil) }
+                    }
+                    if let entry {
+                        SimButton(title: "Reveal in Finder", icon: "folder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+                        }
+                    }
+                    SimButton(title: "Go home", icon: "house") { model.open(.home) }
                 }
+                .padding(.top, 4)
             }
-            .frame(maxWidth: 460, alignment: .leading)
+            .frame(maxWidth: 520, alignment: .leading)
             .padding(22)
             .card()
             .padding(24)
@@ -116,5 +136,24 @@ struct SimLoadIssue: View {
         }
         .defaultScrollAnchor(.center, for: .alignment)
         .background(Theme.bg)
+    }
+
+    private func title(_ entry: Library.Entry?) -> String {
+        if invalidPath != nil { return "Level unavailable" }
+        guard let entry else { return "No simulator “\(id)”" }
+        return entry.manifest == nil ? "\(entry.title) has an error" : entry.title
+    }
+
+    private func message(_ entry: Library.Entry?) -> String {
+        if let invalidPath {
+            return "“\(invalidPath.joined(separator: " › "))” is no longer in \(entry?.title ?? id)."
+        }
+        guard let entry else {
+            return "Nothing in the library has this id. It may have been renamed or deleted. Strata opens it as soon as a manifest with this id appears."
+        }
+        let errors = entry.diagnostics.filter { $0.severity == .error }.count
+        let count = errors == 1 ? "1 error" : "\(errors) errors"
+        return entry.builtIn ? "This built-in manifest has \(count)."
+            : "Fix the \(count) below and save. Strata reloads the file as soon as it changes."
     }
 }
