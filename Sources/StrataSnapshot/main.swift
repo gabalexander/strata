@@ -3,58 +3,81 @@ import SwiftUI
 import StrataCore
 import StrataUI
 
-// Renders views with fixture data to PNGs, no screen permission needed (the real window is
-// hidden from capture). `swift run StrataSnapshot <out-dir> [scene-name-substring]`.
-// Each area adds scenes in its own file (Scenes+Sim.swift, Scenes+Notes.swift, Scenes+Shell.swift).
-
+// Renders fixture views to PNG without activating or ordering a window on screen.
 struct Scene {
     var name: String
     var size: CGSize
-    /// true: render through a real NSHostingView in an offscreen window (needed for NSViewRepresentable
-    /// such as the NSTextView editor). false: SwiftUI ImageRenderer (crisper, Canvas-friendly).
+    /// Use an offscreen NSHostingView for scenes that use AppKit views or SwiftUI lifecycle.
     var hosted = false
-    /// Sim time to advance before rendering (scenes can also drive their models directly).
     var prepare: @MainActor () -> AnyView
 }
 
-let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "build/snapshots"
-let filter = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : nil
-try FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+private enum SnapshotError: LocalizedError {
+    case noImage(String)
+    case noScenes(String)
 
-@MainActor func write(_ cg: CGImage, _ name: String) {
-    let rep = NSBitmapImageRep(cgImage: cg)
-    let path = (outDir as NSString).appendingPathComponent(name + ".png")
-    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-    print(URL(fileURLWithPath: path).standardized.path)
+    var errorDescription: String? {
+        switch self {
+        case .noImage(let scene): "Could not render \(scene)."
+        case .noScenes(let filter): "No scenes match \(filter)."
+        }
+    }
 }
 
-@MainActor func render(_ s: Scene) {
-    let view = s.prepare()
-        .frame(width: s.size.width, height: s.size.height)
+let arguments = CommandLine.arguments
+let outDir = URL(fileURLWithPath: arguments.count > 1 ? arguments[1] : "build/snapshots", isDirectory: true)
+let filter = arguments.count > 2 ? arguments[2] : nil
+
+@MainActor private func write(_ image: CGImage, _ name: String) throws {
+    let rep = NSBitmapImageRep(cgImage: image)
+    guard let png = rep.representation(using: .png, properties: [:]) else { throw SnapshotError.noImage(name) }
+    let url = outDir.appendingPathComponent(name + ".png")
+    try png.write(to: url, options: .atomic)
+    print(url.standardized.path)
+}
+
+@MainActor private func render(_ scene: Scene) throws {
+    let view = scene.prepare()
+        .frame(width: scene.size.width, height: scene.size.height)
         .environment(\.colorScheme, .dark)
-    if s.hosted {
+
+    if scene.hosted {
+        let rect = NSRect(origin: .zero, size: scene.size)
         let host = NSHostingView(rootView: view)
-        let win = NSWindow(contentRect: NSRect(origin: .zero, size: s.size), styleMask: [.borderless], backing: .buffered, defer: false)
-        win.appearance = NSAppearance(named: .darkAqua)
-        win.contentView = host
-        host.frame = NSRect(origin: .zero, size: s.size)
+        let window = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.sharingType = .none
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        defer { window.close() }
+        host.frame = rect
         host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.15))   // let NSViewRepresentables lay out
+        RunLoop.main.run(until: Date().addingTimeInterval(0.18)) // Let hosted views and layout tasks settle.
         host.layoutSubtreeIfNeeded()
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { print("failed: \(s.name)"); return }
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw SnapshotError.noImage(scene.name) }
         host.cacheDisplay(in: host.bounds, to: rep)
-        if let cg = rep.cgImage { write(cg, s.name) } else { print("failed: \(s.name)") }
+        guard let image = rep.cgImage else { throw SnapshotError.noImage(scene.name) }
+        try write(image, scene.name)
     } else {
-        let r = ImageRenderer(content: view)
-        r.scale = 2
-        guard let cg = r.cgImage else { print("failed: \(s.name)"); return }
-        write(cg, s.name)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.cgImage else { throw SnapshotError.noImage(scene.name) }
+        try write(image, scene.name)
     }
 }
 
 MainActor.assumeIsolated {
-    _ = NSApplication.shared
-    NSApp.setActivationPolicy(.prohibited)
-    let all = shellScenes() + simScenes() + notesScenes()
-    for s in all where filter.map({ s.name.contains($0) }) ?? true { render(s) }
+    do {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        let scenes = (shellScenes() + simScenes() + notesScenes()).filter { scene in
+            filter.map { scene.name.contains($0) } ?? true
+        }
+        guard !scenes.isEmpty else { throw SnapshotError.noScenes(filter ?? "") }
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        for scene in scenes { try render(scene) }
+    } catch {
+        FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
 }
