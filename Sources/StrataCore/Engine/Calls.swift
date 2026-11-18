@@ -19,7 +19,9 @@ extension Simulation {
         if step.spec.breaker != nil {
             let key = CircuitKey(step: call.step, edge: edge)
             guard let epoch = admitCircuit(key) else {
-                attemptFailed(id, failure: .breakerOpen)
+                note(.failed, "\(source.node.id) → \(nodes[target].node.id): breaker open",
+                     node: target, visible: job.traffic.visible)
+                completeCall(id, failure: .breakerOpen)
                 return
             }
             calls[id]!.breakerEpoch = epoch
@@ -58,9 +60,7 @@ extension Simulation {
             if nodes[target].node.kind.role == .server { accept(attempt, at: target, program: program) }
             else { sendResponse(attempt, failure: .invalidTarget) }
         case .publish:
-            let failure = publish(to: target, traffic: attempt.traffic)
-            // The broker decides whether to accept at ingress. Consumers have their own lifetime.
-            receiveResponse(attempt, epoch: epoch, failure: failure)
+            beginPublish(to: target, from: .request(attempt, epoch: epoch))
         case .parallel, .work: preconditionFailure("Only wire steps send requests")
         }
     }

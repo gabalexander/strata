@@ -267,6 +267,7 @@ extension Simulation {
         node.up = up
         append("\(node.node.id) is \(up ? "up" : "down")", up ? .good : .bad, node: index)
         if !up {
+            node.buffer?.ingressEpoch += 1
             node.waiting = FIFO()
             for id in node.live.sorted() {
                 if let job = jobs[id] {

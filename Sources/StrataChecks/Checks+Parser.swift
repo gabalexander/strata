@@ -9,7 +9,70 @@ title: Parser check
 """ + "\n"
 
 @MainActor func parserChecks() -> [CheckCase] {
-    yamlChecks() + diagnosticChecks() + manifestChecks() + commandChecks() + glossaryChecks() + libraryChecks()
+    yamlChecks() + diagnosticChecks() + manifestChecks() + commandChecks() + glossaryChecks() + libraryChecks() + limitChecks()
+}
+
+@MainActor private func limitChecks() -> [CheckCase] {
+    [
+        CheckCase(name: "parser rejects excessive node counts") {
+            for (param, count, limit) in [("replicas", "9223372036854775807", 64), ("concurrency", "100001", 100000),
+                                          ("queue", "1000001", 1000000), ("capacity", "1000001", 1000000),
+                                          ("prefetch", "100001", 100000)] {
+                let (manifest, diagnostics) = load("nodes: [{ id: a, kind: service, \(param): \(count) }]")
+                check(manifest == nil && diagnostics.contains {
+                    $0.severity == .error && $0.path == "nodes.a.\(param)" && $0.message.contains(String(limit))
+                }, "\(param) above \(limit) was not diagnosed: \(diagnostics)")
+                check(load("nodes: [{ id: a, kind: service, \(param): \(limit) }]").0 != nil,
+                      "\(param) at the limit was rejected")
+            }
+        },
+        CheckCase(name: "parser rejects excessive flow rates and sends") {
+            for rate in ["1000000000000/s", "600060/min", "every 99us"] {
+                let (manifest, diagnostics) = load("""
+                    nodes: [{ id: client, kind: client }]
+                    flows: [{ id: input, from: client, rate: \(rate), steps: [] }]
+                    """)
+                check(manifest == nil && diagnostics.contains { $0.path == "flows.input.rate" && $0.message.contains("10000/s") },
+                      "accepted excessive rate \(rate): \(diagnostics)")
+            }
+            for command in ["rate input 10001/s", "send input 10001"] {
+                let (manifest, diagnostics) = load("""
+                    nodes: [{ id: client, kind: client }]
+                    flows: [{ id: input, from: client, rate: 10000/s, steps: [] }]
+                    scenarios: [{ id: burst, setup: [\(command)] }]
+                    """)
+                check(manifest == nil && diagnostics.contains { $0.severity == .error && $0.message.contains("10000") },
+                      "accepted command above the limit: \(command), \(diagnostics)")
+            }
+            check(ManifestParser.parseCommand("send input 10000") == .success(.send("input", 10000)),
+                  "send at the limit was rejected")
+            check(ManifestParser.parseCommand("rate input every 100us") == .success(.rate("input", .every(0.0001))),
+                  "fixed arrivals at the limit were rejected")
+        },
+        CheckCase(name: "parser warns about zero-time publish cycles") {
+            let template = """
+                nodes:
+                  - { id: a, kind: queue, latency: fixed 0ms }
+                  - { id: b, kind: topic, latency: fixed 0ms }
+                  - { id: first, kind: worker, latency: fixed 0ms }
+                  - { id: second, kind: worker, latency: fixed 0ms }
+                edges:
+                  - { from: a, to: first, latency: fixed 0ms }
+                  - { from: first, to: b, latency: fixed 0ms }
+                  - { from: b, to: second, latency: fixed 0ms }
+                  - { from: second, to: a, latency: fixed 0ms }
+                flows:
+                  - { id: ab, on: a, by: first, steps: [{ publish: b }] }
+                  - { id: ba, on: b, by: second, steps: [{ work: DURATION }, { publish: a }] }
+                """
+            for duration in ["fixed 0ms", "fixed 1ms"] {
+                let (manifest, diagnostics) = load(template.replacingOccurrences(of: "DURATION", with: duration))
+                check(manifest != nil, "cycle fixture did not decode: \(diagnostics)")
+                check(diagnostics.contains { $0.severity == .warning && $0.message.contains("zero-time publish cycle") }
+                      == (duration == "fixed 0ms"), "incorrect cycle warning for \(duration): \(diagnostics)")
+            }
+        },
+    ]
 }
 
 private func load(_ body: String, preamble: String = header) -> (Manifest?, [Diagnostic]) {

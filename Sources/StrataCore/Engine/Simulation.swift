@@ -20,6 +20,8 @@ public final class Simulation {
     public private(set) var scenario: String?
     /// Latest narration (scenario `say`, step `say`, command feedback). nil = none.
     public private(set) var narration: String?
+    /// True if the most recent advance stopped at a simulation safety limit.
+    public private(set) var eventLimitReached = false
     /// Bumps on every discrete change (a command, a log entry, a scenario step, a param change).
     public private(set) var revision = 0
     @ObservationIgnored public private(set) var log: [LogEntry] = []
@@ -94,6 +96,7 @@ public final class Simulation {
         log = []
         narration = nil
         scenario = nil
+        eventLimitReached = false
         scenarioGeneration = 0
         events = EventQueue()
         jobs = RecordPool()
@@ -109,6 +112,14 @@ public final class Simulation {
         circuits.removeAll(keepingCapacity: true)
         narratedSteps.removeAll(keepingCapacity: true)
         nodes = level.nodes.enumerated().map { NodeRuntime($1, topicConsumer: topicConsumers.contains($0)) }
+        let countLimits = SimulationLimits.nodeCounts.sorted { $0.key < $1.key }
+        for node in nodes {
+            for (param, limit) in countLimits {
+                if let count = NodeConfiguration.value(param, in: node.node.params)?.number, count > Double(limit) {
+                    logCountClamp(Binding(.node(node.node.id), param), to: limit)
+                }
+            }
+        }
         flows = level.flows.enumerated().map {
             FlowRuntime($1, index: $0, program: topology.flowPrograms[$0], topology: topology)
         }
@@ -137,7 +148,9 @@ public final class Simulation {
     /// Fire `count` requests of a source flow now (also works for `rate: manual`).
     public func send(_ flow: String, count: Int = 1) {
         guard count > 0, let index = topology.flowIndex[flow], flows[index].source != nil else { return }
-        for _ in 0..<count { startSource(index) }
+        let allowed = min(count, SimulationLimits.send)
+        if count > allowed { append("Clamped send on \(flow) to \(allowed) requests", .warn) }
+        for _ in 0..<allowed { startSource(index) }
     }
 
     /// Current value of a bindable parameter (effective: kind defaults applied), nil if unknown.
@@ -203,10 +216,10 @@ public final class Simulation {
         return flowState(index)
     }
 
-    /// Headless: advance `seconds` of sim time as fast as possible (playing or not).
+    /// Headless: advance `seconds` of sim time as fast as possible, stopping at safety limits.
     public func run(seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
-        advance(to: now + seconds)
+        advance(to: now + seconds, eventBudget: 1_000_000)
     }
 
     /// A plain-text table of per-flow and per-node metrics at `now`, for `strata simulate`.
@@ -249,15 +262,62 @@ public final class Simulation {
         if time.isFinite { events.insert(event, at: max(now, time)) }
     }
 
-    private func advance(to target: Double, whilePlaying: Bool = false) {
+    private func advance(to target: Double, whilePlaying: Bool = false, eventBudget: Int = 20_000) {
         guard target.isFinite else { return }
-        while let time = events.time, time <= target, !whilePlaying || playing {
-            let entry = events.pop()
-            now = time
+        eventLimitReached = false
+        var handled = 0
+        var eventTime: Double?
+        var nextWave = 0
+        var sameTimeWaves = 0
+        while let entry = events.first, entry.time <= target, !whilePlaying || playing {
+            if eventTime != entry.time {
+                eventTime = entry.time
+                sameTimeWaves = 0
+                nextWave = events.nextSequence
+            } else if entry.sequence >= nextWave {
+                // Count successive waves of newly scheduled work, so a wide batch alone isn't a loop.
+                sameTimeWaves += 1
+                nextWave = events.nextSequence
+            }
+            if sameTimeWaves >= 1024 {
+                pauseAtLimit("Paused: zero-time loop \(eventContext(entry.event))")
+                break
+            }
+            if handled >= eventBudget {
+                pauseAtLimit("Paused: event budget of \(eventBudget) exhausted \(eventContext(entry.event))")
+                break
+            }
+            _ = events.pop()
+            now = entry.time
+            handled += 1
             process(entry.event)
         }
-        if !whilePlaying || playing { now = target }
+        if !eventLimitReached && (!whilePlaying || playing) { now = target }
         if !tokens.isEmpty { tokens.removeAll { $0.end <= now } }
+    }
+
+    private func pauseAtLimit(_ message: String) {
+        eventLimitReached = true
+        playing = false
+        narrate(message)
+        append(message, .warn)
+    }
+
+    private func eventContext(_ event: SimulationEvent) -> String {
+        switch event {
+        case .request(let attempt, _), .response(let attempt, _, _):
+            return "on \(edges[attempt.edge].id)"
+        case .delivery(_, let edge, _), .deadLetter(_, let edge, _):
+            return "on \(edges[edge].id)"
+        case .pumpBuffer(let index):
+            let buffer = nodes[index]
+            let consumers = buffer.buffer!.consumers.prefix(3).map { flows[$0].flow.by! }
+            return "at \(buffer.node.id) feeding \(consumers.joined(separator: ", "))"
+        case .source(let index, _): return "in flow \(flows[index].flow.id)"
+        case .pumpNode(let index), .expire(let index, _), .finishPublish(let index, _, _, _):
+            return "at \(nodes[index].node.id)"
+        default: return "at \(Value.number(now))s"
+        }
     }
 
     private func process(_ event: SimulationEvent) {
@@ -274,6 +334,8 @@ public final class Simulation {
             note(.timeout, Failure.deadline(duration).describe(level, edges: edges), visible: job.traffic.visible)
             finishJob(id, failure: .deadline(duration))
         case .request(let attempt, let epoch): receiveRequest(attempt, epoch: epoch)
+        case .finishPublish(let target, let origin, let epoch, let arrived):
+            finishPublish(to: target, from: origin, ingressEpoch: epoch, arrived: arrived)
         case .response(let attempt, let epoch, let failure): receiveResponse(attempt, epoch: epoch, failure: failure)
         case .timeout(let id, let number): timeoutCall(id, number: number)
         case .retry(let id): startAttempt(id)
@@ -317,7 +379,10 @@ public final class Simulation {
         revision += 1
     }
 
-    func rate(for flow: FlowRuntime) -> Double { flow.rate.perSecondValue ?? parentRate }
+    func rate(for flow: FlowRuntime) -> Double {
+        let rate = flow.rate.perSecondValue ?? parentRate
+        return rate.isFinite ? min(SimulationLimits.rate, rate) : 0
+    }
 
     func changeRate(_ flow: Int, to rate: Rate) {
         flows[flow].rate = rate
@@ -332,7 +397,7 @@ public final class Simulation {
         guard rate.isFinite, rate > 0 else { return }
         let spacing: Double
         switch flow.rate {
-        case .every(let seconds): spacing = seconds
+        case .every(let seconds): spacing = max(seconds, 1 / SimulationLimits.rate)
         case .manual: return
         case .perSecond, .parent: spacing = random.sample(.exponential(1 / rate))
         }

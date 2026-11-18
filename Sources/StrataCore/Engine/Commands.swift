@@ -38,7 +38,13 @@ extension Simulation {
             case ("slow", .number(let factor)) where factor.isFinite && factor >= 0: node.slow = factor
             default:
                 var params = node.params
-                guard NodeConfiguration.apply(value, to: binding.param, in: &params) else { return false }
+                var effective = value
+                if let limit = SimulationLimits.nodeCounts[binding.param],
+                   let number = value.number, number.isFinite, number > Double(limit) {
+                    effective = .number(Double(limit))
+                    logCountClamp(binding, to: limit)
+                }
+                guard NodeConfiguration.apply(effective, to: binding.param, in: &params) else { return false }
                 if binding.param == "dlq", let dlq = params.dlq, !dlq.isEmpty,
                    topology.nodeIndex[dlq].map({ nodes[$0].buffer == nil }) ?? true { return false }
                 node.params = params
@@ -101,7 +107,7 @@ extension Simulation {
             if let index = topology.nodeIndex[id] {
                 let base = relative ? nodes[index].params.replicas! : 0
                 let (total, overflow) = base.addingReportingOverflow(replicas)
-                succeeded = !overflow && bind(id, "replicas", .number(Double(max(1, total))))
+                succeeded = bind(id, "replicas", .number(Double(overflow ? Int.max : max(1, total))))
             } else { succeeded = false }
             let amount = relative && replicas >= 0 ? "+\(replicas)" : String(replicas)
             text = "Scaled \(id) \(amount)"
@@ -115,15 +121,18 @@ extension Simulation {
         case .send(let id, let count):
             succeeded = count > 0 && topology.flowIndex[id].map { flows[$0].source != nil } == true
             if succeeded { send(id, count: count) }
-            text = "Sent \(count) on \(id)"
+            text = "Sent \(min(count, SimulationLimits.send)) on \(id)"
         case .cut(let from, let to), .heal(let from, let to):
             let cut: Bool
             if case .cut = command { cut = true } else { cut = false }
             succeeded = changeLinks(from, to) { setCut($0, cut) }
             text = "\(cut ? "Cut" : "Healed") \(from) ↔ \(to)"
         case .delay(let from, let to, let time):
-            succeeded = time.isFinite && time >= 0 && changeLinks(from, to) { edges[$0].extra = time }
-            text = "Added \(Value.number(time))s of one-way delay between \(from) and \(to)"
+            if time.isFinite, time >= 0, let a = topology.nodeIndex[from], let b = topology.nodeIndex[to],
+               let edge = existingLink(from: a, to: b) {
+                edges[edge].extra = time
+            } else { succeeded = false }
+            text = "Set extra delay on \(from) → \(to) to \(Value.number(time))s"
         case .redirect(let id, let other):
             if let from = topology.nodeIndex[id], let to = topology.nodeIndex[other],
                canRedirect(from, to: to) {
@@ -147,6 +156,10 @@ extension Simulation {
         let feedback = succeeded ? text : "Could not apply \(command)"
         narrate(feedback)
         append(feedback, succeeded ? .info : .warn)
+    }
+
+    func logCountClamp(_ binding: Binding, to limit: Int) {
+        append("Clamped \(binding) to \(limit)", .warn)
     }
 
     private func canRedirect(_ from: Int, to: Int) -> Bool {

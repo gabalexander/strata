@@ -41,12 +41,12 @@ struct EventQueue {
     }
 
     private var heap: [Entry] = []
-    private var sequence = 0
-    var time: Double? { heap.first?.time }
+    private(set) var nextSequence = 0
+    var first: Entry? { heap.first }
 
     mutating func insert(_ event: SimulationEvent, at time: Double) {
-        let entry = Entry(time: time, sequence: sequence, event: event)
-        sequence += 1
+        let entry = Entry(time: time, sequence: nextSequence, event: event)
+        nextSequence += 1
         var index = heap.count
         heap.append(entry)
         while index > 0 {

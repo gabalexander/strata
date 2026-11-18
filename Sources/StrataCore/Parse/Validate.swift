@@ -40,6 +40,7 @@ enum Validate {
             validator.flow(flow, at: location)
         }
         level.edges += validator.implicitEdges
+        ZeroTimePublishValidation.warn(in: level, at: field["flows"])
         for (index, location) in field["nodes"].items(named: true).enumerated() {
             let node = level.nodes[index]
             validator.node(node, at: location)

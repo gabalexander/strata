@@ -53,6 +53,66 @@ private func measure(_ format: String, _ values: CVarArg...) {
 
 @MainActor func engineChecks() -> [CheckCase] {
     [
+        CheckCase(name: "engine runtime clamps allocating counts") {
+            let sim = sim([node("worker", .worker)], [])
+            sim.perform([.scale("worker", Int.max, relative: true)])
+            check(sim.effective("worker").replicas == 64, "overflowing relative scale missed the replica cap")
+            for (param, limit) in [("replicas", 64), ("concurrency", 100000), ("queue", 1000000),
+                                   ("capacity", 1000000), ("prefetch", 100000)] {
+                let binding = Binding(.node("worker"), param)
+                sim.perform([.set(binding, .number(Double(limit + 1)))])
+                check(sim.value(binding) == .number(Double(limit)), "set exceeded the \(param) cap")
+                check(sim.log.contains { $0.text.contains("Clamped worker.\(param)") && $0.text.contains(String(limit)) },
+                      "the \(param) clamp was silent")
+            }
+            let direct = Simulation(manifest: manifest([node("large", .worker) { $0.replicas = Int.max }], []))
+            check(direct.effective("large").replicas == 64 && direct.log.contains { $0.text.contains("Clamped large.replicas") },
+                  "programmatic construction allocated the unchecked replica count")
+        },
+        CheckCase(name: "engine tick pauses on zero-time message loops") {
+            let edges = [("client", "queue"), ("queue", "worker"), ("worker", "queue")].map { from, to in
+                var edge = Edge(from: from, to: to)
+                edge.latency = .fixed(0)
+                return edge
+            }
+            var loop = consumer("loop", "queue", "worker")
+            loop.steps = [Step(.publish(target: "queue"))]
+            let sim = sim([node("queue", .queue) { $0.latency = .fixed(0) },
+                           node("worker", .worker) { $0.latency = .fixed(0) }],
+                          [source(.manual, [Step(.publish(target: "queue"))]), loop], edges: edges)
+            sim.send("requests")
+            sim.tick(0.01)
+            check(!sim.playing && sim.now == 0 && sim.log.contains {
+                $0.text.contains("Paused: zero-time loop") && $0.text.contains("queue") && $0.text.contains("worker")
+            }, "zero-time loop did not pause with a diagnostic at its timestamp")
+            sim.perform([.cut("queue", "worker")])
+            sim.playing = true
+            sim.tick(0.01)
+            check(sim.playing && sim.now == 0.01, "time did not advance after breaking the cycle")
+        },
+        CheckCase(name: "engine tick pauses when the event budget is exhausted") {
+            let flows = (0..<24).map { index in
+                var flow = Flow(id: "source-\(index)")
+                flow.from = "client"
+                flow.rate = .perSecond(10000)
+                return flow
+            }
+            let sim = sim([], flows)
+            sim.tick(0.1)
+            check(!sim.playing && sim.now > 0 && sim.now < 0.1 && sim.log.contains { $0.text.contains("event budget") },
+                  "positive-time event load did not pause within the tick")
+        },
+        CheckCase(name: "engine runtime caps sends and inherited flow rates") {
+            let manual = sim([], [source(.manual, [])])
+            manual.send("requests", count: Int.max)
+            check(manual.metrics(flow: "requests").totalOK == 10000 &&
+                  manual.log.contains { $0.text.contains("Clamped send on requests to 10000") },
+                  "direct send exceeded the burst cap")
+
+            let inherited = Simulation(manifest: manifest([], [source(.parent, [])]), parentRate: 1e12)
+            check(inherited.value(Binding(.flow("requests"), "rate")) == .number(10000),
+                  "parent rate bypassed the per-flow cap")
+        },
         CheckCase(name: "engine determinism and reset") {
             let a = Simulation(manifest: Fixtures.checkout, seed: 42)
             let b = Simulation(manifest: Fixtures.checkout, seed: 42)
@@ -247,6 +307,67 @@ private func measure(_ format: String, _ values: CVarArg...) {
             check(retained.depth == 10 && (retained.lag["slow"] ?? 0) == 10 && retained.lost >= 5,
                   "retention should drop unread offsets and count losses")
         },
+        CheckCase(name: "engine topic poison messages unblock the group") {
+            let sim = sim([node("topic", .topic) { $0.dlq = "dlq" }, node("dlq", .queue),
+                           node("worker", .worker) {
+                               $0.concurrency = 1; $0.errors = 1; $0.onError = .retry; $0.maxDeliveries = 2
+                           }, node("healthy", .worker)],
+                          [source(.manual, [Step(.publish(target: "topic"))]),
+                           consumer("consume", "topic", "worker"), consumer("healthy", "topic", "healthy")])
+            sim.send("requests", count: 2)
+            sim.run(seconds: 2)
+            check(sim.metrics(flow: "consume").totalFailed == 4 && state(sim, "topic").groupLag["consume"] == 0 &&
+                  state(sim, "dlq").depth == 2, "poison messages exceeded two attempts or kept the group blocked")
+            check(sim.metrics(flow: "healthy").totalOK == 2, "poison handling disturbed the other group")
+        },
+        CheckCase(name: "engine topic retry limit drops a killed handler without a DLQ") {
+            let sim = sim([node("topic", .topic), node("worker", .worker) {
+                $0.maxDeliveries = 1; $0.concurrency = 1; $0.latency = .fixed(0.1)
+            }], [source(.manual, [Step(.publish(target: "topic"))]), consumer("consume", "topic", "worker")])
+            sim.send("requests", count: 2)
+            sim.run(seconds: 0.02)
+            check(state(sim, "worker").busy == 1, "fixture had no active handler")
+            sim.perform([.kill("worker"), .restore("worker")])
+            sim.run(seconds: 0.5)
+            check(sim.metrics(flow: "consume").totalFailed == 1 && sim.metrics(flow: "consume").totalOK == 1 &&
+                  state(sim, "topic").groupLag["consume"] == 0 && state(sim, "topic").lost == 1,
+                  "the killed handler retried after its final delivery or was missing from loss accounting")
+        },
+        CheckCase(name: "engine TTL expires prefetched messages before handling") {
+            let nodes = [node("queue", .queue) { $0.ttl = 0.01; $0.dlq = "dlq" }, node("dlq", .queue),
+                         node("worker", .worker) {
+                             $0.concurrency = 1; $0.prefetch = 2; $0.latency = .fixed(0.1)
+                         }]
+            let flows = [source(.manual, [Step(.publish(target: "queue"))]), consumer("consume", "queue", "worker")]
+            let inbox = sim(nodes, flows)
+            inbox.send("requests", count: 2)
+            inbox.run(seconds: 0.05)
+            check(state(inbox, "queue").unacked == 1 && state(inbox, "worker").queued == 0 &&
+                  state(inbox, "dlq").depth == 1, "expired inbox entry kept its reservation or missed the DLQ")
+            inbox.run(seconds: 0.5)
+            check(inbox.metrics(flow: "consume").totalOK == 1 && inbox.metrics(flow: "consume").inFlight == 0 &&
+                  state(inbox, "queue").unacked == 0, "expiry allowed queued work to start or interrupted the active handler")
+
+            var slowEdge = Edge(from: "queue", to: "worker")
+            slowEdge.latency = .fixed(0.02)
+            let transit = sim(nodes, flows, edges: [slowEdge])
+            transit.send("requests")
+            transit.run(seconds: 0.5)
+            check(state(transit, "queue").unacked == 0 && state(transit, "dlq").depth == 1 &&
+                  transit.metrics(flow: "consume").totalOK == 0, "expired delivery survived the trip to the worker")
+        },
+        CheckCase(name: "engine explicit topic rejection and default retention") {
+            for overflow in [Overflow.reject, nil] {
+                let sim = sim([node("topic", .topic) { $0.capacity = 1; $0.overflow = overflow }],
+                              [source(.manual, [Step(.publish(target: "topic"))])])
+                sim.send("requests", count: 2)
+                sim.run(seconds: 0.01)
+                let expectedFailures = overflow == .reject ? 1 : 0
+                let metrics = sim.metrics(flow: "requests")
+                check(metrics.totalFailed == expectedFailures && metrics.totalOK == 2 - expectedFailures &&
+                      state(sim, "topic").depth == 1, "topic did not honor overflow mode \(String(describing: overflow))")
+            }
+        },
         CheckCase(name: "engine breaker opens, trials retry and recover") {
             let sim = sim([node("db", .database) { $0.errors = 1 }],
                           [source(.manual, [call("db") { $0.breaker = Breaker(failures: 2, cooldown: 0.5) }])])
@@ -266,6 +387,75 @@ private func measure(_ format: String, _ values: CVarArg...) {
             sim.run(seconds: 0.03)
             check(sim.frame().edges["client->db"]?.breakerOpen == false && sim.metrics(flow: "requests").totalOK == 1,
                   "a successful trial should close the breaker")
+        },
+        CheckCase(name: "engine open breaker rejects immediately without retries") {
+            let sim = sim([node("db", .database) { $0.latency = .fixed(0); $0.errors = 1 }],
+                          [source(.manual, [call("db") {
+                              $0.breaker = Breaker(failures: 1, cooldown: 1)
+                              $0.backoff = 0.1
+                              $0.retries = 1
+                          }])])
+            sim.send("requests")
+            sim.run(seconds: 0.01)
+            check(sim.frame().edges["client->db"]?.breakerOpen == true, "fixture did not open the breaker")
+            let before = sim.metrics(flow: "requests").totalFailed
+            sim.send("requests")
+            let metrics = sim.metrics(flow: "requests")
+            check(metrics.totalFailed == before + 1 && metrics.inFlight == 1 && metrics.retries == 0,
+                  "open circuit did not immediately fail the fresh request")
+            sim.run(seconds: 0.2)
+            check(sim.metrics(flow: "requests").totalFailed == 2 && sim.metrics(flow: "requests").retries == 0,
+                  "open circuit left pending retry work")
+        },
+        CheckCase(name: "engine delay applies only to the named edge") {
+            let sim = sim([node("db", .database) { $0.latency = .fixed(0) }], [source(.manual, [call("db")])],
+                          edges: [Edge(from: "client", to: "db"), Edge(from: "db", to: "client")])
+            sim.perform([.delay("client", "db", 0.2), .delay("db", "client", 0.03), .delay("db", "client", 0)])
+            @MainActor func edges() -> (EdgeState?, EdgeState?) {
+                let frame = sim.frame()
+                return (frame.edges["client->db"], frame.edges["db->client"])
+            }
+            check(edges().0?.extraLatency == 0.2 && edges().1?.extraLatency == 0, "reversing or clearing delay disturbed the forward edge")
+            sim.send("requests")
+            sim.run(seconds: 0.5)
+            check(abs((sim.metrics(flow: "requests").p50 ?? 0) - 0.402) < 1e-9, "reply did not use the request edge")
+            sim.perform([.cut("client", "db")])
+            check(edges().0?.cut == true && edges().1?.cut == true, "cut did not partition both directions")
+            sim.perform([.heal("db", "client")])
+            check(edges().0?.cut == false && edges().1?.cut == false, "heal did not restore both directions")
+        },
+        CheckCase(name: "engine buffer slow and error faults affect ingress") {
+            for kind in [NodeKind.queue, .topic] {
+                let sim = sim([node("buffer", kind) { $0.latency = .fixed(0.1) }],
+                              [source(.manual, [Step(.publish(target: "buffer"))])])
+                sim.perform([.slow("buffer", 10), .fail("buffer", 1)])
+                sim.send("requests")
+                sim.run(seconds: 0.99)
+                check(sim.metrics(flow: "requests").inFlight == 1 && state(sim, "buffer").depth == 0,
+                      "\(kind) accepted or rejected before the slowed ingest finished")
+                sim.run(seconds: 0.02)
+                check(sim.metrics(flow: "requests").totalFailed == 1 && state(sim, "buffer").depth == 0 &&
+                      state(sim, "buffer").errors > 0, "\(kind) ignored its ingress error probability")
+                check(abs((state(sim, "buffer").p99 ?? 0) - 1) < 1e-9, "\(kind) did not measure its slowed ingress latency")
+                sim.perform([.restore("buffer")])
+                sim.send("requests")
+                sim.run(seconds: 0.11)
+                check(sim.metrics(flow: "requests").totalOK == 1 && state(sim, "buffer").depth == 1,
+                      "\(kind) did not resume successful ingress after restore")
+                sim.send("requests")
+                sim.run(seconds: 0.02)
+                sim.perform([.kill("buffer"), .restore("buffer")])
+                sim.run(seconds: 0.11)
+                check(sim.metrics(flow: "requests").totalFailed == 2 && state(sim, "buffer").depth == 1,
+                      "\(kind) stored a publish interrupted by a restart")
+            }
+            let normal = sim([node("queue", .queue)], [source(.manual, [Step(.publish(target: "queue"))])])
+            normal.perform([.slow("queue", 10)])
+            normal.send("requests")
+            normal.run(seconds: 0.002)
+            check(normal.metrics(flow: "requests").inFlight == 1, "default ingest latency was too short to slow")
+            normal.run(seconds: 0.002)
+            check(normal.metrics(flow: "requests").totalOK == 1, "default ingest latency did not complete")
         },
         CheckCase(name: "engine redirect and parallel wait") {
             let parallel = Step(.parallel([call("primary"), call("fast")]))

@@ -219,9 +219,9 @@ private func simulate(_ args: Arguments) throws -> Int32 {
         }
         simulation.start(scenario: scenario)
     }
-    simulation.run(seconds: seconds)
+    if !simulation.eventLimitReached { simulation.run(seconds: seconds) }
     print(simulation.report())
-    return 0
+    return simulation.eventLimitReached ? 1 : 0
 }
 
 private func fileTarget(_ text: String) -> URL? {

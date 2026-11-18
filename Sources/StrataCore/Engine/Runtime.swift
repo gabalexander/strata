@@ -5,6 +5,7 @@ enum SimulationEvent {
     case continueJob(RecordID)
     case deadline(RecordID)
     case request(Attempt, epoch: Int)
+    case finishPublish(Int, PublishOrigin, ingressEpoch: Int, arrived: Double)
     case response(Attempt, epoch: Int, Failure?)
     case timeout(RecordID, Int)
     case retry(RecordID)

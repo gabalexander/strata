@@ -90,6 +90,7 @@ private enum CommandSyntax {
             try require(1...2)
             let count = args.count == 2 ? Int(args[1]) : 1
             guard let count, count > 0 else { throw InvalidValue("send needs a positive request count") }
+            guard count <= SimulationLimits.send else { throw InvalidValue("send is limited to \(SimulationLimits.send) requests") }
             return .send(try id(0), count)
         case "rate":
             try require(2...3)

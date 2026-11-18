@@ -97,13 +97,22 @@ enum Syntax {
         if parts.count == 2, parts[0] == "every" {
             let interval = try duration(parts[1])
             guard interval > 0, (1 / interval).isFinite else { throw InvalidValue("an arrival interval must be positive and yield a finite rate") }
-            return .every(interval)
+            let minimum = 1 / SimulationLimits.rate
+            // Converting a duration such as 100us may round down by one ULP.
+            guard interval >= minimum.nextDown else { throw InvalidValue(rateLimitMessage) }
+            return .every(max(minimum, interval))
         }
         for (unit, divisor) in [("/s", 1.0), ("/min", 60.0)] where text.hasSuffix(unit) {
-            if let value = number(String(text.dropLast(unit.count))), value >= 0 { return .perSecond(value / divisor) }
+            if let value = number(String(text.dropLast(unit.count))), value >= 0 {
+                let rate = value / divisor
+                guard rate <= SimulationLimits.rate else { throw InvalidValue(rateLimitMessage) }
+                return .perSecond(rate)
+            }
         }
         throw InvalidValue("expected a rate such as 10/s, 600/min, every 2s, manual, or parent")
     }
+
+    static let rateLimitMessage = "a flow rate cannot exceed \(Int(SimulationLimits.rate))/s"
 
     static func probability(_ text: String) throws -> Double {
         let percent = text.hasSuffix("%")
@@ -156,14 +165,15 @@ enum Syntax {
 }
 
 enum ParameterType {
-    case distribution, duration, integer(min: Int), probability, bool, factor, nodeID, choices([String]), rate
+    case distribution, duration, integer(min: Int, max: Int = .max), probability, bool, factor, nodeID, choices([String]), rate
 
     static let node: [String: ParameterType] = [
-        "latency": .distribution, "concurrency": .integer(min: 1), "replicas": .integer(min: 1),
-        "queue": .integer(min: 0), "errors": .probability, "timeout": .duration, "retries": .integer(min: 0),
-        "backoff": .duration, "async": .bool, "capacity": .integer(min: 1),
+        "latency": .distribution, "concurrency": .integer(min: 1, max: SimulationLimits.concurrency),
+        "replicas": .integer(min: 1, max: SimulationLimits.replicas), "queue": .integer(min: 0, max: SimulationLimits.queue),
+        "errors": .probability, "timeout": .duration, "retries": .integer(min: 0),
+        "backoff": .duration, "async": .bool, "capacity": .integer(min: 1, max: SimulationLimits.capacity),
         "overflow": .choices(Overflow.allCases.map(\.rawValue)), "ttl": .duration, "dlq": .nodeID,
-        "prefetch": .integer(min: 0), "ack": .choices(AckMode.allCases.map(\.rawValue)),
+        "prefetch": .integer(min: 0, max: SimulationLimits.prefetch), "ack": .choices(AckMode.allCases.map(\.rawValue)),
         "onError": .choices(OnError.allCases.map(\.rawValue)), "maxDeliveries": .integer(min: 1),
         "hitRate": .probability, "up": .bool, "slow": .factor,
     ]
@@ -197,8 +207,9 @@ enum ParameterType {
             if n < 0 { throw InvalidValue("expected a nonnegative duration") }
         case (.rate, .number(let n)):
             if n < 0 { throw InvalidValue("expected a nonnegative rate") }
+            if n > SimulationLimits.rate { throw InvalidValue(Syntax.rateLimitMessage) }
         case (.rate, .string(let text)): _ = try Syntax.rate(text)
-        case (.integer(let min), .number(let n)) where Int(exactly: n).map({ $0 >= min }) == true: break
+        case (.integer(let min, let max), .number(let n)) where Int(exactly: n).map((min...max).contains) == true: break
         case (.probability, .number(let n)) where (0...1).contains(n): break
         case (.probability, .string(let text)) where text.hasSuffix("%"): _ = try Syntax.probability(text)
         case (.bool, .bool): break
@@ -214,7 +225,7 @@ enum ParameterType {
         case .duration: "a duration with units such as 20ms"
         case .distribution: "a latency distribution such as 20ms or 10ms..40ms"
         case .rate: "a rate such as 10/s or a nonnegative number"
-        case .integer(let min): "an integer of at least \(min)"
+        case .integer(let min, let max): max == .max ? "an integer of at least \(min)" : "an integer between \(min) and \(max)"
         case .probability: "a probability between 0 and 1 or a percentage"
         case .bool: "true or false"
         case .factor: "a positive factor"

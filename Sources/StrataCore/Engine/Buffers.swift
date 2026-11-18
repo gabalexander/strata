@@ -14,9 +14,15 @@ struct DeadLetter {
     let message: Message
 }
 
+enum PublishOrigin {
+    case request(Attempt, epoch: Int)
+    case deadLetter(DeadLetter)
+}
+
 @MainActor
 final class MessageBuffer {
     var messages: [Int: Message] = [:]
+    var expiringDeliveries: [Int: RecordID] = [:]
     var order = FIFO<Int>()
     var next = 0
     var consumers: [Int] = []
@@ -24,6 +30,7 @@ final class MessageBuffer {
     var unacked = 0
     var reserved = 0
     var lost = 0
+    var ingressEpoch = 0
     var pumpPending = false
 
     func remove(_ sequence: Int) -> Message? {
@@ -73,20 +80,75 @@ struct Delivery {
 
 @MainActor
 extension Simulation {
-    func publish(to index: Int, traffic: Traffic, deadLetterHops: Int = 0) -> Failure? {
+    func beginPublish(to index: Int, from origin: PublishOrigin) {
         let node = nodes[index]
-        guard let buffer = node.buffer else { return .invalidTarget }
+        guard let buffer = node.buffer else {
+            completePublish(origin, failure: .invalidTarget)
+            return
+        }
         node.arrivals.add(at: now)
         guard node.up else {
             recordFailure(at: index)
-            return .refused
+            completePublish(origin, failure: .refused)
+            return
         }
+        let duration = random.sample(node.params.latency!) * node.slow
+        if duration > 0 {
+            schedule(.finishPublish(index, origin, ingressEpoch: buffer.ingressEpoch, arrived: now), at: now + duration)
+        } else {
+            finishPublish(to: index, from: origin, ingressEpoch: buffer.ingressEpoch, arrived: now)
+        }
+    }
+
+    func finishPublish(to index: Int, from origin: PublishOrigin, ingressEpoch: Int, arrived: Double) {
+        let node = nodes[index]
+        let buffer = node.buffer!
+        guard buffer.ingressEpoch == ingressEpoch else {
+            recordFailure(at: index)
+            completePublish(origin, failure: .reset)
+            return
+        }
+        node.latency.add(now - arrived, at: now)
+        guard !random.occurs(node.params.errors!) else {
+            recordFailure(at: index)
+            completePublish(origin, failure: .handler)
+            return
+        }
+        let traffic: Traffic
+        let deadLetterHops: Int
+        switch origin {
+        case .request(let attempt, _):
+            traffic = attempt.traffic
+            deadLetterHops = 0
+        case .deadLetter(let letter):
+            traffic = letter.message.traffic
+            deadLetterHops = letter.message.deadLetterHops + 1
+        }
+        completePublish(origin, failure: storeMessage(in: index, traffic: traffic, deadLetterHops: deadLetterHops))
+    }
+
+    private func completePublish(_ origin: PublishOrigin, failure: Failure?) {
+        switch origin {
+        case .request(let attempt, let epoch):
+            receiveResponse(attempt, epoch: epoch, failure: failure)
+        case .deadLetter(let letter):
+            switch failure {
+            case nil, .bufferFull: break // Overflow has its own dead-letter and loss accounting.
+            default: nodes[letter.source].buffer?.lost += 1
+            }
+        }
+    }
+
+    private func storeMessage(in index: Int, traffic: Traffic, deadLetterHops: Int) -> Failure? {
+        let node = nodes[index]
+        let buffer = node.buffer!
         let topic = node.node.kind == .topic
         let ttl = node.params.ttl!
         let message = Message(sequence: buffer.next, traffic: traffic,
                               expires: ttl > 0 ? now + ttl : nil, deadLetterHops: deadLetterHops)
         let capacity = max(0, node.params.capacity!)
-        if capacity == 0 || (!topic && buffer.messages.count + buffer.reserved >= capacity) {
+        let full = buffer.messages.count + buffer.reserved >= capacity
+        if capacity == 0 || (full && (!topic || node.params.overflow == .reject)) {
             note(.overflow, "\(node.node.id) overflowed", node: index)
             if capacity > 0, node.params.overflow == .dropOldest,
                buffer.reserved < capacity, let oldest = buffer.order.first {
@@ -114,10 +176,26 @@ extension Simulation {
     }
 
     func expire(_ index: Int, message sequence: Int) {
-        guard nodes[index].buffer?.messages[sequence] != nil else { return }
-        note(.expired, "Message expired in \(nodes[index].node.id)", node: index)
-        removeReady(index, message: sequence, deadLetter: true)
-        requestBufferPump(index)
+        guard let buffer = nodes[index].buffer else { return }
+        if buffer.messages[sequence] != nil {
+            note(.expired, "Message expired in \(nodes[index].node.id)", node: index)
+            removeReady(index, message: sequence, deadLetter: true)
+            requestBufferPump(index)
+        } else if let id = buffer.expiringDeliveries[sequence], let delivery = deliveries[id] {
+            let worker = nodes[flows[delivery.flow].consumer!]
+            if delivery.stage == .inbox {
+                worker.deliveryQueued -= 1
+                finishFlow(delivery.flow, arrived: delivery.receivedAt, success: false)
+            }
+            detachDelivery(id, delivery)
+            let replica = delivery.replica
+            if worker.replicas[replica].inbox.count > worker.deliveryQueued * 2 + 64 {
+                var inbox = FIFO<RecordID>()
+                for id in worker.replicas[replica].inbox.elements where deliveries[id] != nil { inbox.append(id) }
+                worker.replicas[replica].inbox = inbox
+            }
+            expireQueueMessage(delivery.message, in: index)
+        }
     }
 
     func trimTopic(_ index: Int) {
@@ -183,11 +261,7 @@ extension Simulation {
             nodes[letter.source].buffer?.lost += 1
             return
         }
-        if let failure = publish(to: letter.target, traffic: letter.message.traffic,
-                                 deadLetterHops: letter.message.deadLetterHops + 1),
-           case .refused = failure {
-            nodes[letter.source].buffer?.lost += 1
-        }
+        beginPublish(to: letter.target, from: .deadLetter(letter))
     }
 
     func requestBufferPump(_ index: Int) {
@@ -236,6 +310,7 @@ extension Simulation {
             let delivery = Delivery(flow: candidate.flow, buffer: index, message: message,
                                     replica: candidate.replica, ack: ack, traffic: traffic)
             let id = deliveries.insert(delivery)
+            if message.expires != nil { buffer.expiringDeliveries[message.sequence] = id }
             worker.deliveries.insert(id)
             buffer.reserved += 1
             if ack == .manual {
@@ -344,6 +419,9 @@ extension Simulation {
         let flow = flows[delivery.flow]
         let index = flow.consumer!
         let node = nodes[index]
+        if flow.group == nil, delivery.message.expires != nil {
+            nodes[delivery.buffer].buffer!.expiringDeliveries.removeValue(forKey: delivery.message.sequence)
+        }
         deliveries[id]!.stage = .handling
         let job = jobs.insert(Job(end: .delivery(id), node: index, traffic: delivery.traffic,
                                   arrived: delivery.receivedAt, program: flow.program))
@@ -366,19 +444,14 @@ extension Simulation {
         }
 
         let onError = worker.onErrorOverride ?? worker.node.params.onError ?? (flow.group == nil ? .requeue : .retry)
+        let requeue = flow.group == nil && delivery.ack == .manual && onError == .requeue
         if flow.group != nil, onError == .retry {
             waitToRetry(id, delivery)
-        } else if flow.group == nil, delivery.ack == .manual, onError == .requeue,
-                  delivery.message.attempts < worker.params.maxDeliveries! {
+        } else if requeue, delivery.message.attempts < worker.params.maxDeliveries! {
             returnToQueue(id, delivery)
         } else {
-            let poison = flow.group == nil && delivery.ack == .manual && onError == .requeue
             detachDelivery(id, delivery)
-            if onError == .dlq || poison {
-                if !routeDeadLetter(delivery.message, from: delivery.buffer, consumer: index) {
-                    nodes[delivery.buffer].buffer!.lost += 1
-                }
-            } else {
+            if !(onError == .dlq || requeue) || !routeDeadLetter(delivery.message, from: delivery.buffer, consumer: index) {
                 nodes[delivery.buffer].buffer!.lost += 1
             }
         }
@@ -418,6 +491,7 @@ extension Simulation {
             group.lag -= 1
             requestNodePump(flow.consumer!)
         } else {
+            buffer.expiringDeliveries.removeValue(forKey: delivery.message.sequence)
             if delivery.ack == .manual {
                 node.replicas[delivery.replica].prefetch -= 1
                 buffer.unacked -= 1
@@ -430,18 +504,26 @@ extension Simulation {
     private func returnToQueue(_ id: RecordID, _ delivery: Delivery) {
         detachDelivery(id, delivery)
         if let expires = delivery.message.expires, expires <= now {
-            note(.expired, "Message expired in \(nodes[delivery.buffer].node.id)", node: delivery.buffer)
-            if !routeDeadLetter(delivery.message, from: delivery.buffer) {
-                nodes[delivery.buffer].buffer!.lost += 1
-            }
+            expireQueueMessage(delivery.message, in: delivery.buffer)
         } else {
             nodes[delivery.buffer].buffer!.push(delivery.message)
         }
     }
 
+    private func expireQueueMessage(_ message: Message, in index: Int) {
+        note(.expired, "Message expired in \(nodes[index].node.id)", node: index)
+        if !routeDeadLetter(message, from: index) { nodes[index].buffer!.lost += 1 }
+    }
+
     private func waitToRetry(_ id: RecordID, _ delivery: Delivery) {
         let flow = flows[delivery.flow]
+        let consumer = flow.consumer!
         let buffer = nodes[delivery.buffer].buffer!
+        if delivery.message.attempts >= nodes[consumer].params.maxDeliveries! {
+            detachDelivery(id, delivery)
+            if !routeDeadLetter(delivery.message, from: delivery.buffer, consumer: consumer) { buffer.lost += 1 }
+            return
+        }
         guard buffer.messages[delivery.message.sequence] != nil else {
             detachDelivery(id, delivery)
             noteRetentionLoss(delivery.buffer, flow: delivery.flow)
@@ -450,7 +532,7 @@ extension Simulation {
         flow.group!.blocked.insert(delivery.message.sequence)
         deliveries[id]!.stage = .retryWaiting
         deliveries[id]!.retryCount += 1
-        let backoff = nodes[flow.consumer!].params.backoff!
+        let backoff = nodes[consumer].params.backoff!
         schedule(.retryDelivery(id), at: now + max(0.001, retryDelay(backoff, attempt: delivery.retryCount)))
     }
 

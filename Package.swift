@@ -19,6 +19,6 @@ let package = Package(
         .executableTarget(name: "StrataApp", dependencies: ["StrataCore", "StrataUI"], swiftSettings: swift5),
         .executableTarget(name: "strata", dependencies: ["StrataCore"], swiftSettings: swift5),
         .executableTarget(name: "StrataSnapshot", dependencies: ["StrataCore", "StrataUI"], swiftSettings: swift5),
-        .executableTarget(name: "StrataChecks", dependencies: ["StrataCore"], swiftSettings: swift5),
+        .executableTarget(name: "StrataChecks", dependencies: ["StrataCore", "strata"], swiftSettings: swift5),
     ]
 )

@@ -72,6 +72,10 @@ aliases, tags, or multi-document streams. A `.json` file with the same structure
 | probability | `0.2` or `20%` | |
 | markdown | any string | shown rendered; `` `code` ``, `**bold**`, `[[note or sim id]]` links, glossary terms are auto-linked |
 
+Each flow can generate up to 10,000 requests per second. Each `send` command can start up to
+10,000 requests. Validation warns about zero-time publish cycles. At runtime, the simulator pauses
+and logs a diagnostic when events keep generating work at the same timestamp or hit the event budget.
+
 ## Top level
 
 | Key | Required | Meaning |
@@ -137,7 +141,7 @@ Any node can have its own level inside it:
   detail: orders-deep   # or another manifest as the deep dive
   actions: [...]        # extra right-click actions, see Actions
   # behaviour, all optional (defaults depend on kind):
-  latency: 30ms         # service time per request (a distribution)
+  latency: 30ms         # handling time per request or publish (a distribution)
   concurrency: 8        # requests processed at once, per replica (threads, connections, workers)
   replicas: 3
   queue: 100            # waiting room for requests when all slots are busy; beyond it they get 503
@@ -179,8 +183,8 @@ Any node can have its own level inside it:
 | `llm` | server | model, inference | p50 800ms p99 4s | 4 | 100 |
 | `vector` | server | vectordb, embeddings | 10ms | 32 | 200 |
 | `port` | server and source | in, out, boundary | 0ms | unlimited | unlimited |
-| `queue` | buffer | rabbitmq, sqs, amqp | | | |
-| `topic` | buffer | kafka, pubsub, sns, stream, kinesis | | | |
+| `queue` | buffer | rabbitmq, sqs, amqp | fixed 0.2ms | | |
+| `topic` | buffer | kafka, pubsub, sns, stream, kinesis | fixed 0.2ms | | |
 | `note` | annotation | sticky | | | |
 
 Aliases set the kind and, when `tech` is missing, use the alias as the tech badge
@@ -192,8 +196,11 @@ Aliases set the kind and, when `tech` is missing, use the alias as the tech badg
 - **Notes** are sticky annotations: `doc` is the text. They have no behaviour.
 
 Defaults: `replicas: 1`, `errors: 0`, no timeout, no retries, `backoff: 100ms`, `capacity: 10000`,
-`overflow: reject`, `prefetch: 10`, `ack: manual`, `onError: requeue` (queues) or `retry` (topics),
-`hitRate: 90%`.
+`overflow: reject` (queues) or `drop-oldest` (topics), `prefetch: 10`, `ack: manual`,
+`onError: requeue` (queues) or `retry` (topics), `hitRate: 90%`.
+
+Explicit limits are 64 replicas, 100,000 concurrency or prefetch per replica, and 1,000,000 for
+`capacity` or the `queue` waiting room. Runtime updates above these limits are clamped and logged.
 
 ## Edges
 
@@ -280,9 +287,9 @@ What happens on a `call`:
 5. A caller that times out moves on (retry or fail). The target keeps working anyway: wasted work,
    and its late response is drawn as a faded orphan.
 6. Retries wait `backoff × 2^attempt` (±50% jitter). Each attempt is real load on the target.
-7. A breaker opens after `failures` consecutive failures. Calls then fail instantly ("breaker
-   open") for `cooldown`. After that one trial call is let through: success closes the breaker,
-   failure opens it again.
+7. A breaker opens after `failures` consecutive failures. During `cooldown`, it rejects calls
+   immediately ("breaker open") without using the caller's retry budget. After that one trial call
+   is let through: success closes the breaker, failure opens it again.
 
 Messages (`publish` and consumer flows):
 
@@ -297,9 +304,18 @@ Messages (`publish` and consumer flows):
 - **Topics** keep messages, up to `capacity`. Every consumer flow (`by:` node) is a separate
   consumer group with its own offset, so each group gets every message. Its lag is the number of
   messages it hasn't processed yet. On failure it retries in place, skips, or dead-letters, per
-  `onError`.
-- `ttl` expires old messages and `dlq` receives the casualties. Publishing to a down or full
-  buffer fails the publish step.
+  `onError`. A group that reaches `maxDeliveries` while retrying advances past the message and
+  sends it to the configured DLQ, or drops it if no DLQ is available.
+- `ttl` expires old messages and `dlq` receives expired messages. Queue messages can expire
+  while traveling to a consumer or waiting in its inbox. Once a handler starts, it runs to
+  completion even if the TTL elapses. A failed message that is past its TTL expires if it would
+  return to the queue.
+- Publishing to a down buffer or one at capacity with `overflow: reject` fails the publish step.
+  With `drop-oldest`, a queue can evict ready messages. It rejects a publish if deliveries have
+  reserved all of its capacity.
+- A buffer spends its own `latency × slow` handling a publish after it crosses the producer's
+  edge. With probability `errors`, ingress fails without storing the message. The publisher waits
+  for ingress to complete. Consumers run independently.
 
 ## Controls
 
@@ -354,7 +370,7 @@ Actions and scenarios change a running simulation with one-line commands:
 | `rate <flow> <rate>` | change a flow's rate (`rate place-order 50/s`) |
 | `send <flow> [n]` | fire n requests now (default 1) |
 | `cut <a> <b>` / `heal <a> <b>` | partition the link between two nodes (both directions) |
-| `delay <a> <b> <duration>` | add one-way latency to a link (`0ms` clears) |
+| `delay <a> <b> <duration>` | add latency per traversal of the declared `a → b` edge (`0ms` clears) |
 | `redirect <node> <other>` / `unredirect <node>` | calls and publishes to `node` go to `other` (failover, promotion) |
 | `purge <buffer>` | drop every ready message |
 | `say <text>` | show narration |
