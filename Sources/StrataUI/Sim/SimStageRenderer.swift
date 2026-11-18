@@ -12,6 +12,7 @@ final class StageRenderer {
 
     enum Lettering: Hashable {
         case label, node, compactNode, badge, live, mutedLive, failure, hint
+        case tag(Color)
     }
 
     private struct TextKey: Hashable {
@@ -46,9 +47,11 @@ final class StageRenderer {
         let viewport = CGRect(origin: camera.world(.zero), size: CGSize(width: size.width / camera.zoom, height: size.height / camera.zoom))
             .insetBy(dx: -35, dy: -35)
         // An op's path (SimOpsState): its nodes and edges draw lit, everything else slightly dimmed.
+        // Pressure overlays (SimPressureStage) use the same path with their own colours; heat dims nothing.
         var dimmed = context
         dimmed.opacity = 0.4
-        func edgeContext(_ id: String) -> GraphicsContext { highlight.map { $0.edges.contains(id) } == false ? dimmed : context }
+        let dims = highlight?.dimsRest ?? false
+        func edgeContext(_ id: String) -> GraphicsContext { dims && highlight?.edges.contains(id) == false ? dimmed : context }
 
         for region in layout.regions where viewport.intersects(region.rect) { drawRegion(region, in: context) }
 
@@ -57,9 +60,10 @@ final class StageRenderer {
         let visibleEdges = routes.filter { viewport.intersects($0.path.boundingRect.insetBy(dx: -1, dy: -1)) }
         for route in visibleEdges {
             let hit = StageSelection.edge(route.edge.id)
+            let tint = highlight?.edgeTints[route.edge.id]
             drawEdge(route, state: frame.edges[route.edge.id] ?? EdgeState(),
-                     selected: selected == hit || highlight?.edges.contains(route.edge.id) == true,
-                     hovered: hovered == hit, in: edgeContext(route.edge.id))
+                     selected: selected == hit || tint == nil && highlight?.edges.contains(route.edge.id) == true,
+                     hovered: hovered == hit, tint: tint, in: edgeContext(route.edge.id))
         }
 
         // One fill per color and mark keeps dense traffic from issuing a draw call for each token.
@@ -77,7 +81,7 @@ final class StageRenderer {
             case .orphan: index + flowColors.count
             default: index
             }
-            if highlight.map({ $0.edges.contains(token.edge) }) == false {
+            if dims, highlight?.edges.contains(token.edge) == false {
                 offPath[layer].add(token.kind, at: point, focused: focused)
             } else {
                 marks[layer].add(token.kind, at: point, focused: focused)
@@ -100,8 +104,14 @@ final class StageRenderer {
             let hit = StageSelection.node(card.node.id)
             let lit = highlight.map { $0.nodes.contains(card.node.id) }
             drawNode(card, state: frame.nodes[card.node.id] ?? NodeState(), time: frame.t,
-                     selected: selected == hit, hovered: hovered == hit, lit: lit == true, note: notes.contains(card.node.id),
-                     in: lit == false && selected != hit ? dimmed : context)
+                     selected: selected == hit, hovered: hovered == hit, lit: lit == true,
+                     tint: highlight?.tints[card.node.id], note: notes.contains(card.node.id),
+                     in: dims && lit == false && selected != hit ? dimmed : context)
+        }
+        if let tints = highlight?.tints, !tints.isEmpty {
+            for card in layout.cards where viewport.intersects(card.rect) {
+                if let tint = tints[card.node.id], let tag = tint.tag { drawTag(tag, tint: tint, on: card.rect, in: context) }
+            }
         }
         if let focusToken, let label = focusToken.token.label {
             pill(label, at: focusToken.point + CGPoint(x: 9, y: -18), width: 144, color: Theme.borderStrong,
@@ -138,14 +148,18 @@ final class StageRenderer {
     }
 
     private func drawEdge(_ route: StageLayout.Route, state: EdgeState, selected: Bool, hovered: Bool,
-                          in context: GraphicsContext) {
-        let ink = state.cut ? Theme.bad : state.breakerOpen ? Theme.warn : selected ? Theme.accent :
+                          tint: StageTint? = nil, in context: GraphicsContext) {
+        let tinted = tint.map { $0.color.opacity(0.45 + 0.45 * $0.strength) }
+        let ink = state.cut ? Theme.bad : state.breakerOpen ? Theme.warn : selected ? Theme.accent : tinted ??
             Theme.text.opacity(hovered ? 0.58 : 0.20 + min(0.38, log1p(max(0, state.rate)) * 0.08))
-        if selected || hovered {
+        if let tint, !selected {
+            context.stroke(route.path, with: .color(tint.color.opacity(0.06 + 0.12 * tint.strength)),
+                           style: StrokeStyle(lineWidth: 8, lineCap: .round))
+        } else if selected || hovered {
             context.stroke(route.path, with: .color(ink.opacity(0.12)), style: StrokeStyle(lineWidth: 8, lineCap: .round))
         }
         context.stroke(route.path, with: .color(ink),
-                       style: StrokeStyle(lineWidth: selected || hovered ? 2 : 1.5, lineCap: .round,
+                       style: StrokeStyle(lineWidth: selected || hovered || tint != nil ? 2 : 1.5, lineCap: .round,
                                           dash: state.cut ? [4, 5] : []))
         context.stroke(route.arrow, with: .color(ink), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
     }
@@ -203,7 +217,7 @@ final class StageRenderer {
     }
 
     private func drawNode(_ card: StageLayout.Card, state: NodeState, time: Double, selected: Bool,
-                          hovered: Bool, lit: Bool = false, note: Bool, in context: GraphicsContext) {
+                          hovered: Bool, lit: Bool = false, tint mark: StageTint? = nil, note: Bool, in context: GraphicsContext) {
         let node = card.node
         let r = card.rect
         let shape = Path(roundedRect: r, cornerRadius: Theme.radius)
@@ -211,19 +225,29 @@ final class StageRenderer {
         let tint = node.simTint
         let elapsed = state.lastFailure.map { time - $0 } ?? .infinity
         let flash = max(0, 1 - elapsed / 0.5)
+        if let mark, mark.ring {
+            let ring = Path(roundedRect: r.insetBy(dx: -6, dy: -6), cornerRadius: Theme.radius + 6)
+            context.stroke(ring, with: .color(mark.color.opacity(0.78)), style: StrokeStyle(lineWidth: 1.25, dash: [4, 3]))
+        }
         if selected {
             let halo = Path(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: Theme.radius + 3)
             context.fill(halo, with: .color(Theme.accent.opacity(0.10)))
             context.stroke(halo, with: .color(Theme.accent.opacity(0.12)), lineWidth: 3)
+        } else if let mark {
+            let halo = Path(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: Theme.radius + 3)
+            context.fill(halo, with: .color(mark.color.opacity(0.03 + 0.08 * mark.strength)))
+            context.stroke(halo, with: .color(mark.color.opacity(0.04 + 0.12 * mark.strength)), lineWidth: 3)
         } else if lit {
             let halo = Path(roundedRect: r.insetBy(dx: -3, dy: -3), cornerRadius: Theme.radius + 3)
             context.fill(halo, with: .color(Theme.accent.opacity(0.06)))
         }
         context.fill(shape, with: .color(node.kind == .note ? Theme.surface : Theme.raised))
-        let stroke = selected ? Theme.accent : lit ? Theme.accent.opacity(0.62) : down ? Theme.bad.opacity(0.38) :
-            hovered ? Theme.text.opacity(0.37) : Theme.borderStrong
+        let tinted = mark.map { $0.color.opacity(0.40 + 0.48 * $0.strength) }
+        let stroke = selected ? Theme.accent : tinted ?? (lit ? Theme.accent.opacity(0.62) : down ? Theme.bad.opacity(0.38) :
+            hovered ? Theme.text.opacity(0.37) : Theme.borderStrong)
         let dashes: [CGFloat] = node.kind == .external && !selected ? [4, 3] : []
-        context.stroke(shape, with: .color(stroke), style: StrokeStyle(lineWidth: selected ? 1.5 : 1, dash: dashes))
+        context.stroke(shape, with: .color(stroke),
+                       style: StrokeStyle(lineWidth: selected ? 1.5 : mark != nil ? 1.25 : 1, dash: dashes))
         if flash > 0 || state.health == .failing {
             let pulse = 0.38 + sin(time * 14) * 0.16
             context.stroke(shape, with: .color(Theme.bad.opacity(max(pulse, flash))), lineWidth: 1.5)
@@ -315,6 +339,18 @@ final class StageRenderer {
         }
     }
 
+    /// A pressure tag (`util 92%`, `stops here`) sitting on the card's top edge, right-aligned.
+    private func drawTag(_ value: String, tint: StageTint, on r: CGRect, in context: GraphicsContext) {
+        let resolved = text(value, .tag(tint.color), in: context)
+        let size = resolved.measure(in: CGSize(width: 160, height: 16))
+        let box = CGRect(x: r.maxX - 12 - size.width - 10, y: r.minY - 9, width: size.width + 10, height: 15)
+        let shape = Path(roundedRect: box, cornerRadius: 5)
+        context.fill(shape, with: .color(Theme.overlay))
+        context.fill(shape, with: .color(tint.color.opacity(0.13)))
+        context.stroke(shape, with: .color(tint.color.opacity(0.42)), lineWidth: 1)
+        context.draw(resolved, at: CGPoint(x: box.midX, y: box.midY))
+    }
+
     private func drawReplicas(_ count: Int, at point: CGPoint, tint: Color, in context: GraphicsContext) {
         let extra = count > 5
         let dots = min(5, count)
@@ -378,6 +414,7 @@ final class StageRenderer {
         case .mutedLive: (font, color) = (Theme.small, Theme.muted)
         case .failure: (font, color) = (Theme.mono(10, .medium), Theme.bad)
         case .hint: (font, color) = (Theme.small, Theme.muted)
+        case .tag(let tint): (font, color) = (Theme.mono(10, .medium), tint)
         }
         func resolve(_ value: String) -> GraphicsContext.ResolvedText {
             context.resolve(Text(verbatim: value).font(font).foregroundStyle(color))

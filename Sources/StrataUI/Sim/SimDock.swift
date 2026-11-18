@@ -4,6 +4,7 @@ import StrataCore
 @_spi(Snapshots) public enum SimDockTab: String, CaseIterable {
     case controls = "Controls"
     case scenarios = "Try this"
+    case pressure = "Pressure"
     case log = "Log"
     case glossary = "Glossary"
     case about = "About"
@@ -12,6 +13,7 @@ import StrataCore
         switch self {
         case .controls: "slider.horizontal.3"
         case .scenarios: "flag"
+        case .pressure: "gauge.with.dots.needle.67percent"
         case .log: "list.bullet.rectangle"
         case .glossary: "text.book.closed"
         case .about: "info.circle"
@@ -28,6 +30,8 @@ struct SimDock: View, Equatable {
     let selection: StageSelection?
     var pulse: SimPulse?
     var still = false
+    /// Selects on the stage (the Pressure tab's rows).
+    var select: (StageSelection?) -> Void = { _ in }
     @SwiftUI.Binding var tab: SimDockTab
     @State private var filterNode = true
 
@@ -61,11 +65,16 @@ struct SimDock: View, Equatable {
                     .accessibilityAddTraits(tab == item ? .isSelected : [])
                 }
                 Spacer(minLength: 0)
+                if tab == .pressure { SimPressureHeatToggle(sim: sim) }
                 SimButton(title: "Hide dock", icon: "chevron.down", iconOnly: true) { model.dockVisible = false }
             }
             .padding(.horizontal, 12).frame(height: 40)
             Rectangle().fill(Theme.border).frame(height: 1)
-            scrollable
+            if tab == .pressure {
+                SimPressureTab(sim: sim, model: model, pulse: pulse, still: still, select: select)
+            } else {
+                scrollable
+            }
         }
         .background(Theme.surface)
     }
@@ -78,6 +87,7 @@ struct SimDock: View, Equatable {
                 switch tab {
                 case .controls: controls
                 case .scenarios: scenarios
+                case .pressure: EmptyView()
                 case .log: SimLive(sim: sim, pulse: nil) { logContent }
                 case .glossary: glossary
                 case .about: about

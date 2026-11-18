@@ -102,6 +102,7 @@ struct SimInspector: View {
                 }
             }
             if let doc = node.doc { SimMarkdown(source: doc, model: model, terms: terms) }
+            SimPressureInspectorRow(sim: sim, node: node)
             live {
                 let items = actions.nodeActions(node, state: nodeState(node))
                 if !items.isEmpty {

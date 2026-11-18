@@ -19,6 +19,7 @@ struct SimActions {
             + sim.level.nodes.filter(\.canDeepDive).map { node in
                 command("Deep dive into \(node.label)", icon: "square.3.layers.3d") { dive(node) }
             }
+            + SimPressureMenus.palette(sim: sim, model: model)
         if let selection {
             let menu = menu(for: selection)
             if let heading = menu.first, heading.isHeader {
@@ -45,6 +46,7 @@ struct SimActions {
             var items = [MenuItem.header(node.label)]
             items += nodeActions(node, state: state, full: true)
             if let ops = SimOpsMenus.node(node, sim: sim, model: model) { items += [.separator, ops] }
+            items += SimPressureMenus.node(node, sim: sim, model: model)
             let sourceFlows = sim.level.flows.filter { $0.from == node.id }
             if !sourceFlows.isEmpty { items += [.separator] + sourceFlows.map(sendItem) }
             if supportsNotes {

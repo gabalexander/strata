@@ -16,6 +16,11 @@ struct OpRef: Hashable, Sendable {
 struct StageHighlight: Equatable, Sendable {
     var nodes: Set<String> = []
     var edges: Set<String> = []
+    /// Pressure overlays (SimPressureStage): a colour per node or edge in place of the accent.
+    var tints: [String: StageTint] = [:]
+    var edgeTints: [String: StageTint] = [:]
+    /// Heat mode tints every node and dims nothing.
+    var dimsRest = true
 }
 
 /// Inspector groups, in display order.

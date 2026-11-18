@@ -158,7 +158,7 @@ private struct SimWorkspace: View {
                     if model.dockVisible {
                         Rectangle().fill(Theme.border).frame(height: 1)
                         SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, pulse: pulse,
-                                still: snapshot != nil, tab: $tab)
+                                still: snapshot != nil, select: select, tab: $tab)
                             .equatable()
                             .frame(width: columnWidth, height: dockHeight)
                     }
@@ -182,6 +182,10 @@ private struct SimWorkspace: View {
         }
         .onChange(of: model.vault.revision) { _, _ in updateNotes() }
         .onChange(of: SimFocus.of(model).request) { _, _ in takeFocus() }
+        .onChange(of: SimPressureState.of(sim).tabRequest) { _, _ in
+            tab = .pressure
+            model.dockVisible = true
+        }
         .onDisappear { navigation?.cancel() }
     }
 
@@ -189,7 +193,7 @@ private struct SimWorkspace: View {
         SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
                  selection: selection, noteIDs: noteIDs, still: snapshot != nil,
                  onSelect: select, onDive: { if let node = sim.level.node($0) { dive(node) } },
-                 menu: actions.menu, onKey: key, pulse: pulse)
+                 menu: actions.menu, onKey: key, pulse: pulse, pressureOpen: pressureOpen)
             .scaleEffect(presentationScale, anchor: viewport.origin(for: presentationNode, in: renderer.layout, compact: false))
             .opacity(presentationOpacity)
             .clipped()
@@ -201,9 +205,13 @@ private struct SimWorkspace: View {
     /// The zoom out of a level runs `Theme.gentle`; the next level opens just before it finishes.
     private static let routeSwitchDelay = Duration.milliseconds(200)
 
+    /// The Pressure tab is on screen: a selected node shows its blast radius.
+    private var pressureOpen: Bool { tab == .pressure && model.dockVisible }
+
     private func select(_ target: StageSelection?) {
         selection = target
         SimOpsState.of(sim).selectionChanged(to: target)
+        SimPressureState.of(sim).selectionChanged(to: target)
         model.overlays.dismissMenu()
     }
 
@@ -303,7 +311,7 @@ private struct SimWorkspace: View {
         if event.keyCode == 53 {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }
             else if model.overlays.card != nil { model.overlays.closeTerm() }
-            else if SimOpsState.of(sim).escape(selection) { return true }
+            else if SimPressureState.of(sim).escape(selection, tabOpen: pressureOpen, sim: sim) { return true }
             else if selection != nil { select(nil) }
             else if !sim.path.isEmpty { up(sim.path.count - 1) }
             else if detailParent != nil { out() }

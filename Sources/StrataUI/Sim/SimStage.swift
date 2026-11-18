@@ -78,6 +78,8 @@ struct SimStage: View {
     var onKey: ((NSEvent) -> Bool)?
     /// Beaten by the frame clock while playing, for the live numbers in the panels around the stage.
     var pulse: SimPulse?
+    /// The dock's Pressure tab is open: a selected node shows its blast radius (SimPressureState).
+    var pressureOpen = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clock = StageClock()
@@ -86,6 +88,7 @@ struct SimStage: View {
 
     var body: some View {
         let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
+        let _ = SimPressureState.of(sim).watch()          // so do heat mode and a pinned blast radius
         GeometryReader { proxy in
             let camera = viewport.current(renderer.layout, in: proxy.size, compact: compact)
             let canvas = stageCanvas(camera)
@@ -159,6 +162,9 @@ struct SimStage: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay(alignment: .topLeading) {
+                if !compact { SimPressureLegend(sim: sim, selection: selection, tabOpen: pressureOpen) }
+            }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { viewport.size = $0 }
         }
         .clipped()
@@ -204,7 +210,9 @@ struct SimStage: View {
     }
 
     private func paint(_ camera: StageCamera) -> some View {
-        let highlight = SimOpsState.of(sim).highlight(for: selection)   // an op row's path (SimOpsState)
+        // An op row's path (SimOpsState) or a pressure overlay (heat, blast radius): the last requested wins.
+        let highlight = compact ? SimOpsState.of(sim).highlight(for: selection)
+            : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim)
         return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,
