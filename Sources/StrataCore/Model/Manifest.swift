@@ -33,9 +33,17 @@ public struct Manifest: Sendable, Identifiable {
 
     /// The level reached by following `path` (node ids) through `inside:` levels. nil if the path
     /// leaves this manifest (a node with `detail:` instead of `inside:`) or doesn't exist.
+    /// An element `node#op` enters the `inside:` level of that node's operation.
     public func level(at path: [String]) -> Level? {
         var level = root
         for id in path {
+            if let hash = id.firstIndex(of: "#") {
+                let nodeID = String(id[..<hash]), opID = String(id[id.index(after: hash)...])
+                guard let node = level.nodes.first(where: { $0.id == nodeID }),
+                      let inner = node.ops.first(where: { $0.id == opID })?.inside else { return nil }
+                level = inner
+                continue
+            }
             guard let node = level.nodes.first(where: { $0.id == id }), let inner = node.inside else { return nil }
             level = inner
         }

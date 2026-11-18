@@ -279,7 +279,8 @@ names its buffer in `topic` or `target`). Override with `direction: in|out`.
 - `calls: node/op` links an outbound call to the endpoint it reaches, so you can follow a request
   through the code: gateway → orders-svc `POST /orders` → `INSERT order + outbox`.
 - `inside:` gives an op its own level (for example the lock and transaction sequence of a query),
-  and `detail:` opens another manifest.
+  and `detail:` opens another manifest. In a level path that level is the element `node#op`:
+  `view: [orders#insert-order]` in an embed, `?path=orders%23insert-order` in a `strata://sim/` link.
 
 **Live numbers.** A step names the op it performs with `op:`. That counts its rate, errors and
 latency on the op:
