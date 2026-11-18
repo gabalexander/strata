@@ -137,12 +137,12 @@ struct GraphScreen: View {
                     .onEnded { _ in lastMagnification = 1 }
             )
             .onRightClick { local, global in
-                guard let hit = node(at: local) else { return }
-                let node = layout.graph.nodes[hit]
-                model.overlays.showMenu([
-                    .header(node.title),
-                    MenuItem("Open", icon: "arrow.up.right") { model.open(node.route) },
-                ], at: global)
+                hoverPoint = nil
+                if let hit = node(at: local) {
+                    model.overlays.showMenu(menu(for: layout.graph.nodes[hit]), at: global)
+                } else {
+                    model.overlays.showMenu(canvasMenu, at: global)
+                }
             }
             .background {
                 WindowEvents(matching: .scrollWheel) { event, view in
@@ -262,6 +262,40 @@ struct GraphScreen: View {
             layout.reheat()
             layoutRun += 1
         }
+    }
+
+    private func menu(for node: GraphData.Node) -> [MenuItem] {
+        var items = [MenuItem.header(node.title), MenuItem("Open", icon: "arrow.up.right") { model.open(node.route) }]
+        switch node.route {
+        case .note(let path):
+            items += [
+                MenuItem("Reveal in Finder", icon: "folder") { model.vault.reveal(path) },
+                MenuItem("Copy [[link]]", icon: "link") {
+                    NoteLinks.copy("[[\(NoteLinks.label(path))]]")
+                    model.overlays.toast("Link copied")
+                },
+            ]
+        case .sim(let id, _):
+            items.append(MenuItem("Copy [[link]]", icon: "link") {
+                NoteLinks.copy("[[\(id)]]")
+                model.overlays.toast("Link copied")
+            })
+        default: break
+        }
+        return items
+    }
+
+    private var canvasMenu: [MenuItem] {
+        [
+            MenuItem("Fit graph", icon: "arrow.up.left.and.arrow.down.right") { viewport.fit(layout.positions, in: size) },
+            MenuItem("Zoom in", icon: "plus.magnifyingglass") { zoom(1.22) },
+            MenuItem("Zoom out", icon: "minus.magnifyingglass") { zoom(1 / 1.22) },
+            .separator,
+            .header("Show"),
+            MenuItem("Notes", icon: "note.text", checked: filters.notes) { filters.notes.toggle() },
+            MenuItem("Simulators", icon: "waveform.path", checked: filters.sims) { filters.sims.toggle() },
+            MenuItem("Orphans", icon: "circle.dotted", checked: filters.orphans) { filters.orphans.toggle() },
+        ]
     }
 
     private func zoom(_ factor: CGFloat) {

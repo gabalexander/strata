@@ -108,8 +108,20 @@ struct HomeScreen: View {
                         .padding(.horizontal, 10)
                         .frame(height: 30)
                         .card(Theme.surface, radius: Theme.radiusSmall)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .strataMenu(model.overlays) {
+                        [
+                            .header(ShellCatalog.title(path)),
+                            MenuItem("Open", icon: "arrow.up.right") { model.open(.note(path)) },
+                            MenuItem("Reveal in Finder", icon: "folder") { model.vault.reveal(path) },
+                            MenuItem("Copy [[link]]", icon: "link") {
+                                NoteLinks.copy("[[\(NoteLinks.label(path))]]")
+                                model.overlays.toast("Link copied")
+                            },
+                        ]
+                    }
                 }
             }
         }
