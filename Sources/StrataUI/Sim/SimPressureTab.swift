@@ -100,7 +100,7 @@ private struct SimPressureRail: View {
             } else { summaryText("—") }
         case .scale:
             let count = report.scalePlan.count
-            summaryText(count == 0 ? "none" : count == 1 ? "1 step" : "\(count) steps")
+            summaryText(report.flows.isEmpty ? "—" : count == 0 ? "none" : count == 1 ? "1 step" : "\(count) steps")
         case .stores:
             let busiest = SimPressureStores.stores(report, level: sim.level).compactMap { analysis.nodes[$0]?.utilization }.max()
             summaryText(busiest.map { "\(SimPressureFormat.percent($0)) busy" } ?? "—", tint: busiest.map(SimPressureStyle.calm) ?? Theme.faint)

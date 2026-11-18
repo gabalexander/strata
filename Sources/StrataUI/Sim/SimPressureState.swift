@@ -208,17 +208,18 @@ final class SimPressureState {
     /// Requests are ordered: heat on, a pinned blast radius, the open tab meeting a newly selected
     /// node, and a newly lit op path each take the next number, and the highest one still active wins.
     func overlay(for selection: StageSelection?, tabOpen: Bool, opsLit: OpRef?, level: Level) -> SimPressureOverlay? {
-        if opsLit != lastOps {
-            lastOps = opsLit
-            if opsLit != nil { opsSeq = tick() }
-        }
         var node: String?
         if case .node(let id) = selection, let found = level.node(id),
            found.kind.role == .server || found.kind.role == .buffer { node = id }
         let tabNode = tabOpen && dismissed != selection ? node : nil
+        // Noticed in the same pass, a selection comes before an op row lit inside it.
         if tabNode != lastTabNode {
             lastTabNode = tabNode
             if tabNode != nil { tabSeq = tick() }
+        }
+        if opsLit != lastOps {
+            lastOps = opsLit
+            if opsLit != nil { opsSeq = tick() }
         }
         var best: (seq: Int, overlay: SimPressureOverlay?)?
         if opsLit != nil { best = (opsSeq, nil) }
@@ -328,6 +329,11 @@ final class SimPressureState {
         for id in radius.edges {
             let ends = id.components(separatedBy: "->")
             guard ends.count == 2 else { continue }
+            // A node between highlighted edges stays readable, without a colour of its own.
+            for end in ends where highlight.tints[end] == nil {
+                highlight.nodes.insert(end)
+                highlight.tints[end] = StageTint(color: Theme.muted, strength: 0.15)
+            }
             if hot.contains(ends[0]), hot.contains(ends[1]) {
                 highlight.edgeTints[id] = StageTint(color: Theme.bad, strength: strength(max(distance[ends[0]] ?? 9, distance[ends[1]] ?? 9)))
             } else {

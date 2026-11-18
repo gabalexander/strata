@@ -27,6 +27,11 @@ import StrataCore
         pressureScene("pressure-blast-pinned", size: size, rate: 55, tab: .controls, selected: "smtp") { sim in
             SimPressureSnapshot.blast(sim, node: "smtp")
         },
+        // Heat on, then an op row hovered: the op's path is the later request, so it wins.
+        pressureScene("pressure-ops-wins", size: size, rate: 55, section: .capacity, selected: "orders") { sim in
+            SimPressureSnapshot.heat(sim)
+            SimOpsSnapshot.hover(sim, node: "orders", op: "insert-order")
+        },
         pressureScene("pressure-node-menu", size: size, rate: 55, tab: .controls, selected: "db", menu: true),
         pressurePaletteScene(size: size),
     ] + [SimPressureSection.bottlenecks, .scale, .stores, .volumes, .capacity].map { section in
@@ -267,7 +272,8 @@ struct PressurePreview: SimPressureSource {
         return list.sorted { $0.severity > $1.severity }
     }
 
-    /// Synchronous callers, nearest first; buffers they publish to absorb it; their consumers lag.
+    /// Synchronous callers, nearest first. A buffer a slow node consumes from absorbs it (depth grows,
+    /// its consumers lag); consumers fed by a slow producer starve.
     func blastRadius(_ node: String, in sim: Simulation) -> BlastRadius {
         let level = sim.level
         func isBuffer(_ id: String) -> Bool { level.node(id)?.kind.role == .buffer }
@@ -286,20 +292,19 @@ struct PressurePreview: SimPressureSource {
             frontier = next
         }
         let hot = Set([node] + radius.upstream)
-        for edge in level.edges where hot.contains(edge.from) && isBuffer(edge.to) && !radius.absorbers.contains(edge.to) {
-            radius.absorbers.append(edge.to)
-            radius.edges.append(edge.id)
-        }
         // A slow consumer backs up into the buffer it reads from.
         for flow in level.flows {
             guard let on = flow.on, let by = flow.by, hot.contains(by), !radius.absorbers.contains(on) else { continue }
             radius.absorbers.append(on)
         }
+        // Buffers the slow chain publishes to, and what consumes them, starve or fall behind.
+        let fed = level.edges.filter { hot.contains($0.from) && isBuffer($0.to) }
+        radius.edges += fed.map(\.id)
         for flow in level.flows {
-            guard let on = flow.on, let by = flow.by, radius.absorbers.contains(on) else { continue }
+            guard let on = flow.on, let by = flow.by, radius.absorbers.contains(on) || fed.contains(where: { $0.to == on })
+            else { continue }
             if !radius.lagging.contains(by) { radius.lagging.append(by) }
             if level.edges.contains(where: { $0.id == "\(on)->\(by)" }) { radius.edges.append("\(on)->\(by)") }
-            radius.flows.append(flow.id)
         }
         if isBuffer(node) {
             radius.absorbers = [node]

@@ -134,19 +134,27 @@ struct SimPressureLegend: View {
                     swatch(Theme.warn, "< 80%")
                     swatch(Theme.bad, "≥ 80%")
                 case .blast(let node):
+                    let radius = state.blastRadius(node, sim: sim)
                     Label("Blast radius of \(sim.level.node(node)?.label ?? node)", systemImage: "burst")
                         .font(Theme.ui(11, .semibold)).foregroundStyle(Theme.text)
-                    HStack(spacing: 5) {
-                        Capsule().fill(Theme.bad.opacity(0.85)).frame(width: 14, height: 3)
-                        Text("backs up").font(Theme.small).foregroundStyle(Theme.muted)
+                    if radius.upstream.isEmpty && radius.absorbers.isEmpty && radius.lagging.isEmpty {
+                        Text("nothing waits on it").font(Theme.small).foregroundStyle(Theme.muted)
                     }
-                    HStack(spacing: 5) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .strokeBorder(Theme.warn.opacity(0.85), style: StrokeStyle(lineWidth: 1.2, dash: [2.5, 2]))
-                            .frame(width: 12, height: 10)
-                        Text("stops here").font(Theme.small).foregroundStyle(Theme.muted)
+                    if !radius.upstream.isEmpty {
+                        HStack(spacing: 5) {
+                            Capsule().fill(Theme.bad.opacity(0.85)).frame(width: 14, height: 3)
+                            Text("backs up").font(Theme.small).foregroundStyle(Theme.muted)
+                        }
                     }
-                    swatch(Theme.warn, "lags")
+                    if !radius.absorbers.isEmpty {
+                        HStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 3)
+                                .strokeBorder(Theme.warn.opacity(0.85), style: StrokeStyle(lineWidth: 1.2, dash: [2.5, 2]))
+                                .frame(width: 12, height: 10)
+                            Text("stops here").font(Theme.small).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    if !radius.lagging.isEmpty { swatch(Theme.warn, "lags") }
                 }
                 StrataKeycap("esc")
                 Button { state.clear(overlay, selection: selection) } label: {
