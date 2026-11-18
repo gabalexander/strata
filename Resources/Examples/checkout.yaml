@@ -2,16 +2,39 @@ strata: 1
 id: checkout
 title: Checkout platform
 kind: architecture
-category: company
-summary: How an order travels from the web app to the email inbox.
+category: platform
+summary: Trace order creation from the web app to Postgres and follow the confirmation event to the email provider.
 tags: [demo]
-narration: "A web checkout: synchronous calls down to **Postgres**, an event to **Kafka**, and an email worker that consumes it."
+glossaries: [http, grpc, go, redis, postgres, kafka, consistency, resilience]
+narration: "Follow Place order to Postgres, then follow OrderPlaced to the mailer. Double-click orders-svc to trace validation and the outbox relay."
+
+terms:
+  - id: order-placed
+    term: OrderPlaced
+    short: The event this checkout emits after committing an order.
+    detail: The mailer consumes it to send the confirmation independently of the HTTP response.
 
 groups:
-  - { id: backend, label: Backend (EKS), kind: cluster }
+  - { id: backend, label: Checkout backend, kind: cluster }
+
 nodes:
-  - { id: web, kind: client, label: Web app, tech: React, at: [0, 1] }
-  - { id: api, kind: gateway, label: API gateway, tech: Envoy, group: backend, at: [1, 1] }
+  - id: web
+    kind: client
+    label: Web app
+    tech: React
+    at: [0, 1]
+    doc: |
+      Sends a checkout request when the customer places an order.
+      A gateway error leaves the customer without a confirmation.
+  - id: api
+    kind: gateway
+    label: API gateway
+    tech: Envoy
+    group: backend
+    at: [1, 1]
+    doc: |
+      Accepts HTTPS requests and forwards each order to orders-svc over gRPC.
+      A short timeout with retries can send the same order to the service several times.
   - id: orders
     kind: service
     label: orders-svc
@@ -19,67 +42,163 @@ nodes:
     group: backend
     at: [2, 1]
     latency: 30ms
-    concurrency: 8
+    concurrency: 4
     replicas: 2
-    doc: Owns the order lifecycle. Writes to Postgres, reads prices from Redis, emits `OrderPlaced`.
-    term: grpc
+    term: grpc/unary
+    doc: |
+      Reads the price and commits the order before the confirmation email can be sent.
+      Slow Redis calls hold its request slots. A refused Postgres write fails checkout.
     inside:
-      narration: "Inside **orders-svc**: the handler validates, writes the order and an outbox row in one transaction, and a relay publishes the outbox."
+      narration: "Follow the handler through validation to the SQL transaction. Watch the relay poll that same table on its own schedule."
       nodes:
-        - { id: in, kind: port, label: from api-gateway, at: [0, 1] }
-        - { id: handler, kind: service, label: HTTP handler, tech: Go, latency: 2ms, at: [1, 1] }
-        - { id: validate, kind: service, label: validator, latency: 1ms, at: [2, 0] }
-        - { id: tx, kind: database, label: orders + outbox tx, tech: postgres, at: [2, 2] }
-        - { id: relay, kind: worker, label: outbox relay, at: [3, 2] }
+        - id: in
+          kind: port
+          label: Incoming order
+          at: [0, 0.48]
+          doc: |
+            Represents the gateway outside this view and follows its measured request rate.
+            When upstream traffic stops, this path goes quiet.
+        - id: handler
+          kind: service
+          label: gRPC handler
+          tech: Go
+          latency: 2ms
+          at: [1, 0]
+          doc: |
+            Checks the request with the validator before opening a database transaction.
+            A failed validation or write propagates back to the gateway.
+        - id: validate
+          kind: service
+          label: Validator
+          latency: 1ms
+          at: [2, -0.9]
+          doc: |
+            Checks that the cart and quantities are valid before any write.
+            Inject an error here to model rejection before the SQL call.
+        - id: tx
+          kind: database
+          label: Order + outbox
+          tech: Postgres
+          at: [3, 0]
+          term: consistency/outbox
+          doc: |
+            Commits the order and its outbox row in one transaction.
+            If the transaction fails, Postgres makes neither row visible.
+        - id: relay
+          kind: worker
+          label: Outbox relay
+          latency: 3ms
+          at: [2, 1.35]
+          term: consistency/relay
+          doc: |
+            Polls Postgres for pending rows on its own schedule.
+            A failed poll delays publication. The overview shows the Kafka handoff.
       edges:
-        - { from: in, to: handler }
-        - { from: handler, to: validate }
-        - { from: handler, to: tx, protocol: sql }
-        - { from: relay, to: tx, protocol: sql }
+        - { from: in, to: handler, protocol: grpc }
+        - { from: in, to: relay, label: Poll timer }
+        - { from: handler, to: validate, label: Check }
+        - { from: handler, to: tx, protocol: sql, label: Commit }
+        - { from: relay, to: tx, protocol: sql, label: Poll }
       flows:
         - id: requests
-          label: Requests
+          label: Order transaction
           from: in
           rate: parent
           steps:
             - call: handler
-              label: POST /orders
+              label: PlaceOrder
               steps:
-                - call: validate
-                - { call: tx, label: INSERT order + outbox }
-  - { id: cache, kind: cache, label: prices, tech: redis, group: backend, hitRate: 90%, at: [3, 0] }
-  - { id: db, kind: database, label: orders db, tech: postgres, group: backend, at: [3, 1] }
-  - { id: events, kind: topic, label: order-events, tech: kafka, group: backend, at: [3, 2] }
-  - { id: mailer, kind: worker, label: mailer, group: backend, at: [4, 2] }
-  - { id: smtp, kind: external, label: SendGrid, at: [5, 2] }
-  - { id: hint, kind: note, label: Note, doc: Right-click any node to break it., at: [0, 2.4] }
+                - { call: validate, label: Validate cart }
+                - { call: tx, label: Commit order and outbox }
+        - id: relay-polls
+          label: Relay polls
+          from: in
+          rate: every 500ms
+          color: 3
+          steps:
+            - call: relay
+              steps:
+                - { call: tx, label: Read pending outbox rows }
+  - id: cache
+    kind: cache
+    label: Price cache
+    tech: Redis
+    group: backend
+    hitRate: 90%
+    at: [3.2, 0]
+    doc: |
+      Answers most product price reads in about half a millisecond.
+      A miss sends a price read to Postgres. Slow cache hits still hold order slots.
+  - id: db
+    kind: database
+    label: Orders DB
+    tech: Postgres
+    group: backend
+    at: [3.2, 1]
+    doc: |
+      Handles price reads on cache misses and commits every successful order.
+      When it refuses a write, the request fails before publication.
+  - id: events
+    kind: topic
+    label: Order events
+    tech: Kafka
+    group: backend
+    at: [3.2, 2.1]
+    doc: |
+      Holds OrderPlaced for the mailer to read at its own pace.
+      A lagging mailer can fall behind retention. This overview sends the event at commit to show its route.
+  - id: mailer
+    kind: worker
+    label: Mailer
+    concurrency: 6
+    group: backend
+    at: [4.35, 2.1]
+    doc: |
+      Reads OrderPlaced and calls the email provider.
+      A provider failure delays the consumer group while it retries the event.
+  - id: smtp
+    kind: external
+    label: Email provider
+    tech: SendGrid
+    latency: 180ms
+    at: [5.5, 2.1]
+    doc: |
+      Accepts confirmation emails for delivery to customers.
+      If it fails, checkout can still complete and the mailer retries separately.
+  - id: hint
+    kind: note
+    label: Order lifecycle
+    at: [0, 2.1]
+    doc: |
+      Commit the order.
+      Send email later.
 
 edges:
-  - { from: web, to: api, protocol: https }
-  - { from: api, to: orders, protocol: grpc, label: gRPC }
+  - { from: web, to: api, protocol: https, latency: 16ms }
+  - { from: api, to: orders, protocol: grpc }
   - { from: orders, to: cache, protocol: redis }
   - { from: orders, to: db, protocol: sql }
   - { from: orders, to: events, protocol: kafka }
   - { from: events, to: mailer }
-  - { from: mailer, to: smtp, protocol: https }
+  - { from: mailer, to: smtp, protocol: https, latency: 12ms }
 
 flows:
   - id: place-order
     label: Place order
     from: web
-    rate: 5/s
+    rate: 12/s
     color: 1
     steps:
       - call: api
         steps:
           - call: orders
-            label: POST /orders
+            label: PlaceOrder
             steps:
               - call: cache
-                label: GET price
+                label: Get price
                 miss:
-                  - { call: db, label: SELECT price }
-              - { call: db, label: INSERT order }
+                  - { call: db, label: Read price }
+              - { call: db, label: Commit order and outbox }
               - { publish: events, label: OrderPlaced }
   - id: email
     label: Confirmation email
@@ -87,43 +206,72 @@ flows:
     by: mailer
     color: 3
     steps:
-      - { call: smtp, label: send }
+      - { call: smtp, label: Send confirmation }
 
 controls:
-  - id: rate
-    label: Checkout traffic
+  - label: Checkout traffic
     bind: place-order.rate
-    min: 0
-    max: 200
-    step: 5
+    options: [5, 12, 35]
     unit: /s
-  - id: hit
-    label: Price cache hit rate
+    insights:
+      - when: "<= 12"
+        text: At 12 orders per second the mailer uses about three of its six slots when the email provider is healthy.
+        effects: [{ metric: Mailer utilization, dir: down, good: true }]
+      - text: At 35 orders per second the six mailer slots cannot keep up with 250 ms of work per email. Kafka lag grows even while orders complete.
+        effects: [{ metric: Mailer lag, dir: up, good: false }]
+  - label: Price cache hit rate
     bind: cache.hitRate
     options: [0, 0.5, 0.9, 0.99]
     insights:
-      - when: "< 0.5"
-        text: Most reads miss and fall through to Postgres, so database load tracks traffic one to one.
-        effects:
-          - { metric: db load, dir: up, good: false }
-          - { metric: p99, dir: up, good: false }
-      - text: The cache absorbs almost every read; Postgres only sees writes and the occasional miss.
-        effects:
-          - { metric: db load, dir: down, good: true }
+      - when: "== 0"
+        text: Every order needs a price read and a write, so Postgres receives two calls per order.
+        effects: [{ metric: Postgres calls, dir: up, good: false }]
+      - when: "== 0.5"
+        text: About half the orders need a price read, so Postgres averages 1.5 calls per order.
+        effects: [{ metric: Postgres calls, dir: down, good: true }]
+      - when: "== 0.9"
+        text: About one in ten orders needs a price read. Postgres still receives every order write.
+        effects: [{ metric: Postgres calls, dir: down, good: true }]
+      - text: Postgres averages 1.01 calls per order because only about one in 100 price reads misses the cache.
+        effects: [{ metric: Postgres calls, dir: down, good: true }]
+  - label: Gateway retries
+    bind: api.retries
+    options: [0, 2, 5]
+    term: resilience/retry-amplification
+    insights:
+      - when: "== 0"
+        text: Each checkout gets one attempt. A failed attempt goes straight back to the customer.
+        effects: [{ metric: Retry rate, dir: flat, good: true }]
+      - when: "== 2"
+        text: A persistent failure can send three attempts for each checkout. A timed-out write may still finish on the server.
+        effects: [{ metric: Order service load, dir: up, good: false }]
+      - text: A persistent failure can send six attempts for each checkout, including writes whose first response never reached the gateway.
+        effects: [{ metric: Order service load, dir: up, good: false }]
 
 scenarios:
   - id: db-outage
-    label: Postgres goes down
-    goal: What happens to checkout when the database disappears for five seconds?
-    setup: "rate place-order 20/s"
+    label: Postgres outage
+    goal: What fails first when the order database refuses connections?
     steps:
-      - { at: 2s, do: "kill db", say: "Postgres is gone. Watch orders-svc fill up." }
-      - { at: 7s, do: "restore db", say: "Back. How long until the backlog drains?" }
-    watch: [orders.inflight, place-order.errors]
-
-terms:
-  - id: grpc
-    term: gRPC
-    short: An RPC framework over HTTP/2 with protobuf messages.
-    detail: Calls are multiplexed as streams on one long-lived connection.
-    match: [gRPC]
+      - { at: 8s, do: "kill db", say: "Watch checkout errors. The write fails fast, so orders-svc need not fill up." }
+      - { at: 22s, do: "restore db", say: "Watch successful orders and email confirmations resume as new orders commit." }
+    watch: [place-order.errors, place-order.ok, email.ok]
+  - id: slow-price-cache
+    label: Slow price cache
+    goal: Can a high cache hit rate still leave checkout slow?
+    steps:
+      - { at: 6s, do: "slow cache 200", say: "Redis still hits 90% of the time. Watch checkout p99 and occupied order slots as hits take about 100 ms." }
+      - { at: 20s, say: "Look at Postgres throughput. The price miss rate stayed the same while checkout got slower." }
+    watch: [place-order.p99, orders.util, db.throughput]
+  - id: gateway-retry-storm
+    label: Gateway retry storm
+    goal: How many calls can a short gateway timeout send to a slow order service?
+    setup: "rate place-order 7/s"
+    steps:
+      - at: 5s
+        do: ["slow orders 6", "set api.timeout 90ms"]
+        say: "The gateway gives up before orders-svc replies. Watch checkout errors before adding retries."
+      - at: 15s
+        do: "set api.retries 2"
+        say: "Watch retry rate and order slots. The original attempts can still commit and send OrderPlaced after the gateway gives up."
+    watch: [place-order.retries, orders.util, place-order.errors, email.ok]

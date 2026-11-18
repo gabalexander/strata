@@ -1,0 +1,106 @@
+strata: 1
+id: thread-pool-exhaustion
+title: Thread pool exhaustion
+kind: sim
+category: runtime
+summary: See how a slow dependency holds eight request threads and compare asynchronous I/O with a short timeout.
+glossaries: [go, connections, resilience, queueing]
+narration: "Watch the eight API slots when the dependency slows. Compare a full API queue with the remaining capacity at the dependency."
+
+nodes:
+  - id: users
+    kind: client
+    label: API clients
+    at: [0, 0]
+    doc: |
+      Starts 25 requests per second regardless of how long each call takes.
+      When the API queue fills, new requests receive immediate errors.
+  - id: api
+    kind: service
+    label: API worker pool
+    at: [1.45, 0]
+    latency: fixed 4ms
+    concurrency: 8
+    queue: 48
+    async: false
+    timeout: 0ms
+    term: resilience/pool-exhaustion
+    doc: |
+      Uses one of eight threads to prepare a request and call the dependency.
+      In synchronous mode, waiting for the response holds the thread and can fill the request queue.
+  - id: partner
+    kind: external
+    label: Partner API
+    at: [2.9, 0]
+    latency: fixed 120ms
+    concurrency: 80
+    doc: |
+      Returns a partner record in 120 ms before the slowdown.
+      A slowdown extends every call. A caller timeout leaves the partner's work running.
+
+edges:
+  - { from: users, to: api, protocol: https, latency: fixed 8ms }
+  - { from: api, to: partner, protocol: https, latency: fixed 10ms }
+
+flows:
+  - id: fetch
+    label: Fetch partner record
+    from: users
+    rate: 25/s
+    steps:
+      - call: api
+        steps:
+          - { call: partner, label: Fetch record }
+
+controls:
+  - label: Asynchronous I/O
+    bind: api.async
+    options: [false, true]
+    insights:
+      - when: false
+        text: All eight threads can wait on the partner. At about one second per call, they finish only about eight requests per second.
+        effects: [{ metric: API queue, dir: up, good: false }]
+      - when: true
+        text: The API releases its slot while it waits on the network, so other calls can start. The partner's service time stays the same.
+        effects: [{ metric: API queue, dir: down, good: true }, { metric: Successful requests, dir: up, good: true }]
+  - label: Partner timeout
+    bind: api.timeout
+    min: 0
+    max: 1
+    step: 0.2
+    term: resilience/timeout
+    insights:
+      - when: "== 0"
+        text: A thread waits until the partner responds. A slow response holds the thread for its full round trip.
+        effects: [{ metric: API threads occupied, dir: up, good: false }]
+      - when: "== 0.2"
+        text: The healthy 140 ms round trip fits. When the partner is slow, the thread returns an error after 200 ms and can accept more work.
+        effects: [{ metric: API queue, dir: down, good: true }, { metric: Timeout errors, dir: up, good: false }]
+      - when: "< 1"
+        text: A larger timeout holds threads longer, and the slow partner still misses any budget below 980 ms.
+        effects: [{ metric: API threads occupied, dir: up, good: false }]
+      - text: A one-second timeout covers the slow partner's 980 ms round trip. Threads still wait almost a full second per request.
+        effects: [{ metric: API queue, dir: up, good: false }]
+
+scenarios:
+  - id: hold-the-threads
+    label: Hold all eight threads
+    goal: Which queue fills when the partner takes almost a second to answer?
+    steps:
+      - { at: 6s, do: "slow partner 8", say: "Watch all eight API slots fill. The partner still has unused slots." }
+      - { at: 15s, say: "Watch queue depth reach 48 and new requests fail. The partner is still returning replies." }
+    watch: [api.util, api.queued, partner.util, fetch.errors]
+  - id: async-io
+    label: Release threads while waiting
+    goal: Can asynchronous I/O restore successful throughput while the partner stays slow?
+    steps:
+      - { at: 6s, do: "slow partner 8", say: "Wait for the API queue to fill while the eight threads wait on replies." }
+      - { at: 18s, do: "set api.async true", say: "Watch the API admit new work while existing calls wait for replies. The API queue drains and the partner uses more slots." }
+    watch: [api.queued, api.util, partner.util, fetch.ok]
+  - id: timeout-cap
+    label: Return a bounded error
+    goal: Does a 200 ms timeout clear the queue when requests must stay synchronous?
+    steps:
+      - { at: 6s, do: "slow partner 8", say: "Watch synchronous threads wait and the queue fill." }
+      - { at: 15s, do: "set api.timeout 200ms", say: "Watch the queue drain. Timeouts replace queue rejections, and the partner keeps working after the API has replied." }
+    watch: [api.queued, api.util, partner.util, fetch.errors]

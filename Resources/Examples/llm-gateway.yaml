@@ -1,0 +1,158 @@
+strata: 1
+id: llm-gateway
+title: LLM gateway under load
+kind: sim
+category: ai
+summary: See how a semantic cache, an inference queue limit, and a fallback route protect a gateway with scarce model slots.
+glossaries: [llm, http, resilience, queueing, scaling]
+narration: "Compare the quick cached replies with the primary model's tail latency, then watch its four slots as prompt traffic rises."
+
+groups:
+  - { id: inference, label: Model endpoints, kind: boundary }
+
+nodes:
+  - id: users
+    kind: client
+    label: Prompt clients
+    at: [0, 1]
+    doc: |
+      Sends prompts to the gateway and waits for a complete response.
+      A full inference queue or a lost primary reply can produce an error.
+  - id: gateway
+    kind: gateway
+    label: LLM gateway
+    at: [1.32, 1]
+    timeout: 0ms
+    async: true
+    doc: |
+      Checks the semantic cache before sending a prompt to inference.
+      The fallback route can continue after an optional primary probe times out.
+  - id: cache
+    kind: cache
+    label: Semantic cache
+    tech: Redis
+    at: [2.8, 0]
+    latency: 12ms
+    hitRate: 75%
+    term: llm/semantic-cache
+    doc: |
+      Reuses an earlier answer when a new prompt matches its meaning.
+      A lower hit rate sends more prompts to the primary model. The lesson uses a fixed match probability.
+  - id: primary
+    kind: llm
+    label: Primary model
+    group: inference
+    at: [2.8, 1]
+    latency: p50 800ms p99 4s
+    concurrency: 4
+    queue: 4
+    term: queueing/bounded-queue
+    doc: |
+      Runs four prompts at once. Median service time is 800 ms and p99 is 4 s.
+      Queued prompts add waiting time. A full queue refuses new work.
+  - id: small
+    kind: llm
+    label: Fallback model
+    group: inference
+    at: [2.8, 2.1]
+    latency: p50 250ms p99 700ms
+    concurrency: 4
+    queue: 8
+    term: llm/fallback
+    doc: |
+      Uses a smaller model to return a faster answer on the fallback route.
+      The separate pool has four inference slots. It also rejects work when its queue fills.
+
+edges:
+  - { from: users, to: gateway, protocol: https, latency: fixed 10ms }
+  - { from: gateway, to: cache, label: Match prompt, latency: fixed 2ms }
+  - { from: gateway, to: primary, label: Full model, latency: fixed 8ms }
+  - { from: gateway, to: small, label: Small model, latency: fixed 8ms }
+
+flows:
+  - id: primary-route
+    label: Primary prompt
+    from: users
+    rate: 4/s
+    steps:
+      - call: gateway
+        steps:
+          - call: cache
+            miss:
+              - { call: primary, label: Generate answer }
+  - id: fallback-route
+    label: Fallback prompt
+    from: users
+    rate: manual
+    color: 3
+    steps:
+      - call: gateway
+        steps:
+          - call: cache
+            miss:
+              - { call: primary, label: Optional primary probe, timeout: 1s, optional: true }
+              - { call: small, label: Generate fallback answer }
+
+controls:
+  - label: Semantic cache hit rate
+    bind: cache.hitRate
+    options: [0, 0.5, 0.75, 0.9]
+    term: llm/semantic-cache
+    insights:
+      - when: "== 0"
+        text: Every prompt needs inference. At four prompts per second the primary pool is already close to its mean capacity.
+        effects: [{ metric: Primary arrivals, dir: up, good: false }, { metric: Primary queue, dir: up, good: false }]
+      - when: "== 0.5"
+        text: About half the prompts reuse an answer. The primary model sees about two prompts per second at default traffic.
+        effects: [{ metric: Primary arrivals, dir: down, good: true }]
+      - when: "== 0.75"
+        text: Three prompts in four reuse an answer, leaving about one inference call per second at default traffic.
+        effects: [{ metric: Primary utilization, dir: down, good: true }, { metric: Fast cached replies, dir: up, good: true }]
+      - text: Nine prompts in ten reuse an answer. The remaining inference calls still carry the model's latency tail.
+        effects: [{ metric: Primary arrivals, dir: down, good: true }]
+  - label: Primary queue limit
+    bind: primary.queue
+    options: [0, 4, 20]
+    term: queueing/bounded-queue
+    insights:
+      - when: "== 0"
+        text: When all four slots are busy, Strata rejects the next prompt immediately. The model only serves prompts that can start now.
+        effects: [{ metric: Queueing delay, dir: down, good: true }, { metric: Rejected prompts, dir: up, good: false }]
+      - when: "== 4"
+        text: Four prompts can wait for a free slot. This absorbs a short burst at the cost of extra response time.
+        effects: [{ metric: Queueing delay, dir: up, good: false }, { metric: Rejected prompts, dir: down, good: true }]
+      - text: Twenty prompts can wait. During sustained overload, the extra room increases the wait before rejections begin.
+        effects: [{ metric: Prompt p99, dir: up, good: false }, { metric: Queued prompts, dir: up, good: false }]
+
+scenarios:
+  - id: cache-takes-the-load
+    label: Reuse answers under load
+    goal: How much inference load and tail latency does a 90% semantic cache hit rate remove?
+    setup: ["rate primary-route 10/s", "set cache.hitRate 0%"]
+    steps:
+      - { at: 5s, say: "Every prompt reaches the primary model. Watch the four slots fill and the queue reject requests." }
+      - { at: 16s, do: "set cache.hitRate 90%", say: "Watch cached replies complete in milliseconds and the primary queue drain. Compare primary utilization at the same prompt rate." }
+    watch: [primary.util, primary.queued, primary-route.p50, primary-route.errors]
+  - id: bound-the-queue
+    label: Bound inference admission
+    goal: What changes when we reject prompts immediately instead of letting them wait?
+    setup: ["rate primary-route 10/s", "set cache.hitRate 0%", "set primary.queue 20"]
+    steps:
+      - { at: 6s, say: "Watch the primary queue fill and successful replies arrive several seconds after clients sent their prompts." }
+      - { at: 10s, do: "set primary.queue 0", say: "New prompts are rejected while slots are busy. Watch the old queue drain, then wait for its slow replies to age out of p99." }
+    watch: [primary.queued, primary-route.errors, primary-route.p99, primary-route.ok]
+  - id: timeout-fallback
+    label: Use a fallback after a timeout
+    goal: Can a smaller model answer requests while the primary link is silent?
+    setup: ["set cache.hitRate 0%", "set gateway.timeout 1s"]
+    steps:
+      - { at: 6s, do: "cut gateway primary", say: "Primary calls time out at one second. Watch errors on Primary prompt." }
+      - at: 16s
+        do: ["rate primary-route manual", "rate fallback-route 4/s"]
+        say: "Select the fallback route while the primary link is cut. The optional primary probe times out, then the smaller model answers."
+      - { at: 24s, say: "Compare fallback completions with the earlier failures. Each fallback still pays for the one-second probe." }
+    watch: [primary-route.errors, fallback-route.ok, fallback-route.p50, small.util]
+
+notes: |
+  The queue limit controls admission when all model slots are busy. It does not count prompts or tokens per minute.
+  The fallback scenario selects a separate flow during the outage. On that flow, each cache miss tries the primary as an optional step and then calls the smaller model.

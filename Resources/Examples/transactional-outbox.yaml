@@ -1,0 +1,174 @@
+strata: 1
+id: transactional-outbox
+title: The transactional outbox
+kind: sim
+category: patterns
+summary: Compare a direct dual write with an outbox when the event broker stops accepting writes.
+glossaries: [postgres, kafka, consistency, resilience]
+narration: "The upper path writes to Postgres and then Kafka. The lower path commits an outbox row for the relay. Compare their completion rates when Kafka goes down."
+
+groups:
+  - { id: persistence, label: Postgres storage, kind: boundary }
+
+nodes:
+  - id: clients
+    kind: client
+    label: Checkout clients
+    at: [0, 1]
+    doc: |
+      Sends equal traffic to the direct and outbox write paths.
+      A failed checkout response can leave the client unsure whether Postgres committed.
+  - id: direct
+    kind: service
+    label: Dual-write API
+    at: [1.15, 0]
+    latency: fixed 4ms
+    term: consistency/dual-write
+    doc: |
+      Commits an order and then sends its event to Kafka in a separate operation.
+      A broker failure leaves a committed order with no event and returns a checkout error.
+  - id: durable
+    kind: service
+    label: Outbox API
+    at: [1.15, 2]
+    latency: fixed 4ms
+    term: consistency/outbox
+    doc: |
+      Commits an order and its pending event in one Postgres transaction.
+      A failed transaction writes neither row. The local queue visualizes committed outbox rows.
+  - id: db
+    kind: database
+    label: Orders DB
+    tech: Postgres
+    group: persistence
+    at: [2.45, 1]
+    doc: |
+      Stores orders for both paths and the outbox rows of the lower path.
+      If Postgres refuses the transaction, neither path can proceed to its next step.
+  - id: outbox
+    kind: queue
+    label: Pending outbox
+    group: persistence
+    at: [2.45, 2]
+    capacity: 1000
+    doc: |
+      Represents pending rows already committed in Postgres. The publish step draws each new row here.
+      While Kafka is down, the relay requeues failed deliveries and the pending rows accumulate.
+  - id: relay
+    kind: worker
+    label: Outbox relay
+    at: [3.85, 2]
+    latency: fixed 100ms
+    concurrency: 2
+    prefetch: 2
+    maxDeliveries: 1000
+    ack: manual
+    term: consistency/relay
+    doc: |
+      Sends each pending event to Kafka and acknowledges the row after Kafka accepts it.
+      A refused publish returns the row for another attempt. Consumers should handle duplicate events.
+  - id: broker
+    kind: topic
+    label: Order events
+    tech: Kafka
+    at: [4.45, 0]
+    capacity: 1000
+    doc: |
+      Accepts events from the dual-write API and the relay.
+      While down, it refuses both senders. Only the relay has a durable record to retry.
+  - id: projection
+    kind: worker
+    label: Order projection
+    at: [5.85, 0]
+    latency: fixed 12ms
+    concurrency: 1
+    term: consistency/read-model
+    doc: |
+      Reads accepted events and updates the downstream order view.
+      Missing events leave gaps in that view even when the order exists in Postgres.
+
+edges:
+  - { from: clients, to: direct, protocol: https, latency: fixed 5ms }
+  - { from: clients, to: durable, protocol: https, latency: fixed 5ms }
+  - { from: direct, to: db, protocol: sql, label: Order }
+  - { from: direct, to: broker, protocol: kafka, label: Direct publish }
+  - { from: durable, to: db, protocol: sql, label: Order + row }
+  - { from: durable, to: outbox, label: Pending row }
+  - { from: outbox, to: relay, label: Read rows }
+  - { from: relay, to: broker, protocol: kafka, label: Relay publish }
+  - { from: broker, to: projection, label: Consume }
+
+flows:
+  - id: dual-write
+    label: Direct checkout
+    from: clients
+    rate: 8/s
+    steps:
+      - call: direct
+        steps:
+          - { call: db, label: Commit order }
+          - { publish: broker, label: Publish event }
+  - id: outbox-write
+    label: Outbox checkout
+    from: clients
+    rate: 8/s
+    color: 3
+    steps:
+      - call: durable
+        steps:
+          - { call: db, label: Commit order and outbox row }
+          - { publish: outbox, label: Show committed row }
+  - id: relay-publish
+    label: Relay publication
+    on: outbox
+    by: relay
+    color: 3
+    steps:
+      - { publish: broker, label: Publish pending event }
+  - id: project
+    label: Projection updates
+    on: broker
+    by: projection
+    color: 2
+    steps: []
+
+controls:
+  - label: Outbox order rate
+    bind: outbox-write.rate
+    options: [4, 8, 24]
+    unit: /s
+    insights:
+      - when: "<= 8"
+        text: Two relay slots can send about 20 events per second. At up to eight orders per second they can catch up after a brief outage.
+        effects: [{ metric: Pending rows, dir: down, good: true }]
+      - text: At 24 orders per second, one relay replica falls behind even with Kafka healthy.
+        effects: [{ metric: Pending rows, dir: up, good: false }]
+  - label: Relay replicas
+    bind: relay.replicas
+    options: [1, 2, 3]
+    insights:
+      - when: "== 1"
+        text: One replica sends about 20 events per second. A backlog drains at that rate minus the rate of new outbox writes.
+        effects: [{ metric: Relay capacity, dir: down }]
+      - when: "== 2"
+        text: Two replicas can send about 40 events per second and drain a backlog while new orders arrive.
+        effects: [{ metric: Pending rows, dir: down, good: true }]
+      - text: Three replicas offer about 60 events per second of relay capacity. Kafka must be up for any of them to publish.
+        effects: [{ metric: Relay capacity, dir: up, good: true }]
+
+scenarios:
+  - id: broker-outage
+    label: Kafka outage in both designs
+    goal: Which committed orders can still reach the projection after Kafka recovers?
+    steps:
+      - { at: 8s, do: "kill broker", say: "Watch Direct checkout fail after its commit. Outbox checkout still succeeds, and the pending row count grows." }
+      - { at: 20s, do: "restore broker", say: "Watch stored rows drain into Kafka and Projection updates jump. Direct checkout resumes with new orders." }
+      - { at: 28s, say: "Compare the outbox backlog with its peak. Only the lower path can replay the events from the outage." }
+    watch: [db.throughput, dual-write.errors, outbox-write.ok, outbox.depth, project.ok]
+  - id: scale-the-relay
+    label: Catch up with committed orders
+    goal: Can scaling only the relay clear the backlog while checkout traffic continues?
+    steps:
+      - { at: 5s, do: "rate outbox-write 26/s", say: "The database keeps committing while the relay falls behind. Look at pending rows and relay completions." }
+      - { at: 18s, do: "scale relay 2", say: "Watch the relay publish faster than new orders arrive, then watch pending rows drop." }
+    watch: [outbox.depth, outbox-write.ok, relay-publish.ok, project.ok]

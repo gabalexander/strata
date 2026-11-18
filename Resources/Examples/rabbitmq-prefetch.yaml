@@ -1,0 +1,158 @@
+strata: 1
+id: rabbitmq-prefetch
+title: RabbitMQ prefetch and acknowledgements
+kind: sim
+category: messaging
+summary: See how prefetch divides work between unequal consumers and how acknowledgement mode changes crash recovery.
+glossaries: [rabbitmq, queueing]
+narration: "Send a burst with Prefetch and fairness. Compare each worker's queued messages, completions, and the broker's ready depth."
+
+groups:
+  - { id: broker, label: RabbitMQ broker, kind: boundary }
+
+nodes:
+  - id: producer
+    kind: client
+    label: Job producer
+    at: [0, 1]
+    doc: |
+      Publishes one job at a time in steady state or a batch in the experiments.
+      A full work queue rejects new jobs.
+  - id: jobs
+    kind: queue
+    label: Work queue
+    tech: RabbitMQ
+    group: broker
+    at: [1.35, 1]
+    capacity: 1000
+    dlq: dead
+    term: rabbitmq/competing-consumers
+    doc: |
+      Pushes each job to one eligible worker and tracks manual acknowledgements.
+      A crash requeues unacknowledged deliveries. Exhausted deliveries go to the dead-letter queue.
+  - id: fast
+    kind: worker
+    label: Fast worker
+    at: [2.8, 0]
+    latency: fixed 20ms
+    concurrency: 1
+    prefetch: 1
+    ack: manual
+    maxDeliveries: 3
+    doc: |
+      Finishes a job in 20 ms before acknowledging it in manual mode.
+      Prefetch of one makes this worker wait for each new delivery.
+  - id: slow
+    kind: worker
+    label: Slow worker
+    at: [2.8, 1.2]
+    latency: fixed 100ms
+    concurrency: 1
+    prefetch: 1
+    ack: manual
+    maxDeliveries: 3
+    doc: |
+      Takes 100 ms per job, five times as long as the fast worker.
+      A high prefetch can leave jobs in its inbox while the fast worker is idle.
+  - id: dead
+    kind: queue
+    label: Dead letters
+    group: broker
+    at: [1.35, 2.35]
+    capacity: 1000
+    term: rabbitmq/dlx
+    doc: |
+      Holds jobs that the work queue gives up on for later inspection.
+      No worker drains it in this lesson, so its depth records the jobs sent here.
+
+edges:
+  - { from: producer, to: jobs, protocol: amqp, latency: fixed 8ms }
+  - { from: jobs, to: fast, label: Deliver, latency: fixed 30ms }
+  - { from: jobs, to: slow, label: Deliver, latency: fixed 30ms }
+  - { from: jobs, to: dead, label: DLQ, latency: fixed 5ms }
+
+flows:
+  - { id: submit, label: Submit jobs, from: producer, rate: 6/s, steps: [{ publish: jobs }] }
+  - { id: fast-jobs, label: Fast worker jobs, on: jobs, by: fast, color: 3, steps: [] }
+  - { id: slow-jobs, label: Slow worker jobs, on: jobs, by: slow, color: 2, steps: [] }
+
+controls:
+  - label: Fast worker prefetch
+    bind: fast.prefetch
+    options: [1, 20, 1000]
+    term: rabbitmq/prefetch
+    insights:
+      - when: "== 1"
+        text: The worker handles for 20 ms and waits 30 ms for the next delivery, capping it at 20 jobs per second under load.
+        effects: [{ metric: Fast completions, dir: down, good: false }, { metric: Fast inbox, dir: down, good: true }]
+      - when: "== 20"
+        text: Overlapping delivery with work lets the fast worker approach 50 jobs per second. The worker can hold up to 20 unacknowledged jobs.
+        effects: [{ metric: Fast completions, dir: up, good: true }, { metric: Fast inbox, dir: up, good: false }]
+      - text: A limit of 1000 matches the broker capacity, so it acts as unlimited prefetch in this lesson. Bursts can fill the worker inbox and use more worker memory.
+        effects: [{ metric: Fast inbox, dir: up, good: false }]
+  - label: Slow worker prefetch
+    bind: slow.prefetch
+    options: [1, 20, 1000]
+    term: rabbitmq/prefetch
+    insights:
+      - when: "== 1"
+        text: The slow worker holds one job. More of a burst stays at the broker where the fast worker can pick it up.
+        effects: [{ metric: Slow inbox, dir: down, good: true }, { metric: Broker ready depth, dir: up }]
+      - when: "== 20"
+        text: The slow worker can hold up to 20 unacknowledged jobs, covering delivery latency but making the last job wait about two seconds.
+        effects: [{ metric: Slow inbox, dir: up, good: false }, { metric: Slow completions, dir: up, good: true }]
+      - text: At the broker's full capacity, prefetch is effectively unlimited. The broker can split a burst equally even though this worker takes five times as long.
+        effects: [{ metric: Slow inbox, dir: up, good: false }, { metric: Job tail latency, dir: up, good: false }]
+  - label: Slow worker ack
+    bind: slow.ack
+    options: [manual, auto]
+    term: rabbitmq/ack
+    insights:
+      - when: manual
+        text: The broker waits for successful handling. If the worker dies, the broker can redeliver any unacked job.
+        effects: [{ metric: Recoverable jobs, dir: up, good: true }]
+      - text: The broker removes jobs on delivery and ignores prefetch. A crash loses work already delivered to the slow worker.
+        effects: [{ metric: Jobs lost on crash, dir: up, good: false }, { metric: Slow inbox, dir: up, good: false }]
+
+scenarios:
+  - id: prefetch-fairness
+    label: Prefetch and fairness
+    goal: Where do three identical bursts wait at prefetch 1, 20, and effectively unlimited?
+    setup: "rate submit manual"
+    steps:
+      - { at: 2s, do: "send submit 120", say: "At prefetch one, jobs wait at the broker. Watch the fast worker complete more jobs than the slow worker." }
+      - at: 12s
+        do: ["set fast.prefetch 20", "set slow.prefetch 20", "send submit 120"]
+        say: "Look at the fast worker's completion rate as its inbox keeps it busy. The slow worker can now hold 20 jobs."
+      - at: 24s
+        do: ["set fast.prefetch 1000", "set slow.prefetch 1000", "send submit 120"]
+        say: "Look at the slow worker's inbox. The broker hands each worker 60 jobs even though the slow worker needs six seconds."
+    watch: [jobs.depth, fast-jobs.ok, slow-jobs.ok, slow.queued, slow-jobs.p99]
+  - id: crash-manual-ack
+    label: Crash with manual acknowledgements
+    goal: Where does the slow worker's unfinished work go after a crash?
+    setup: ["rate submit manual", "set fast.prefetch 20", "set slow.prefetch 20"]
+    steps:
+      - { at: 25s, do: "send submit 40", say: "Watch the broker deliver 20 jobs to each worker. The slow worker still owes acknowledgements." }
+      - { at: 25.3s, do: "kill slow", say: "Watch the fast worker accept the slow worker's unacknowledged jobs and finish them." }
+    watch: [jobs.depth, slow.queued, fast-jobs.ok, slow-jobs.errors]
+  - id: crash-auto-ack
+    label: Crash with automatic acknowledgements
+    goal: Can the fast worker recover jobs the broker already acknowledged?
+    setup: ["rate submit manual", "set fast.prefetch 20", "set slow.prefetch 20", "set slow.ack auto"]
+    steps:
+      - { at: 25s, do: "send submit 40", say: "Look at the slow inbox. The broker drops its copy as each auto-ack delivery arrives." }
+      - { at: 25.3s, do: "kill slow", say: "Compare fast completions with the manual-ack run. Check the Log for lost deliveries." }
+    watch: [jobs.depth, slow.queued, fast-jobs.ok, slow-jobs.errors]
+  - id: poison-message
+    label: Poison message to dead letters
+    goal: What stops one permanently failing job from cycling forever?
+    setup: ["rate submit manual", "kill slow"]
+    steps:
+      - at: 25s
+        do: ["fail fast 100%", "send submit 1"]
+        say: "Watch the fast worker fail the same job on three deliveries. Then look at the dead-letter queue depth."
+      - at: 27s
+        do: ["restore fast", "send submit 1"]
+        say: "A new job succeeds. The failed job remains in the dead-letter queue for inspection."
+    watch: [fast-jobs.rate, fast-jobs.errors, fast-jobs.ok, dead.depth]

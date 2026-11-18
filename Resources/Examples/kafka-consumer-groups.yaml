@@ -1,0 +1,111 @@
+strata: 1
+id: kafka-consumer-groups
+title: Kafka consumer groups and lag
+kind: sim
+category: messaging
+summary: Follow two consumer groups through the same topic and see how slow processing can turn lag into lost records.
+glossaries: [kafka, queueing, scaling]
+narration: "Compare Search indexing and Analytics against producer rate. In Retention loss, watch lag and the Log together."
+
+nodes:
+  - id: producer
+    kind: client
+    label: Event producer
+    at: [0, 1]
+    doc: |
+      Appends one event per publish to the shared topic.
+      During a broker outage, new events cannot enter the log.
+  - id: events
+    kind: topic
+    label: Activity log
+    tech: Kafka
+    at: [1.4, 1]
+    capacity: 240
+    overflow: drop-oldest
+    term: kafka/retention
+    doc: |
+      Keeps the latest 240 records and tracks a separate cursor for each group.
+      Once a record ages out of this size-based window, a group that missed it cannot read it.
+  - id: search
+    kind: worker
+    label: Search indexer
+    at: [2.9, 0.35]
+    latency: fixed 10ms
+    concurrency: 1
+    term: kafka/consumer-group
+    doc: |
+      Indexes each event for search and advances its own group cursor.
+      Its 10 ms handler keeps up even when analytics falls behind.
+  - id: analytics
+    kind: worker
+    label: Analytics
+    at: [2.9, 1.65]
+    latency: fixed 120ms
+    concurrency: 1
+    term: kafka/lag
+    doc: |
+      Aggregates events with a 120 ms handler, about eight records per second per consumer.
+      If lag outruns the retention window, the group skips records the log evicted.
+
+edges:
+  - { from: producer, to: events, protocol: kafka, latency: fixed 5ms }
+  - { from: events, to: search, label: Search group, latency: fixed 2ms }
+  - { from: events, to: analytics, label: Analytics, latency: fixed 2ms }
+
+flows:
+  - { id: produce, label: Published events, from: producer, rate: 4/s, steps: [{ publish: events }] }
+  - { id: search-index, label: Search indexing, on: events, by: search, color: 3, steps: [] }
+  - { id: aggregate, label: Analytics, on: events, by: analytics, color: 2, steps: [] }
+
+controls:
+  - label: Producer rate
+    bind: produce.rate
+    options: [4, 8, 20]
+    unit: /s
+    insights:
+      - when: "== 4"
+        text: One analytics consumer handles about eight records per second, leaving room to catch up after a short burst.
+        effects: [{ metric: Analytics lag, dir: down, good: true }]
+      - when: "== 8"
+        text: Eight events per second nearly saturates one analytics consumer. Bursts can form a backlog.
+        effects: [{ metric: Analytics utilization, dir: up, good: false }]
+      - text: At 20 events per second one analytics consumer falls behind by about 12 per second. Search continues to keep up.
+        effects: [{ metric: Analytics lag, dir: up, good: false }, { metric: Search lag, dir: flat, good: true }]
+  - label: Analytics consumers
+    bind: analytics.replicas
+    options: [1, 2, 4]
+    term: kafka/consumer-group
+    insights:
+      - when: "== 1"
+        text: A single consumer can finish about eight events per second.
+        effects: [{ metric: Analytics completions, dir: down, good: false }]
+      - when: "== 2"
+        text: Two consumers can finish about 16 events per second, still below the highest publish rate.
+        effects: [{ metric: Analytics completions, dir: up, good: true }]
+      - text: Four consumers can finish about 32 events per second. In Kafka this requires at least four assigned partitions, which this topic abstracts away.
+        effects: [{ metric: Analytics lag, dir: down, good: true }]
+
+scenarios:
+  - id: one-group-lags
+    label: One group falls behind
+    goal: Does a slow analytics group delay search indexing?
+    steps:
+      - { at: 10s, do: "rate produce 20/s", say: "Compare both completion rates. Search follows the producer while Analytics lag rises." }
+      - { at: 20s, say: "Inspect the topic to see lag by consumer group. Only Analytics should have a substantial backlog." }
+    watch: [events.lag, search-index.ok, aggregate.ok]
+  - id: retention-loss
+    label: Retention loss
+    goal: Can lag stop growing while analytics still misses data?
+    steps:
+      - at: 5s
+        do: ["set events.capacity 60", "rate produce 20/s"]
+        say: "The topic now keeps 60 records. Watch Analytics fall behind and wait for its lag to reach the retention window."
+      - { at: 17s, say: "Open the Log to see records lost behind retention. Search still processes records at the publish rate." }
+    watch: [events.depth, events.lag, aggregate.ok, search-index.ok]
+  - id: scale-analytics
+    label: Scale the analytics group
+    goal: How many consumers let analytics drain its backlog while traffic continues?
+    steps:
+      - { at: 5s, do: "rate produce 20/s", say: "Watch Analytics lag rise with one consumer." }
+      - { at: 16s, do: "scale analytics 4", say: "Watch Analytics completions overtake the producer, then watch lag return toward zero." }
+    watch: [events.lag, aggregate.ok, produce.ok]
