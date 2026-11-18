@@ -74,6 +74,7 @@ Then build:
   - Labels as the team says them (`orders-svc`, `ledger-db`).
   - Set `repo:` at the top and `code:` on every node (folder, or `file.go:123` for a key handler).
   - `ops:` on every service: see [Operations](#operations).
+  - `schema:` on the main databases and `entities:` on the services that load them: see [Data](#data).
 - **Docs on every node** (`doc`), 2-5 lines:
   - what it owns;
   - key endpoints, topics or tables;
@@ -120,6 +121,27 @@ pattern that matters, with `code:` pointing at it. `strata schema` lists the fie
   callee's endpoint. Put `op:` on each consumer flow for its consume op.
 - **Review** with `strata ops <id>`. Check that every service has its ops, that tables, keys and topics
   are right, and that the ops you care about are named by a flow. Then run `strata validate`.
+
+## Data
+
+Show what the data looks like: `schema:` on database, store and search nodes, `entities:` on the
+services that load them, and real numbers on flows. `strata schema` lists the fields.
+
+- **Schemas** come from migrations (`CREATE TABLE`, `ALTER TABLE`, foreign keys, `CREATE INDEX`) or
+  ORM models (GORM structs, Prisma schema, SQLAlchemy, ActiveRecord). Foreign keys become `ref`.
+  List the indexes the ops' queries use, and make each op's `tables` match the schema.
+- **Entities** come from domain structs and the repository code that loads them: the root table, plus
+  the tables the load joins in `includes`.
+- **Sample rows**, 3-6 per table, come from seed files or test fixtures, or are synthesised
+  realistically. Make the ids join across tables.
+- **Never copy production rows or real personal data**, even when you can read a real database. Use
+  made-up names and `example.com` emails.
+- **Volumes** (`rows`, `growth`) come from what the user or the code says (retention jobs,
+  partitioning, the user's numbers). Say in the node's `doc` that they are estimates.
+- **`traffic:` and `slo:`** on flows come from configs (rate limits, autoscaling targets), dashboards
+  the user mentions, or SLO docs. Leave them out rather than invent them.
+- **Check** with `strata data <id>`: each table's keys and rows, `unmatched` lines for ids that join
+  nothing, and each entity assembled from its first root row. Then run `strata validate`.
 
 ## Lessons (`kind: sim`)
 
