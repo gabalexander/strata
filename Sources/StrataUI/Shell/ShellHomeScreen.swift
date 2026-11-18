@@ -144,6 +144,7 @@ struct HomeScreen: View {
             Text(command)
                 .font(Theme.mono(11))
                 .textSelection(.enabled)
+                .strataCopyMenu("Copy command", text: command, overlays: model.overlays)
                 .padding(7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .card(Theme.bg, radius: Theme.radiusSmall)

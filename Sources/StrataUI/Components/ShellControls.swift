@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -178,42 +179,16 @@ public struct StrataKeycap: View {
     }
 }
 
-@MainActor
-public struct StrataSearchField: View {
-    private let prompt: String
-    @Binding private var text: String
-    @FocusState private var focused: Bool
-
-    public init(_ prompt: String, text: Binding<String>) {
-        self.prompt = prompt
-        self._text = text
-    }
-
-    public var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
-            TextField(prompt, text: $text, prompt: Text(prompt).foregroundStyle(Theme.muted))
-                .textFieldStyle(.plain)
-                .focused($focused)
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                    focused = true
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .font(Theme.ui())
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .card()
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.radius)
-                .strokeBorder(focused ? Theme.accent.opacity(0.5) : .clear)
-                .allowsHitTesting(false)
+public extension View {
+    /// Selectable text opens the system's context menu on right-click, a separate window that screen
+    /// sharing would see. This claims the right-click and offers an in-window Copy instead.
+    func strataCopyMenu(_ title: String, text: String, overlays: Overlays) -> some View {
+        strataMenu(overlays) {
+            [MenuItem(title, icon: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                overlays.toast("Copied")
+            }]
         }
     }
 }
