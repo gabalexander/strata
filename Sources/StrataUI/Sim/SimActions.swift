@@ -26,6 +26,7 @@ struct SimActions {
             + SimPressureMenus.palette(sim: sim, model: model)
             + SimHowMenus.palette(sim: sim)
             + SimAskMenus.palette(sim: sim, model: model)
+            + SimDriftMenus.palette(sim: sim, model: model)
         if let selection {
             let menu = menu(for: selection)
             if let heading = menu.first, heading.isHeader {

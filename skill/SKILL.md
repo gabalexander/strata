@@ -39,6 +39,18 @@ Maps of work projects are private:
    errors should be about 0, and each scenario should show what its `goal` promises.
 6. **Show it**: `strata open <id>` (add `--path node/child` to open a deep dive).
 
+**Refreshing a map** ("update the map", "the code changed"): run `strata drift <id> --json` first and fix
+each finding where its map location (level, node, op, step, manifest `line`) says:
+
+- point `code:` at the new path or line (`found`);
+- copy each changed query verbatim from its repo location;
+- rename what was renamed, and remove ops, nodes or values that are gone;
+- add the repo items it lists as not on the map (queries, binaries, subcommands, topics, keys, enum values)
+  as ops, nodes and values, or tell the user why you left one out.
+
+Then `strata validate` and `strata drift <id>` again until drift exits 0. Notes (`info`) are heuristics:
+check each one, but they don't block.
+
 ## Mapping a real project
 
 Survey before you draw, and read the code, not only the file names:
@@ -226,7 +238,9 @@ better left to right. Keep `direction: right` (the default) for short pipelines 
 - `strata how <id>`: every mechanism plays from start to end with exact commands and its failure branches
   (`--mechanism <id>` or `--branch <id>` prints just one);
 - `strata enums <id>`: every code has a name, a meaning and its transitions (`--find 3200` looks one up);
-- `strata analyze <id>`: the bottleneck and max rates match what the team knows ([Pressure](#pressure)).
+- `strata analyze <id>`: the bottleneck and max rates match what the team knows ([Pressure](#pressure));
+- `strata drift <id>`: every code reference, query, binary, topic, key and enum still matches the repo (exit 0),
+  and what it lists as not on the map is either added or left out on purpose.
 
 When you hand the map over, tell the user what you covered (binaries, mechanisms, formulas, enums)
 and where you guessed.

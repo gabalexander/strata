@@ -20,6 +20,8 @@ import StrataCore
 /// path of `STRATA_SNAP_HOW_BRANCH`, with that step's detail open (`STRATA_SNAP_HOW_DETAIL=0` keeps the
 /// state panel instead). `STRATA_SNAP_MORE=1` opens every "More" disclosure (briefs), and
 /// `STRATA_SNAP_HOVER=node` shows that node's hover card (processes, term, formula or brief).
+/// `STRATA_SNAP_DRIFT=1` runs `strata drift` on the manifest's repo first (or on
+/// `STRATA_SNAP_DRIFT_REPO`), so the cards show their drift marks and the inspector its Drift sections.
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -36,7 +38,7 @@ import StrataCore
     }
     let direction = env["STRATA_SNAP_DIRECTION"].flatMap(FlowDirection.init(rawValue:))
     let name = (["manifest-\(manifest.id)"] + levelPath + (env["STRATA_SNAP_TIDY"] == "1" ? ["tidy"] : [])
-                + (direction.map { [$0.rawValue] } ?? [])
+                + (direction.map { [$0.rawValue] } ?? []) + (env["STRATA_SNAP_DRIFT"] == "1" ? ["drift"] : [])
                 + (env["STRATA_SNAP_HOW"].map { ["how", $0, env["STRATA_SNAP_HOW_BRANCH"] ?? "", env["STRATA_SNAP_HOW_STEP"] ?? "",
                                                  env["STRATA_SNAP_HOW_DETAIL"] == "0" ? "state" : ""] } ?? [])
                 + (env["STRATA_SNAP_MORE"] == "1" ? ["more"] : [])
@@ -63,6 +65,7 @@ import StrataCore
         while t < seconds { sim.tick(1.0 / 60); t += 1.0 / 60 }
         sim.playing = false
         model.sessions[AppModel.sessionKey(manifest.id, levelPath)] = sim
+        if env["STRATA_SNAP_DRIFT"] == "1" { SimDriftSnapshot.check(model, manifest: manifest, repo: env["STRATA_SNAP_DRIFT_REPO"]) }
         let op = env["STRATA_SNAP_OP"]?.split(separator: "/").map(String.init)
         let selected = env["STRATA_SNAP_SELECT"] ?? op?.first.flatMap { $0 == InheritedOps.ownerKey ? nil : $0 }
         if let op, op.count == 2 { SimOpsSnapshot.open(sim, node: op[0], op: op[1], from: selected) }

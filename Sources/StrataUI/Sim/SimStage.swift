@@ -116,6 +116,7 @@ struct SimStage: View {
     var body: some View {
         let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
         let _ = SimPressureState.of(sim).watch()          // so do heat mode and a pinned blast radius
+        let _ = SimDriftState.of(model).watch(sim.manifest.id)   // and a drift check finishing
         GeometryReader { proxy in
             let camera = viewport.current(renderer.layout, in: proxy.size, compact: compact)
             let canvas = stageCanvas(camera)
@@ -258,6 +259,7 @@ struct SimStage: View {
         let highlight = compact ? SimOpsState.of(sim).highlight(for: selection)
             : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim)
         renderer.hoveredChip = SimComponentsHover.of(sim).chip
+        renderer.drifted = SimDriftState.of(model).badges(for: sim)
         return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,

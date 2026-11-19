@@ -17,7 +17,7 @@ let filter = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil
 MainActor.assumeIsolated {
     let all = parserChecks() + engineChecks() + vaultChecks() + cliChecks() + opsPathChecks() + dataChecks() + dataFixtureChecks()
         + analysisChecks() + layoutChecks() + verticalLayoutChecks() + howChecks() + enumChecks() + sqlFormatChecks()
-        + deepDiveOpsChecks() + howTextChecks() + briefChecks() + askChecks()
+        + deepDiveOpsChecks() + howTextChecks() + briefChecks() + askChecks() + driftChecks()
     var ran = 0
     for c in all where filter.map({ c.name.contains($0) }) ?? true {
         currentCase = c.name; ran += 1

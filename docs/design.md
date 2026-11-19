@@ -82,6 +82,9 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Failure flash:** on `lastFailure` the border flashes red and fades over 0.5 s of sim time.
   - **Selected:** a 1.5 pt amber border plus a soft amber glow. **Hovered:** the border brightens.
   - **Personal note:** a small note glyph when the node has one.
+  - **Drift:** a node the last drift check found stale (an error or warning on it, its ops, or inside its deep
+    dive) gets a small sync glyph (`arrow.triangle.2.circlepath`, 10 pt, warn at 85%) beside the status
+    glyphs top-right. There is no count and the card itself doesn't change colour: the details are in the inspector.
 - **Layout:** auto layout (Layout*.swift in StrataCore) places levels in columns by flow: about 260 pt
   per column (wider where labels need room) and 150 pt per row. **Tidy layout** (toolbar wand, ⌘K,
   ⌥⌘L) lays out a `manual` level for the session: cards glide to their places over 0.55 s (none with
@@ -147,6 +150,21 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
     with the owner's name on each row.
   - A process gets a second header, "Operations of orders-svc", for the inherited ops mapped to it
     or to a node it calls. They are grouped by that node (`orders db 6`) and introduced by one faint line.
+- **Drift** (docs/manifest.md, Drift): quiet by design.
+  - A map without `repo:` shows nothing. A repo that isn't on this Mac gets one faint line in the overview
+    ("Drift isn't checked: ~/x isn't on this Mac.") and nothing else. A clean map is one muted line, "Matches the repo".
+  - Nothing selected: a Drift section before the diagram legend. It has the freshness and counts, then
+    `checked 4 min ago · a1b2c3d · 1,284 files`, a chip per kind with findings (a click filters), and this
+    level's findings (five, then Show all). At the root, "Not on the map: 3 queries, 1 binary" folds open.
+    Check again (the sync glyph) and "Copy prompt for your agent" finish it.
+  - A node: a Drift section before Operations, with its findings and those inside its deep dive. An op
+    detail: a Drift section before Code.
+  - A row has a 6 pt severity dot (bad, warn, faint) and the message, then:
+    - where it is in the map (a click selects that node, opening its level);
+    - the repo location, which opens the code (struck through when the file is gone);
+    - where it went, when drift found it;
+    - a changed query's diff (mono, `+` good, `−` bad);
+    - the fix, in muted text.
 - **Op rows:** a kind glyph, the label, an R/W badge, the live rate and p99, a risk dot, and a mono
   second line.
   - Hovering a row lights the op's path on the stage and dims the rest. For an inherited op that is
