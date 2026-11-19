@@ -133,7 +133,8 @@ struct StageLayout {
     init(level: Level) {
         let cards = level.nodes.enumerated().map { i, node in
             let at = node.at ?? GridPoint(Double(i % 5), Double(i / 5))
-            return Card(node: node, rect: CGRect(x: at.x * 220 + 36, y: at.y * 130 + 36, width: 168, height: 64))
+            let size = StageLayout.cardSize(for: node)
+            return Card(node: node, rect: CGRect(x: at.x * 220 + 36, y: at.y * 130 + 36, width: size.width, height: size.height))
         }
         self.cards = cards
         let byID = Dictionary(cards.map { ($0.node.id, $0) }, uniquingKeysWith: { first, _ in first })

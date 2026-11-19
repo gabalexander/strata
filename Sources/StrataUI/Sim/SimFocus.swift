@@ -31,6 +31,12 @@ final class SimFocus {
         model.open(.sim(id, path: path), parentRate: model.sessions[key]?.parentRate)
     }
 
+    /// Selects `node` when the level `session` next appears, without opening it: a dive is already on its
+    /// way there (a component chip on a card).
+    func select(_ node: String, onArrival session: String) {
+        request = Request(session: session, node: node)
+    }
+
     /// The node to select at this level, once.
     func take(for session: String) -> String? {
         guard let request, request.session == session else { return nil }

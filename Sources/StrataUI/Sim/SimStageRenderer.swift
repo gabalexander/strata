@@ -9,10 +9,15 @@ final class StageRenderer {
     private var imageCache: [String: GraphicsContext.ResolvedImage] = [:]
     private var runtimeRoutes: [String: StageLayout.Route] = [:]
     private var gridCache: (camera: StageCamera, size: CGSize, path: Path)?
+    /// Component chips per card, laid out on first draw (SimStageComponents.swift).
+    var chips: [String: [StageChip]] = [:]
+    /// The chip under the pointer, drawn brighter.
+    var hoveredChip: StageChip.Ref?
 
     enum Lettering: Hashable {
         case label, node, compactNode, badge, live, mutedLive, failure, hint
         case tag(Color)
+        case chip(Color)
     }
 
     private struct TextKey: Hashable {
@@ -320,6 +325,8 @@ final class StageRenderer {
         case .annotation: summary = ""
         }
 
+        drawComponents(card, selected: selected, in: content)
+
         let footerY = node.kind.role == .buffer ? r.maxY - 17 : r.maxY - 13
         content.draw(text(summary, .live, width: r.width - (node.canDeepDive ? 37 : 20), in: content),
                      at: CGPoint(x: r.minX + 10, y: footerY), anchor: .leading)
@@ -399,7 +406,7 @@ final class StageRenderer {
         context.draw(resolved, at: point)
     }
 
-    private func text(_ raw: String, _ style: Lettering, width: CGFloat? = nil,
+    func text(_ raw: String, _ style: Lettering, width: CGFloat? = nil,
                       in context: GraphicsContext) -> GraphicsContext.ResolvedText {
         let key = TextKey(text: raw, style: style, width: width)
         if let cached = textCache[key] { return cached }
@@ -415,6 +422,7 @@ final class StageRenderer {
         case .failure: (font, color) = (Theme.mono(10, .medium), Theme.bad)
         case .hint: (font, color) = (Theme.small, Theme.muted)
         case .tag(let tint): (font, color) = (Theme.mono(10, .medium), tint)
+        case .chip(let tint): (font, color) = (Theme.ui(10, .medium), tint)
         }
         func resolve(_ value: String) -> GraphicsContext.ResolvedText {
             context.resolve(Text(verbatim: value).font(font).foregroundStyle(color))
@@ -440,7 +448,7 @@ final class StageRenderer {
         return resolved
     }
 
-    private func symbol(_ name: String, at point: CGPoint, size: CGFloat, tint: Color, in context: GraphicsContext) {
+    func symbol(_ name: String, at point: CGPoint, size: CGFloat, tint: Color, in context: GraphicsContext) {
         let image: GraphicsContext.ResolvedImage
         if let cached = imageCache[name] { image = cached }
         else {

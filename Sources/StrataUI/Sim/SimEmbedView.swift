@@ -201,6 +201,11 @@ private struct SimEmbedWorkspace: View {
             Rectangle().fill(Theme.border).frame(height: 1)
             SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
                      selection: selection, compact: true, visible: visible, still: still, onSelect: { selection = $0 },
+                     onComponent: { id, component in
+                         guard let node = sim.level.node(id), node.inside != nil, node.detail == nil else { return }
+                         if let component { SimFocus.of(model).select(component, onArrival: AppModel.sessionKey(self.id, sim.path + [id])) }
+                         dive(node)
+                     },
                      menu: SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive).menu)
         }
     }
