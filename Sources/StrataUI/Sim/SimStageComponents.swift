@@ -6,7 +6,8 @@ import StrataCore
 // scheduler) lists them as chips on its card. A chip dives straight in with that process selected, and
 // hovering the card lists every process with its tech, binary and code.
 
-/// One chip on a card, in world coordinates. `component` is nil for the "+N" chip that stands for the rest.
+/// One chip on a card, relative to the card's top-left corner, so it stays put when "Tidy layout" moves
+/// the card. `component` is nil for the "+N" chip that stands for the rest.
 struct StageChip {
     struct Ref: Hashable {
         let node: String
@@ -37,18 +38,21 @@ extension StageRenderer {
         guard StageLayout.hasChips(card.node) else { return }
         for chip in chipLayout(card, in: context) {
             let hot = hoveredChip == StageChip.Ref(node: card.node.id, component: chip.component)
-            let shape = Path(roundedRect: chip.rect, cornerRadius: 4)
+            let rect = chip.rect.offsetBy(dx: card.rect.minX, dy: card.rect.minY)
+            let shape = Path(roundedRect: rect, cornerRadius: 4)
             context.fill(shape, with: .color(hot ? Theme.accent.opacity(0.16) : selected ? Theme.accent.opacity(0.07) : Theme.hover))
             context.stroke(shape, with: .color(hot ? Theme.accent.opacity(0.6) : Theme.border), lineWidth: hot ? 1 : 0.5)
-            let label = text(chip.label, .chip(hot ? Theme.text : Theme.muted), width: chip.rect.width - 9, in: context)
-            context.draw(label, at: CGPoint(x: chip.rect.midX, y: chip.rect.midY))
+            let label = text(chip.label, .chip(hot ? Theme.text : Theme.muted), width: rect.width - 9, in: context)
+            context.draw(label, at: CGPoint(x: rect.midX, y: rect.midY))
         }
     }
 
     /// The chip at a world point, on any card.
     func chip(at point: CGPoint) -> StageChip.Ref? {
         for (node, list) in chips {
-            if let chip = list.first(where: { $0.rect.insetBy(dx: -1.5, dy: -2).contains(point) }) {
+            guard let card = layout.cardsByID[node]?.rect else { continue }
+            let local = CGPoint(x: point.x - card.minX, y: point.y - card.minY)
+            if let chip = list.first(where: { $0.rect.insetBy(dx: -1.5, dy: -2).contains(local) }) {
                 return StageChip.Ref(node: node, component: chip.component)
             }
         }
@@ -59,9 +63,8 @@ extension StageRenderer {
     private func chipLayout(_ card: StageLayout.Card, in context: GraphicsContext) -> [StageChip] {
         if let cached = chips[card.node.id] { return cached }
         let components = card.node.components
-        let r = card.rect
-        let left = r.minX + 10, right = r.maxX - 10, gap: CGFloat = 4
-        let y = r.minY + StageLayout.chipRowTop
+        let left: CGFloat = 10, right = card.rect.width - 10, gap: CGFloat = 4
+        let y = StageLayout.chipRowTop
         func width(_ label: String) -> CGFloat {
             text(label, .chip(Theme.muted), in: context).measure(in: CGSize(width: 400, height: 20)).width + 10
         }
