@@ -385,6 +385,8 @@ private struct Context {
     var bracket = false
     var clause: Clause = .none
     var listBroken = false
+    /// A JOIN too long for one line puts its ON on the next.
+    var onBreaks = false
     /// The next item of a broken list starts the list, on its own line.
     var listPending = false
     var between = 0
@@ -396,6 +398,8 @@ private struct Writer {
     var lines: [String] = []
     var line = ""
     var indent = 0
+    /// The indent of the last line the layout started; wrapped lines continue 4 deeper than it.
+    var base = 0
     var fresh = true
 
     /// Characters on the current line (after any newline inside a multi-line token).
@@ -405,10 +409,11 @@ private struct Writer {
     }
 
     /// Starts a line at `indent`; at the very start it only sets the indent.
-    mutating func newline(_ indent: Int) {
+    mutating func newline(_ indent: Int, wrapped: Bool = false) {
         if !(lines.isEmpty && fresh) { lines.append(line) }
         line = String(repeating: " ", count: indent)
         self.indent = indent
+        if !wrapped { base = indent }
         fresh = true
     }
 
@@ -512,6 +517,8 @@ private struct StatementFormatter {
             }
         } else if ctx.listPending, !isListModifier(i, ctx.clause) {
             gap = .newline(ctx.base + 2)
+        } else if ctx.statement, ctx.clause == .join, ctx.onBreaks, ctx.caseDepth == 0, word(i) == "ON" {
+            gap = .newline(ctx.base + 2)
         } else if ctx.statement, ctx.clause.breaksConditions, ctx.caseDepth == 0, word(i) == "AND" || word(i) == "OR",
                   !(word(i) == "AND" && ctx.between > 0) {
             gap = .newline(ctx.base + 2)
@@ -527,6 +534,7 @@ private struct StatementFormatter {
             ctx.caseDepth = 0
             ctx.listBroken = clause.isList && listBreaks(from: i, base: ctx.base)
             ctx.listPending = ctx.listBroken
+            ctx.onBreaks = clause == .join && ctx.base + inlineLength(i...clauseExtent(from: i).end) > width
         }
         switch word(i) {
         case "BETWEEN": ctx.between += 1
@@ -576,6 +584,9 @@ private struct StatementFormatter {
         let text = cased(i, keyword: keyword)
         switch gap {
         case .none: writer.write(text, space: false)
+        case .space where wraps(i):
+            writer.newline(writer.base + 4, wrapped: true)
+            writer.write(text, space: false)
         case .space: writer.write(text, space: true)
         case .newline(let indent):
             writer.newline(indent)
@@ -588,6 +599,26 @@ private struct StatementFormatter {
     }
 
     // MARK: Spacing
+
+    /// A line the layout could not shorten breaks at a space before the run of tokens that would cross
+    /// the width, and continues 4 deeper than the line it came from.
+    private func wraps(_ i: Int) -> Bool {
+        guard writer.column > writer.indent, writer.column + 1 > writer.base + 4 else { return false }
+        if items[i].token.kind == .string, token(i - 1)?.kind == .string { return false }
+        return writer.column + 1 + runLength(i) > width
+    }
+
+    /// Characters from token `i` to the next place a line could break.
+    private func runLength(_ i: Int) -> Int {
+        var n = items[i].token.text.count
+        var k = i
+        while k + 1 < items.count, items[k].token.kind != .open || !startsSubquery(k + 1),
+              items[k].trailing.isEmpty, items[k + 1].leading.isEmpty, inlineGap(k + 1) == 0 {
+            k += 1
+            n += items[k].token.text.count
+        }
+        return n
+    }
 
     /// The gap between token `i - 1` and `i` when they share a line: 1 for a space, else 0. Brackets and
     /// commas are tidied; everything else keeps whether the source had a space there.
@@ -702,6 +733,14 @@ private struct StatementFormatter {
     /// A list clause starting at `i` goes one item per line when it has several items and doesn't fit
     /// on its line, or holds comments.
     private func listBreaks(from i: Int, base: Int) -> Bool {
+        let (end, commas) = clauseExtent(from: i)
+        guard commas > 0 else { return false }
+        let subquery = (i...end).contains { items[$0].token.kind == .open && startsSubquery($0 + 1) }
+        return subquery || base + inlineLength(i...end) > width || hasComments(i...end)
+    }
+
+    /// The last token of the clause starting at `i`, and its top-level commas.
+    private func clauseExtent(from i: Int) -> (end: Int, commas: Int) {
         var depth = 0, commas = 0
         var end = i
         var k = i + 1
@@ -721,9 +760,7 @@ private struct StatementFormatter {
             end = k
             k += 1
         }
-        guard commas > 0 else { return false }
-        let subquery = (i...end).contains { items[$0].token.kind == .open && startsSubquery($0 + 1) }
-        return subquery || base + inlineLength(i...end) > width || hasComments(i...end)
+        return (end, commas)
     }
 
     // MARK: Case

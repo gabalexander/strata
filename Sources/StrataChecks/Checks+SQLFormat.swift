@@ -156,9 +156,17 @@ private let corpus = [
             check(SQLFormat.format("SELECT a FROM t WHERE e=-1 AND f=ARRAY[1,2]").hasSuffix("e=-1\n  AND f=ARRAY[1, 2]"),
                   "operators and arrays keep their spacing: \(SQLFormat.format("SELECT a FROM t WHERE e=-1 AND f=ARRAY[1,2]"))")
         },
+        CheckCase(name: "sql format breaks long joins and wraps what it cannot break") {
+            let join = SQLFormat.format("SELECT c.id FROM campaigns c LEFT JOIN campaign_events e ON e.campaign_id = c.id AND e.kind = 'x'", width: 42)
+            check(join == "SELECT c.id\nFROM campaigns c\nLEFT JOIN campaign_events e\n  ON e.campaign_id = c.id\n  AND e.kind = 'x'", "join:\n\(join)")
+            let wrapped = SQLFormat.format("SELECT a FROM t WHERE c.account_id = sqlc.arg(account_id) AND x = 1", width: 30)
+            check(wrapped.contains("WHERE c.account_id =\n    sqlc.arg(account_id)\n  AND x = 1"), "wrapped:\n\(wrapped)")
+            let long = SQLFormat.format(corpus[0], width: 30)
+            check(long.split(separator: "\n").allSatisfy { $0.count <= 30 }, "lines over 30 columns:\n\(long)")
+        },
         CheckCase(name: "sql format is idempotent") {
             for source in corpus {
-                for width in [SQLFormat.defaultWidth, 44] {
+                for width in [SQLFormat.defaultWidth, 44, 30, 16] {
                     let once = SQLFormat.format(source, width: width)
                     let twice = SQLFormat.format(once, width: width)
                     check(once == twice, "not idempotent at \(width):\n\(once)\n--- became ---\n\(twice)")
@@ -167,7 +175,7 @@ private let corpus = [
         },
         CheckCase(name: "sql format changes only whitespace and keyword case") {
             for source in corpus {
-                for width in [SQLFormat.defaultWidth, 44] {
+                for width in [SQLFormat.defaultWidth, 44, 16] {
                     let before = SQLFormat.tokens(source), after = SQLFormat.tokens(SQLFormat.format(source, width: width))
                     check(before.count == after.count, "token count changed for \(source)")
                     for (a, b) in zip(before, after) where a.kind != b.kind || a.text != b.text {
