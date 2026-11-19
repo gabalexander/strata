@@ -450,6 +450,7 @@ func referenceFences() throws -> [String] {
 
 func specManifest(_ snippet: String) -> String {
     if snippet.hasPrefix("strata: 1") { return snippet }
+    if snippet.hasPrefix("enums:") { return enumSpecManifest(snippet) }
     // The node and step field catalogs contain ellipses and mutually exclusive alternatives.
     let text = snippet.replacingOccurrences(of: "[...]", with: "[]").components(separatedBy: "\n")
         .filter { !$0.contains("inside: {...}") }.joined(separator: "\n")

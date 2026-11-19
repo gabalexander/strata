@@ -93,7 +93,7 @@ extension Syntax {
 
 extension Decode {
     static let tableKeys: Set<String> = ["table", "doc", "columns", "indexes", "rows", "volume", "owner"]
-    static let columnKeys: Set<String> = ["name", "type", "pk", "ref", "nullable", "unique", "note"]
+    static let columnKeys: Set<String> = ["name", "type", "pk", "ref", "nullable", "unique", "note", "enum"]
     static let entityKeys: Set<String> = ["name", "source", "root", "includes", "doc", "code"]
 
     static func table(_ field: Field) -> TableSchema? {
@@ -120,6 +120,7 @@ extension Decode {
         column.nullable = field["nullable"].bool()
         column.unique = field["unique"].bool() ?? false
         column.note = field["note"].anyText()
+        column.enumRef = field["enum"].id()
         return column
     }
 

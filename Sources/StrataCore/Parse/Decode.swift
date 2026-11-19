@@ -7,7 +7,7 @@ enum Decode {
     static func manifest(_ root: Field, source: ManifestSource, inline: Bool = false) -> Manifest? {
         let keys: Set<String> = ["strata", "id", "title", "kind", "category", "summary", "tags", "repo",
                                  "glossaries", "terms", "notes", "links"]
-        guard root.mapping(keys.union(levelKeys).union(inline ? embedKeys : [])) else { return nil }
+        guard root.mapping(keys.union(levelKeys).union(manifestEnumKeys).union(inline ? embedKeys : [])) else { return nil }
         let version = root["strata"]
         if let number = version.integer(required: !inline, in: Int.min...Int.max), number != 1 {
             version.diagnose("unsupported manifest version \(number); use strata: 1")
@@ -33,6 +33,7 @@ enum Decode {
         }
         manifest.glossaries = root["glossaries"].items().compactMap { $0.id() }
         manifest.terms = root["terms"].items(named: true).compactMap(term)
+        manifest.enums = root["enums"].items(named: true).compactMap(enumDef)
         manifest.notes = root["notes"].text()
         manifest.links = root["links"].items().compactMap(link)
         return manifest
