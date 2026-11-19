@@ -119,18 +119,21 @@ struct SimStage: View {
                     switch phase {
                     case .active(let point):
                         let target = hit(point, camera)
-                        trackComponents(target, at: point, camera)
                         let badge = SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
+                        trackComponents(target, at: point, camera, badge: badge)
                         guard hovered != target || hoveredBadge != badge else { return }
                         clearTermHover()
                         hovered = target
                         hoveredBadge = badge
-                        // The ƒ badge shows the node's formula; the rest of the card its term, else its formula.
+                        // One card at a time, so none covers another: the ƒ badge shows the node's formula
+                        // (and hides the processes card); the rest of a card with process chips shows its
+                        // processes; the rest of any other card its term, else its formula.
                         if case .node(let id) = target,
                            let card = renderer.layout.cardsByID[id],
-                           let show = SimFormulaStage.hoverCard(card.node, badge: badge, terms: terms) {
+                           let show = SimFormulaStage.hoverCard(card.node, badge: badge, chips: StageLayout.hasChips(card.node),
+                                                                terms: terms) {
                             hoverTask = Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(300))
+                                try? await Task.sleep(for: .milliseconds(badge ? 120 : 300))
                                 guard !Task.isCancelled, hovered == target else { return }
                                 let rect = viewport.current(renderer.layout, in: proxy.size, compact: compact).screen(card.rect)
                                 let origin = proxy.frame(in: .global).origin
@@ -290,17 +293,20 @@ struct SimStage: View {
     }
 
     /// Lights the chip under the pointer and, after a moment, lists the components of the card under it.
-    private func trackComponents(_ target: StageSelection?, at point: CGPoint, _ camera: StageCamera) {
+    /// On the card's ƒ badge the list hides for the formula card, and comes back off it without a delay.
+    private func trackComponents(_ target: StageSelection?, at point: CGPoint, _ camera: StageCamera, badge: Bool) {
         var node: String?
         if case .node(let id) = target, let card = renderer.layout.cardsByID[id], StageLayout.hasChips(card.node) { node = id }
-        SimComponentsHover.of(sim).track(node: node, chip: node == nil ? nil : renderer.chip(at: camera.world(point)))
+        let hover = SimComponentsHover.of(sim)
+        hover.track(node: node, chip: node == nil || badge ? nil : renderer.chip(at: camera.world(point)))
+        hover.suppress(badge && node != nil)
     }
 
     /// The components card, above the node's card when it fits there, else below it.
     @ViewBuilder
     private func componentsCard(_ camera: StageCamera, size: CGSize) -> some View {
         let hover = SimComponentsHover.of(sim)
-        if hover.showsCard, let id = hover.node, let card = renderer.layout.cardsByID[id], StageLayout.hasChips(card.node) {
+        if hover.showsCard, !hover.suppressed, let id = hover.node, let card = renderer.layout.cardsByID[id], StageLayout.hasChips(card.node) {
             let rect = camera.screen(card.rect)
             let x = min(max(8, rect.minX), max(8, size.width - StageComponentsCard.width - 8))
             let above = rect.minY - 8 - StageComponentsCard.estimatedHeight(card.node) >= 8

@@ -63,6 +63,9 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Replicas** appear as small dots top-right.
   - **Deep dive:** a small layers glyph bottom-right means double-click to zoom in.
   - **Ops:** a small `6 ops` badge after the tech badge. **Formula:** an ƒ badge top-right; hovering it shows the typeset formula.
+  - **Hover cards:** one at a time, so none covers another. The ƒ badge shows the formula after 120 ms and
+    hides the processes card while the pointer is on it. The rest of a card with process chips shows the
+    processes card; the rest of any other card shows its term (300 ms), else its formula.
   - **Processes:** a node whose deep dive runs several processes lists them as chips under the tech
     badge, and its card is 80 pt tall, centred on its row so edges stay level. Clicking a chip dives in.
   - **Down:** desaturated at 40% opacity with a red "down" pill. **Slow:** a snail glyph in amber. **Failing:** red border pulse.

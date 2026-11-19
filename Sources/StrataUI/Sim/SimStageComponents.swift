@@ -101,6 +101,8 @@ final class SimComponentsHover {
     private(set) var node: String?
     private(set) var chip: StageChip.Ref?
     private(set) var showsCard = false
+    /// The pointer is on the card's ƒ badge: the formula card shows there instead, so this one hides.
+    private(set) var suppressed = false
     @ObservationIgnored private var task: Task<Void, Never>?
 
     private static let stores = NSMapTable<Simulation, SimComponentsHover>.weakToStrongObjects()
@@ -127,7 +129,12 @@ final class SimComponentsHover {
         }
     }
 
-    func clear() { track(node: nil, chip: nil) }
+    func clear() {
+        track(node: nil, chip: nil)
+        suppress(false)
+    }
+
+    func suppress(_ value: Bool) { if suppressed != value { suppressed = value } }
 
     fileprivate func show(node: String, chip: String?) {
         task?.cancel()

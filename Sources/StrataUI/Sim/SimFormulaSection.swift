@@ -236,11 +236,16 @@ extension StageRenderer {
 }
 
 extension SimFormulaStage {
-    /// What hovering a node shows after the delay: its formula over the ƒ badge (or when it has no
-    /// term), else its glossary term. nil when it has neither.
+    /// What hovering a node shows after the delay: its formula over the ƒ badge; elsewhere on a card
+    /// with process chips nothing (the processes card shows there); else its glossary term, or its
+    /// formula when it has no term. nil when there is nothing to show.
     @MainActor
-    static func hoverCard(_ node: Node, badge: Bool, terms: TermIndex) -> ((Overlays, CGRect) -> Void)? {
-        if let formula = node.formula, badge || node.term.flatMap(terms.term) == nil {
+    static func hoverCard(_ node: Node, badge: Bool, chips: Bool, terms: TermIndex) -> ((Overlays, CGRect) -> Void)? {
+        if badge, let formula = node.formula {
+            return { overlays, anchor in overlays.showFormula(formula, title: node.label, anchor: anchor) }
+        }
+        if chips { return nil }
+        if let formula = node.formula, node.term.flatMap(terms.term) == nil {
             return { overlays, anchor in overlays.showFormula(formula, title: node.label, anchor: anchor) }
         }
         guard let term = node.term.flatMap(terms.term) else { return nil }
