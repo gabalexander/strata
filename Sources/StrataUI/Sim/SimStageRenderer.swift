@@ -9,6 +9,7 @@ final class StageRenderer {
     /// A "Tidy layout" move is playing, so the stage keeps drawing frames while paused.
     private(set) var animating = false
     @ObservationIgnored private var level: Level
+    @ObservationIgnored private var tidied = false
     @ObservationIgnored private var transition: (from: [String: CGRect], start: Date)?
     @ObservationIgnored private var frameLayout: (time: Date, layout: StageLayout)?
     private let flowColors = (1...6).map(Theme.token)
@@ -38,11 +39,14 @@ final class StageRenderer {
     /// false when nothing moves.
     @discardableResult
     func tidy(animated: Bool) -> Bool {
-        let tidied = DiagramLayout.tidy(level)
-        let next = StageLayout(level: tidied)
+        // Once tidied, the layout stays put: running it again on its own output could only shuffle it.
+        guard !tidied else { return false }
+        tidied = true
+        let arranged = DiagramLayout.tidy(level)
+        let next = StageLayout(level: arranged)
         let from = Dictionary(layout.cards.map { ($0.node.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
         guard next.cards.contains(where: { card in from[card.node.id].map { !$0.equalTo(card.rect) } ?? true }) else { return false }
-        level = tidied
+        level = arranged
         runtimeRoutes = [:]
         frameLayout = nil
         layout = next

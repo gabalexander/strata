@@ -140,9 +140,10 @@ private struct SimWorkspace: View {
     }
 
     /// "Tidy layout": auto layout for this level, cards gliding to their new places, then fit the view.
+    /// An auto-laid-out level is already tidy.
     private func tidy() {
         model.overlays.dismissMenu()
-        if renderer.tidy(animated: !reduceMotion) {
+        if sim.manifest.layout == .manual, renderer.tidy(animated: !reduceMotion) {
             viewport.fit()
         } else {
             model.overlays.toast("Already tidy")
