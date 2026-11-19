@@ -62,6 +62,9 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Buffers** draw message slots, small rounded rects coloured by flow (`NodeState.held`), plus `+N` past 12.
   - **Replicas** appear as small dots top-right.
   - **Deep dive:** a small layers glyph bottom-right means double-click to zoom in.
+  - **Ops:** a small `6 ops` badge after the tech badge. **Formula:** an ƒ badge top-right; hovering it shows the typeset formula.
+  - **Processes:** a node whose deep dive runs several processes lists them as chips under the tech
+    badge, and its card is 80 pt tall, centred on its row so edges stay level. Clicking a chip dives in.
   - **Down:** desaturated at 40% opacity with a red "down" pill. **Slow:** a snail glyph in amber. **Failing:** red border pulse.
   - **Failure flash:** on `lastFailure` the border flashes red and fades over 0.5 s of sim time.
   - **Selected:** a 1.5 pt amber border plus a soft amber glow. **Hovered:** the border brightens.
