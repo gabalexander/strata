@@ -96,6 +96,28 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `links` | | `[{label, url}]`, `[{label, note: "path/in/vault.md"}]`, or `[{label, sim: other-id}]` |
 | everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `narration`. The top level is the root diagram |
 
+### Layout
+
+With `layout: auto` (the default) Strata lays out every level, deep dives and op `inside:` levels
+included, as a whiteboard diagram:
+
+- Flow runs left to right along calls, publishes and consumes. Sources and inbound ports start on
+  the left; databases, caches and outbound ports end on the right. Stores called by the same
+  service share a column.
+- Edge crossings are kept low, main flows run straight, and rows keep an even rhythm. Columns widen
+  to fit the edge labels between them.
+- A group's members stay together, and its region never covers a node from outside it. `parent`
+  groups nest.
+- Notes go to a free corner.
+- Leave out `at`. If you give it, it's a hint: nodes sharing an `at` column prefer one column, and
+  the rows order each column. Validation warns about hints the layout can't follow, such as a node
+  hinted left of a node that calls it.
+
+With `layout: manual`, `at` is exact (nodes without one are fitted around the rest). Validation
+warns about overlapping nodes, edges whose straight line runs through another node, and more than
+three crossing edges. **Tidy layout** (toolbar or ⌘K, ⌥⌘L) lays out a manual level automatically for
+the session, using its positions as hints.
+
 ## Levels and deep dives
 
 A **level** is one diagram: `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, and
@@ -131,7 +153,7 @@ Any node can have its own level inside it:
   kind: service         # required, see the table below
   label: orders-svc     # default: the id
   tech: Go 1.27         # small badge
-  at: [2, 1]            # grid column and row; fractions allowed. Omit everywhere for automatic layout
+  at: [2, 1]            # grid column and row, fractions allowed. A hint with layout: auto (see Layout), exact with manual
   group: backend        # a group id
   doc: |                # markdown in the inspector
     Owns the order lifecycle...

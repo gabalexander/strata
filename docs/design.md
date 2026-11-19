@@ -66,9 +66,23 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Failure flash:** on `lastFailure` the border flashes red and fades over 0.5 s of sim time.
   - **Selected:** a 1.5 pt amber border plus a soft amber glow. **Hovered:** the border brightens.
   - **Personal note:** a small note glyph when the node has one.
-- **Edges:**
-  - Smooth curves (cubic, bending with the layout) at 1.5 pt, `Theme.borderStrong`.
-  - Arrowheads at the target. The protocol pill sits mid-edge in 10 pt mono on `Theme.overlay`.
+- **Layout:** auto layout (Layout*.swift in StrataCore) places levels in columns by flow: about 260 pt
+  per column (wider where labels need room) and 150 pt per row. **Tidy layout** (toolbar wand, ⌘K,
+  ⌥⌘L) lays out a `manual` level for the session: cards glide to their places over 0.55 s (none with
+  reduced motion) and the view fits. A level opens fitted, but never below 62% zoom: a large map
+  opens on its sources at a readable size; ⌘0 fits everything.
+- **Edges** (EdgeRouter):
+  - Smooth curves at 1.5 pt, `Theme.borderStrong`. An edge leaves the side facing its target,
+    crosses each gap between columns with one S-bend (control points mid-gap), and passes other
+    columns between their cards, never through one. Edges to a later column leave right and enter
+    left; back edges leave left and come back around; edges within a column go straight down, or
+    around the side when a card is in the way.
+  - Each edge ending on a side gets its own port, level with where it heads when that is on the
+    side, so aligned cards connect with a straight line. Edges through the same gap get their own
+    tracks, so parallel and opposite edges run side by side.
+  - Arrowheads sit on the target's border. The protocol pill sits on the longest straight run (or
+    the middle bend) in 10 pt mono on `Theme.overlay`, slid along the edge to clear cards, other
+    pills and other lines.
   - **Cut:** a red dashed line with a scissors glyph mid-edge. **Breaker open:** an amber "open" pill.
   - Edge brightness follows `EdgeState.rate`.
 - **Tokens:** 7 pt circles in the flow colour with a soft glow (blur 6, 40%).
