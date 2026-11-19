@@ -191,7 +191,11 @@ private func specFence(containing marker: String) throws -> String {
             guard let entry = library.entry("valkey-roster"), let manifest = entry.manifest else { check(false, "missing valkey-roster"); return }
             check(entry.diagnostics.isEmpty && manifest.category == "distributed", "roster diagnostics: \(entry.diagnostics)")
             let sites = manifest.mechanisms()
-            check(sites.map(\.owner) == ["scheduler"], "mechanism sites: \(sites.map(\.owner))")
+            check(sites.map(\.owner) == ["scheduler", "scheduler/fenced-write"], "mechanism sites: \(sites.map(\.owner))")
+            let fence = sites.last?.mechanism
+            check(fence?.timed == false && fence?.play(branch: "stale")?.branchStart == 0, "an untimed branch from the start")
+            check(fence?.play(branch: "stale")?.frames.last?.state.first { $0.key == "shard:7:cursor" }?.value == "job-4410",
+                  "a refused write leaves the cursor alone")
             check(manifest.root.node("scheduler")?.formula != nil, "scheduler formula")
             check(manifest.root.node("scheduler")?.ops.first { $0.id == "heartbeat" }?.formula != nil, "heartbeat formula")
             guard let roster = sites.first?.mechanism else { return }
@@ -233,7 +237,7 @@ private func specFence(containing marker: String) throws -> String {
                   "branch path: \(branch.output.prefix(400))")
             check(branch.output.contains("(error) STALE epoch 3, current 4"), "fenced write in the branch")
             let unknown = try runCLI(cli, ["how", examples.path, "--branch", "nope"])
-            check(unknown.status == 1 && unknown.output.contains("unknown branch 'nope'; choose crash, partition, leave"), "unknown branch: \(unknown.output)")
+            check(unknown.status == 1 && unknown.output.contains("unknown branch 'nope'; choose crash, partition, leave, stale"), "unknown branch: \(unknown.output)")
             let help = try runCLI(cli, ["--help"])
             check(help.output.contains("how <file|id> [--mechanism id] [--branch id]"), "help lists how")
         },

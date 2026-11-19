@@ -40,6 +40,12 @@ import StrataCore
             AnyView(SimHowSnapshot.formulas(formulaSamples()))
         },
         howScene("how-roster-stage", size: size, selected: nil, seconds: 6),
+        howScene("how-op-mechanism", size: size, selected: "scheduler") { sim in
+            SimOpsSnapshot.open(sim, node: "scheduler", op: "fenced-write", from: "scheduler")
+        },
+        howScene("how-player-untimed", size: size, selected: "scheduler") { sim in
+            SimHowSnapshot.open(sim, node: "scheduler", op: "fenced-write", mechanism: "fence", branch: "stale", step: 4)
+        },
         howScene("how-checkout-relay", size: size, manifest: "checkout", path: ["orders"], selected: "relay") { sim in
             SimHowSnapshot.open(sim, node: "relay", mechanism: "relay-cycle", branch: "crash", step: 5, progress: 0.8)
         },

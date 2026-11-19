@@ -369,6 +369,83 @@ nodes:
         access: write
         code: internal/roster/fence.lua:1
         doc: Writes only if the caller's epoch equals shard:{n}:epoch, so a stale owner's writes are refused.
+        how:
+          - id: fence
+            title: Inside fenced_set
+            summary: |
+              A Valkey function runs to completion before any other command, so the epoch it reads cannot
+              change before it writes. That makes "check my epoch, then write" one atomic step.
+            code: internal/roster/fence.lua:1
+            participants:
+              - { id: a, label: instance A, node: scheduler }
+              - { id: b, label: instance B, node: scheduler }
+              - { id: v, label: Valkey, node: valkey }
+            initial:
+              - { key: "shard:7:epoch", value: 3 }
+              - { key: "shard:7:cursor", value: job-4410 }
+            steps:
+              - id: call
+                from: a
+                to: v
+                label: A calls the function with its epoch
+                command: "FCALL fenced_set 2 shard:7:epoch shard:7:cursor 3 job-4411"
+                note: "Two keys (`KEYS[1]` the epoch, `KEYS[2]` the cursor), then the arguments: A's epoch and the new cursor."
+              - id: read
+                from: v
+                to: v
+                label: read the current epoch
+                command: "redis.call('GET', KEYS[1])"
+                reply: '"3"'
+              - id: compare
+                from: v
+                to: v
+                label: 3 = 3, A still owns shard 7
+              - id: set
+                from: v
+                to: v
+                label: write the cursor
+                command: "redis.call('SET', KEYS[2], ARGV[2])"
+                reply: OK
+                state: [ { key: "shard:7:cursor", value: job-4411 } ]
+              - id: done
+                from: v
+                to: a
+                label: the function returns
+                reply: "(integer) 1"
+            branches:
+              - id: stale
+                label: A's epoch is stale
+                note: B took shard 7 while A was paused. A doesn't know yet.
+                steps:
+                  - id: take
+                    from: b
+                    to: v
+                    label: B takes shard 7
+                    command: "INCR shard:7:epoch"
+                    reply: "(integer) 4"
+                    state: [ { key: "shard:7:epoch", value: 4 } ]
+                  - id: call
+                    from: a
+                    to: v
+                    label: A calls the function with epoch 3
+                    command: "FCALL fenced_set 2 shard:7:epoch shard:7:cursor 3 job-4412"
+                  - id: read
+                    from: v
+                    to: v
+                    label: read the current epoch
+                    command: "redis.call('GET', KEYS[1])"
+                    reply: '"4"'
+                  - id: refuse
+                    from: v
+                    to: v
+                    label: 4 ≠ 3, write nothing
+                    note: "Nothing is written. Without this check A's late write would land after B took over, and jobs would be dispatched twice."
+                  - id: error
+                    from: v
+                    to: a
+                    label: the function returns an error
+                    reply: "(error) STALE epoch 3, current 4"
+                    note: "A must stop working on shard 7 and re-read the roster."
       - id: dispatch
         kind: publish
         target: jobs

@@ -153,9 +153,10 @@ struct SimHowThumbnail: View {
         var offsets: [CGFloat] = []
         var y: CGFloat = 0
         var previous = 0.0
+        let pitch: CGFloat = steps.contains { $0.at != nil } ? 5 : 8
         for (index, step) in steps.enumerated() {
             let time = max(previous, step.at ?? previous)
-            if index > 0 { y += 5 + min(12, CGFloat(time - previous) * 1.4) }
+            if index > 0 { y += pitch + min(12, CGFloat(time - previous) * 1.4) }
             offsets.append(y)
             previous = time
         }
