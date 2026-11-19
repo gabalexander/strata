@@ -93,6 +93,8 @@ struct SimStage: View {
     var still = false
     var onSelect: (StageSelection?) -> Void = { _ in }
     var onDive: (String) -> Void = { _ in }
+    /// A component chip was clicked: the card's node and the component (nil for "+N"). Dives in.
+    var onComponent: ((String, String?) -> Void)?
     var menu: ((StageSelection?) -> [MenuItem])?
     var onKey: ((NSEvent) -> Bool)?
     /// Beaten by the frame clock while playing, for the live numbers in the panels around the stage.
@@ -117,6 +119,7 @@ struct SimStage: View {
                     switch phase {
                     case .active(let point):
                         let target = hit(point, camera)
+                        trackComponents(target, at: point, camera)
                         let badge = SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
                         guard hovered != target || hoveredBadge != badge else { return }
                         clearHover()
@@ -188,6 +191,9 @@ struct SimStage: View {
             .overlay(alignment: .topLeading) {
                 if !compact { SimPressureLegend(sim: sim, selection: selection, tabOpen: pressureOpen) }
             }
+            .overlay(alignment: .topLeading) {
+                if !compact { componentsCard(camera, size: proxy.size) }
+            }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { viewport.size = $0 }
             .onAppear { SimFormulaStage.showRequested(sim, layout: renderer.layout, camera: { viewport.current(renderer.layout, in: proxy.size, compact: compact) }, frame: { proxy.frame(in: .global) }, overlays: model.overlays) }
         }
@@ -237,6 +243,7 @@ struct SimStage: View {
         // An op row's path (SimOpsState) or a pressure overlay (heat, blast radius): the last requested wins.
         let highlight = compact ? SimOpsState.of(sim).highlight(for: selection)
             : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim)
+        renderer.hoveredChip = SimComponentsHover.of(sim).chip
         return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,
@@ -252,6 +259,11 @@ struct SimStage: View {
     /// of a double-click on a node dives in. A press on empty space waits for mouse up, so dragging
     /// to pan keeps the selection.
     private func press(_ point: CGPoint, clicks: Int, camera: StageCamera) -> StagePress {
+        if let onComponent, let chip = renderer.chip(at: camera.world(point)) {
+            onSelect(.node(chip.node))
+            onComponent(chip.node, chip.component)
+            return StagePress(pans: false, empty: false, camera: camera)
+        }
         let target = hit(point, camera)
         if let target {
             onSelect(target)
@@ -268,6 +280,33 @@ struct SimStage: View {
         if hovered != nil { model.overlays.hideTerm() }
         hovered = nil
         hoveredBadge = false
+        SimComponentsHover.of(sim).clear()
+    }
+
+    /// Lights the chip under the pointer and, after a moment, lists the components of the card under it.
+    private func trackComponents(_ target: StageSelection?, at point: CGPoint, _ camera: StageCamera) {
+        var node: String?
+        if case .node(let id) = target, let card = renderer.layout.cardsByID[id], StageLayout.hasChips(card.node) { node = id }
+        SimComponentsHover.of(sim).track(node: node, chip: node == nil ? nil : renderer.chip(at: camera.world(point)))
+    }
+
+    /// The components card, above the node's card when it fits there, else below it.
+    @ViewBuilder
+    private func componentsCard(_ camera: StageCamera, size: CGSize) -> some View {
+        let hover = SimComponentsHover.of(sim)
+        if hover.showsCard, let id = hover.node, let card = renderer.layout.cardsByID[id], StageLayout.hasChips(card.node) {
+            let rect = camera.screen(card.rect)
+            let x = min(max(8, rect.minX), max(8, size.width - StageComponentsCard.width - 8))
+            let above = rect.minY - 8 - StageComponentsCard.estimatedHeight(card.node) >= 8
+            StageComponentsCard(node: card.node, highlighted: hover.chip?.component)
+                .fixedSize()
+                .offset(x: x)
+                .frame(width: size.width, height: max(0, above ? rect.minY - 8 : size.height - rect.maxY - 8),
+                       alignment: above ? .bottomLeading : .topLeading)
+                .offset(y: above ? 0 : rect.maxY + 8)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
     }
 }
 

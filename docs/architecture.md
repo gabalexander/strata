@@ -31,7 +31,7 @@ Sources/StrataCore/
   Library/Library.swift       manifest library + live reload
   Terms/TermIndex.swift       glossary packs + auto-linking
   Vault/Vault.swift           notes on disk, links, backlinks, search
-  Support/                    Paths, Config, Fixtures
+  Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter)
 Sources/StrataUI/
   Theme/Theme.swift           CONTRACT: colours, type, radii, motion
   Overlay/Overlays.swift      CONTRACT: in-window menus, term cards, toasts, .onRightClick

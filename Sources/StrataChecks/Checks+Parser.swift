@@ -505,7 +505,7 @@ func specManifest(_ snippet: String) -> String {
               - {id: web, kind: client}
               - id: orders
                 kind: service
-                ops: [{id: insert-order, kind: sql, target: db, label: INSERT order}]
+                ops: [{id: insert-order, kind: sql, target: db, label: INSERT order, query: "INSERT INTO orders (id) VALUES ($1)"}]
               - {id: db, kind: database}
             edges: [{from: web, to: orders}, {from: orders, to: db}]
             flows:
@@ -857,11 +857,11 @@ private func opsFlow(_ steps: String) -> String {
             let cases: [(String, OpDirection)] = [
                 ("{id: a, kind: http, label: A}", .inbound),
                 ("{id: a, kind: rpc, label: A, target: pay}", .outbound),
-                ("{id: a, kind: sql, label: A, target: db}", .outbound),
+                ("{id: a, kind: sql, label: A, target: db, query: \"SELECT 1\"}", .outbound),
                 ("{id: a, kind: consume, label: A, target: q}", .inbound),
                 ("{id: a, kind: consume, label: A, topic: jobs}", .inbound),
                 ("{id: a, kind: http, label: A, direction: out}", .outbound),
-                ("{id: a, kind: sql, label: A, direction: out}", .outbound),
+                ("{id: a, kind: sql, label: A, direction: out, query: \"SELECT 1\"}", .outbound),
                 ("{id: a, kind: publish, label: A, target: q}", .outbound),
             ]
             for (op, expected) in cases {
@@ -871,7 +871,7 @@ private func opsFlow(_ steps: String) -> String {
         },
         CheckCase(name: "parser resolves step ops on the caller, the target, and node/op") {
             let manifest = expectClean(load(opsCase(
-                "{id: serve, kind: http, label: Serve}, {id: read, kind: sql, label: Read, target: db}, {id: put, kind: publish, label: Put, target: q}",
+                "{id: serve, kind: http, label: Serve}, {id: read, kind: sql, label: Read, target: db, query: \"SELECT 1\"}, {id: put, kind: publish, label: Put, target: q}",
                 flows: opsFlow("{call: api, op: serve, steps: [{call: db, op: read}, {publish: q, op: put}, {call: pay, op: pay/charge}, {work: 1ms, op: serve}]}"))))
             check(manifest != nil, "valid step op references were rejected")
         },

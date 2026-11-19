@@ -49,7 +49,8 @@ private func enumCase(enums: String, column: String = "{name: status, type: int,
       - {id: web, kind: client}
       - id: campaigns
         kind: service
-        ops: [{id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns]}]
+        ops: [{id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns],
+               query: "UPDATE campaigns SET status = 3200 WHERE id = $1 AND status = 3100"}]
       - id: db
         kind: database
         schema:
@@ -149,10 +150,14 @@ private let campaignEnum = """
         },
         CheckCase(name: "enums columns per level and usage") {
             let (manifest, diagnostics) = enumLoad(enumCase(enums: campaignEnum).replacingOccurrences(
-                of: "ops: [{id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns]}]",
+                of: """
+                ops: [{id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns],
+                           query: "UPDATE campaigns SET status = 3200 WHERE id = $1 AND status = 3100"}]
+                """,
                 with: """
                 ops:
-                      - {id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns]}
+                      - {id: schedule, kind: sql, label: Schedule, target: db, access: write, tables: [campaigns],
+                         query: "UPDATE campaigns SET status = 3200 WHERE id = $1 AND status = 3100"}
                       - {id: events, kind: publish, direction: out, label: Event, payload: '{ "id": "c1", "status": 3300 }'}
                     inside:
                       nodes:

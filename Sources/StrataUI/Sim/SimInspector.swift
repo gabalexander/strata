@@ -87,6 +87,14 @@ struct SimInspector: View {
                     Text(node.label).font(Theme.heading).foregroundStyle(Theme.text)
                     Text([node.kind.rawValue, node.tech].compactMap { $0 }.joined(separator: " · "))
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    if let binary = node.binary {
+                        HStack(spacing: 4) {
+                            Image(systemName: "terminal").font(Theme.ui(9, .medium))
+                            Text(binary).font(Theme.mono(11)).lineLimit(1).truncationMode(.middle)
+                        }
+                        .foregroundStyle(Theme.info)
+                        .accessibilityLabel("Binary \(binary)")
+                    }
                     if let name = node.term, let term = terms.term(name) {
                         SimTermAnchor(term: term, model: model, index: terms) {
                             Label(term.term, systemImage: "text.book.closed")

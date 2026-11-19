@@ -124,7 +124,11 @@ struct StageLayout {
     init(level: Level, rects: [String: CGRect]? = nil) {
         let cards = level.nodes.enumerated().map { i, node in
             let at = node.at ?? GridPoint(Double(i % 5), Double(i / 5))
-            return Card(node: node, rect: rects?[node.id] ?? LayoutMetrics.card(at: at))
+            let size = StageLayout.cardSize(for: node)
+            let base = LayoutMetrics.card(at: at)
+            // A taller card (one with component chips) stays centred on its row, so its edges stay level.
+            return Card(node: node, rect: rects?[node.id] ?? CGRect(x: base.minX, y: base.midY - size.height / 2,
+                                                                    width: size.width, height: size.height))
         }
         self.cards = cards
         let byID = Dictionary(cards.map { ($0.node.id, $0) }, uniquingKeysWith: { first, _ in first })

@@ -94,7 +94,10 @@ nodes:
         access: read
         tables: [objects]
         indexes: [objects_pkey]
-        query: SELECT body, etag FROM objects WHERE id = $1;
+        query: |
+          SELECT body, etag
+          FROM objects
+          WHERE id = $1;
   - id: db
     kind: database
     label: Postgres

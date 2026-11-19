@@ -201,7 +201,9 @@ nodes:
         indexes: [prices_pkey]
         query: |
           -- name: GetPrice :one
-          SELECT amount_cents, currency FROM prices WHERE sku = $1;
+          SELECT amount_cents, currency
+          FROM prices
+          WHERE sku = $1;
         code: services/orders/db/queries/prices.sql:3
       - id: insert-order
         kind: sql
@@ -214,12 +216,19 @@ nodes:
         locks: row
         query: |
           BEGIN;
+
           INSERT INTO orders (id, user_id, status, total_cents, currency, idempotency_key)
-            VALUES ($1, $2, 10, $3, 'EUR', $4);
+          VALUES ($1, $2, 10, $3, 'EUR', $4);
+
           INSERT INTO order_items (order_id, sku, qty, price_cents)
-            SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
-          INSERT INTO payments (id, order_id, token, amount_cents, status) VALUES ($9, $1, $10, $3, 'authorized');
-          INSERT INTO outbox (topic, key, payload) VALUES ('order-events', $1, $8);
+          SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
+
+          INSERT INTO payments (id, order_id, token, amount_cents, status)
+          VALUES ($9, $1, $10, $3, 'authorized');
+
+          INSERT INTO outbox (topic, key, payload)
+          VALUES ('order-events', $1, $8);
+
           COMMIT;
         code: services/orders/db/queries/orders.sql:12
         doc: Writes the order, its items, the authorized payment and the outbox row in one transaction, so the event exists only if the order does.
@@ -380,10 +389,12 @@ nodes:
           kind: service
           label: gRPC handler
           tech: Go
+          binary: services/orders/cmd/orders
+          code: services/orders/grpc/server.go
           latency: 2ms
           at: [1, 0]
           doc: |
-            Checks the request with the validator before opening a database transaction.
+            The orders binary's gRPC server. It checks the request with the validator before opening a database transaction.
             A failed validation or write propagates back to the gateway.
           ops:
             - id: place-order
@@ -410,17 +421,23 @@ nodes:
               locks: row
               query: |
                 -- in one pgx.Tx
-                INSERT INTO orders (id, user_id, total_cents, idempotency_key) VALUES ($1, $2, $3, $4);
-                INSERT INTO order_items (order_id, sku, qty, price_cents) SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
-                INSERT INTO outbox (topic, key, payload) VALUES ('order-events', $1, $8);
+                INSERT INTO orders (id, user_id, total_cents, idempotency_key)
+                VALUES ($1, $2, $3, $4);
+
+                INSERT INTO order_items (order_id, sku, qty, price_cents)
+                SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
+
+                INSERT INTO outbox (topic, key, payload)
+                VALUES ('order-events', $1, $8);
               code: services/orders/repo/orders.go:88
         - id: validate
           kind: service
           label: Validator
           latency: 1ms
           at: [2, -0.9]
+          code: services/orders/domain/validate.go
           doc: |
-            Checks that the cart and quantities are valid before any write.
+            Checks that the cart and quantities are valid before any write. A package inside the orders binary, not a process of its own.
             Inject an error here to model rejection before the SQL call.
           ops:
             - id: check-cart
@@ -443,11 +460,14 @@ nodes:
         - id: relay
           kind: worker
           label: Outbox relay
+          tech: Go
+          binary: services/orders/cmd/outbox-relay
+          code: services/orders/outbox/relay.go
           latency: 3ms
           at: [2, 1.35]
           term: consistency/relay
           doc: |
-            Polls Postgres for pending rows on its own schedule.
+            Its own binary, deployed next to orders-svc. Polls Postgres for pending rows on its own schedule.
             A failed poll delays publication. The overview shows the Kafka handoff.
           how:
             - id: relay-cycle
@@ -547,10 +567,16 @@ nodes:
               locks: row, SKIP LOCKED
               query: |
                 -- name: ClaimOutbox :many
-                UPDATE outbox SET claimed_at = now()
+                UPDATE outbox
+                SET claimed_at = now()
                 WHERE id IN (
-                  SELECT id FROM outbox WHERE published_at IS NULL
-                  ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED)
+                  SELECT id
+                  FROM outbox
+                  WHERE published_at IS NULL
+                  ORDER BY id
+                  LIMIT 100
+                  FOR UPDATE SKIP LOCKED
+                )
                 RETURNING id, topic, key, payload;
               code: services/orders/outbox/relay.go:52
               doc: SKIP LOCKED lets several relay replicas claim different rows without blocking each other.

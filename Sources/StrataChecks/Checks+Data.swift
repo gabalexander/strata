@@ -22,8 +22,8 @@ private let defaultSchema = """
     """
 
 private let defaultOps = """
-    - {id: read, kind: sql, label: Read, target: db, access: read, tables: [orders]}
-    - {id: write, kind: sql, label: Write, target: db, access: write, tables: [orders, order_items]}
+    - {id: read, kind: sql, label: Read, target: db, access: read, tables: [orders], query: "SELECT id, status FROM orders WHERE user_id = $1"}
+    - {id: write, kind: sql, label: Write, target: db, access: write, tables: [orders, order_items], query: "INSERT INTO orders (id, user_id) VALUES ($1, $2)"}
     """
 
 /// A level with a database `db` (users, products, orders, order_items), a second database `archive`
@@ -287,7 +287,7 @@ private func specFence(containing marker: String) throws -> Manifest? {
             let manifest = cleanData(dataLevel(entities: "- {name: Order, root: orders, includes: [order_items, users, products]}"))
             check(manifest?.root.node("api")?.entities.first?.source == "db", "the default source is filled in")
             let narrowed = cleanData(dataLevel(
-                ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: write, tables: [events]}",
+                ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: write, tables: [events], query: \"INSERT INTO events (id) VALUES ($1)\"}",
                 entities: "- {name: Event, root: events}"))
             check(narrowed?.root.node("api")?.entities.first?.source == "archive", "the root table narrows several candidates")
         },
@@ -298,7 +298,7 @@ private func specFence(containing marker: String) throws -> Manifest? {
         dataFinding("entity source without ops", dataLevel(ops: "- {id: s, kind: http, label: S}", entities: "- {name: Order, root: orders}"),
                     path: entity, "set source to the node this entity is loaded from; 'api' has no ops on a database, store or search node"),
         dataFinding("entity source with several candidates",
-                    dataLevel(ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: write, tables: [events]}",
+                    dataLevel(ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: write, tables: [events], query: \"INSERT INTO events (id) VALUES ($1)\"}",
                               archive: "[{table: orders, columns: [{name: id}]}]", entities: "- {name: Order, root: orders}"),
                     path: entity, "'api' has ops on 'db', 'archive'"),
         dataFinding("entity source without a schema",
@@ -344,7 +344,7 @@ private func specFence(containing marker: String) throws -> Manifest? {
         dataFinding("op table as one string", dataLevel(ops: "- {id: w, kind: sql, label: W, target: db, tables: userz}"),
                     path: "nodes.api.ops.w.tables", "did you mean 'users'", severity: .warning),
         CheckCase(name: "data op tables are not checked against a target without a schema") {
-            let text = dataLevel(ops: "- {id: w, kind: sql, label: W, target: archive, tables: [anything]}", archive: "[]")
+            let text = dataLevel(ops: "- {id: w, kind: sql, label: W, target: archive, tables: [anything], query: \"SELECT 1 FROM anything\"}", archive: "[]")
                 .replacingOccurrences(of: ", schema: []", with: "")
             check(cleanData(text) != nil, "a target without a schema was checked")
         },
@@ -369,7 +369,7 @@ private func specFence(containing marker: String) throws -> Manifest? {
     [
         CheckCase(name: "data joins, touched tables and owners") {
             let (manifest, diagnostics) = parseData(dataLevel(
-                ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: read-write, tables: [events, nope]}"))
+                ops: defaultOps + "\n- {id: log, kind: sql, label: Log, target: archive, access: read-write, tables: [events, nope], query: \"UPDATE events SET id = $1\"}"))
             check(diagnostics.count == 1 && diagnostics.first?.message.contains("no table 'nope'") == true, "fixture: \(diagnostics)")
             guard let level = manifest?.root else { return }
             let joins = level.joins(of: TableRef(node: "db", table: "orders"))
@@ -386,7 +386,7 @@ private func specFence(containing marker: String) throws -> Manifest? {
             check(level.owners(of: TableRef(node: "db", table: "orders")) == ["api"], "inferred owner")
             check(level.owners(of: TableRef(node: "db", table: "users")).isEmpty, "nobody writes users")
             check(level.owners(of: TableRef(node: "archive", table: "events")) == ["api"], "read-write counts as a writer")
-            let declared = cleanData(dataLevel(schema: "- {table: t, columns: [{name: a}], owner: web}", ops: "- {id: w, kind: sql, label: W, target: db, access: write, tables: [t]}"))
+            let declared = cleanData(dataLevel(schema: "- {table: t, columns: [{name: a}], owner: web}", ops: "- {id: w, kind: sql, label: W, target: db, access: write, tables: [t], query: \"INSERT INTO t (a) VALUES ($1)\"}"))
             check(declared?.root.owners(of: TableRef(node: "db", table: "t")) == ["web"], "a declared owner wins")
         },
         CheckCase(name: "data join highlighting follows refs to the key and back") {

@@ -216,6 +216,7 @@ private struct SimWorkspace: View {
         SimStage(sim: sim, model: model, terms: terms, renderer: renderer, viewport: viewport,
                  selection: selection, noteIDs: noteIDs, still: snapshot != nil,
                  onSelect: select, onDive: { if let node = sim.level.node($0) { dive(node) } },
+                 onComponent: { diveToComponent($0, $1) },
                  menu: actions.menu, onKey: key, pulse: pulse, pressureOpen: pressureOpen)
             .scaleEffect(presentationScale, anchor: viewport.origin(for: presentationNode, in: renderer.layout, compact: false))
             .opacity(presentationOpacity)
@@ -283,6 +284,13 @@ private struct SimWorkspace: View {
         guard let route = SimSessions.drillDestination(node, id: id, path: sim.path) else { return }
         navigate(route, forward: true, node: node.id,
                  parentRate: sim.nodeState(node.id)?.arrivals ?? SimOpsPath.measuredRate(node.id, in: sim))
+    }
+
+    /// A component chip: into the node's deep dive with that component selected on arrival.
+    private func diveToComponent(_ id: String, _ component: String?) {
+        guard let node = sim.level.node(id), node.inside != nil, node.detail == nil else { return }
+        if let component { SimFocus.of(model).select(component, onArrival: AppModel.sessionKey(self.id, sim.path + [id])) }
+        dive(node)
     }
 
     private func up(_ depth: Int) {
