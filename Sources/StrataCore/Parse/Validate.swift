@@ -9,6 +9,7 @@ enum Validate {
             root["glossaries"].items()[index].diagnose("unknown glossary pack '\(pack)'\(suggestion)")
         }
         level(&manifest.root, at: root, terms: TermIndex(manifest: manifest), layout: manifest.layout)
+        EnumValidation.check(manifest, at: root)
     }
 
     private static func duplicates<T: Identifiable>(_ items: [T], at field: Field) where T.ID == String {

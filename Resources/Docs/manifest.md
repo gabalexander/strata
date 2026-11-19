@@ -526,10 +526,24 @@ enums:
 ```
 
 - A column points at an enum with `enum: campaign-status`. Its sample values then show their names.
+- Values are numbers or strings, kept as written: `3200` in a value, a transition, a sample row and
+  a query are the same value. `name` is required; `label` defaults to the id.
 - Wherever a value of a linked column appears (sample rows, queries, payloads), hovering it shows
-  its meaning.
-- The inspector draws the transitions as a small state machine.
-- ⌘K finds an enum by value (`3200`) or by name (`scheduled`).
+  its meaning. Strata finds `status = 3200`, `status IN (3100, 3200)`, `SET status = 3300`,
+  `INSERT INTO campaigns (…, status) VALUES (…, 3100)` and `"status": 3200`, using the tables the
+  statement or the op names, and the enclosing JSON key (`"payment": { "status": … }` → `payments`).
+  A payload may carry the name instead of the code (`"status": "scheduled"`).
+- Clicking a value opens the enum: its values and the transitions drawn as a state machine.
+- ⌘K finds an enum by value (`3200`), by name (`scheduled`) or by label (`campaign status`).
+- **Validation**:
+  - errors: duplicate enum ids or values, a transition `from` or `to` that isn't a value, a `by`
+    that doesn't name a node or `node/op` on any level, and a column `enum` that doesn't exist;
+  - warnings: sample rows in a linked column holding values the enum doesn't have, a terminal value
+    with a transition out of it, and duplicate names.
+
+`strata enums <file|id> [--find <text>]` prints each enum's values and transitions
+(`3100 draft → 3200 scheduled (schedule, by campaigns/schedule)`), the columns linked to it and the
+ops that use it.
 
 ## Edges
 

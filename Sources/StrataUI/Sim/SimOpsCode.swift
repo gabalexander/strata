@@ -224,7 +224,7 @@ struct SimOpsCodeBlock: View {
                 .accessibilityLabel(copyTitle)
             }
             .frame(height: 16)
-            Text(text)
+            SimEnumCodeText(text)
                 .font(Theme.mono(11))
                 .foregroundStyle(Theme.text)
                 .lineSpacing(3)

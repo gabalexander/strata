@@ -51,7 +51,7 @@ struct SimOpDetail: View {
                 toolbar
                 if let doc = op.doc { SimMarkdown(source: doc, model: model, terms: terms) }
                 live
-                kindBody
+                kindBody.simEnumTables(op, on: entry.node.id, level: sim.level)
                 if let formula = op.formula { SimFormulaSection(formula: formula, model: model, terms: terms, actions: actions) }
                 if !op.how.isEmpty {
                     SimHowSection(mechanisms: op.how, node: entry.node.id, op: op.id, owner: op.label, model: model, sim: sim,

@@ -117,7 +117,8 @@ import StrataCore
                 check(text.status == 0 && text.output.contains("checkout (root) › db  Orders DB · database · Postgres") &&
                       text.output.contains("orders · 140M rows · +400k/day · written by orders") &&
                       lines.contains { $0.contains("id PK") && $0.contains("user_id → users.id") } &&
-                      lines.contains { $0.contains("o_9k7") && $0.contains("placed") } &&
+                      lines.contains { $0.contains("o_9k7") && $0.split(separator: " ").contains("10") } &&
+                      text.output.contains("; status: enum order-status;") &&
                       text.output.contains("referenced by: order_items.order_id, payments.order_id, outbox.key"),
                       "data tables: \(text.output)")
                 check(lines.contains { $0.hasPrefix("    orders #0  id=o_9k2") } &&

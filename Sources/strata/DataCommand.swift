@@ -29,6 +29,8 @@ struct TableListing: Encodable {
         let nullable: Bool?
         let unique: Bool
         let note: String?
+        let enumRef: String?
+        enum CodingKeys: String, CodingKey { case name, type, pk, ref, nullable, unique, note, enumRef = "enum" }
     }
     struct Volume: Encodable { let rows: Double?; let growthPerDay: Double? }
     struct Join: Encodable { let direction: String; let column: String; let other: String; let node: String; let table: String; let otherColumn: String }
@@ -51,7 +53,8 @@ struct TableListing: Encodable {
     init(_ table: TableSchema, on node: String, level: Level) {
         name = table.name; doc = table.doc; indexes = table.indexes; rows = table.rows; line = table.line
         columns = table.columns.map {
-            ColumnListing(name: $0.name, type: $0.type, pk: $0.pk, ref: $0.ref, nullable: $0.nullable, unique: $0.unique, note: $0.note)
+            ColumnListing(name: $0.name, type: $0.type, pk: $0.pk, ref: $0.ref, nullable: $0.nullable, unique: $0.unique, note: $0.note,
+                          enumRef: $0.enumRef)
         }
         volume = table.volume.map { Volume(rows: $0.rows, growthPerDay: $0.growthPerDay) }
         let ref = TableRef(node: node, table: table.name)
@@ -208,7 +211,9 @@ private func renderTable(_ table: TableListing, on node: String) -> String {
         if table.rows.isEmpty { lines.append("    (no sample rows)") }
     }
     if !table.indexes.isEmpty { lines.append("    indexes: " + table.indexes.joined(separator: ", ")) }
-    let notes = table.columns.compactMap { column in column.note.map { "\(column.name): \($0)" } }
+    let notes = table.columns.compactMap { column in
+        [column.note, column.enumRef.map { "enum \($0)" }].compactMap { $0 }.joined(separator: ", ").nilIfEmpty.map { "\(column.name): \($0)" }
+    }
     if !notes.isEmpty { lines.append("    notes: " + notes.joined(separator: "; ")) }
     let incoming = table.joins.filter { $0.direction == "incoming" }
         .map { $0.node == node ? "\($0.table).\($0.otherColumn)" : $0.other }
@@ -256,4 +261,8 @@ private func renderEntity(_ entity: EntityListing) -> String {
 private func clipped(_ text: String, _ limit: Int) -> String {
     let flat = text.replacingOccurrences(of: "\n", with: " ")
     return flat.count > limit ? String(flat.prefix(limit - 1)) + "…" : flat
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

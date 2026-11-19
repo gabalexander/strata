@@ -14,6 +14,35 @@ terms:
     short: The event this checkout emits after committing an order.
     detail: The mailer consumes it to send the confirmation independently of the HTTP response.
 
+enums:
+  - id: order-status
+    label: Order status
+    doc: Stored as a smallint in orders.status and sent as a code in OrderPlaced. The API and the order page show the name.
+    code: services/orders/domain/status.go:9
+    values:
+      - { value: 10, name: placed, doc: Committed by PlaceOrder with an authorized payment. }
+      - { value: 20, name: paid, doc: The provider captured the payment. The warehouse can ship it. }
+      - { value: 30, name: shipped, terminal: true, doc: Handed to the carrier. Returns are handled outside this map. }
+      - { value: 90, name: cancelled, terminal: true, doc: "The payment was declined, or refunded before shipping." }
+    transitions:
+      - { from: 10, to: 20, label: payment captured, by: orders/capture-payment }
+      - { from: 10, to: 90, label: payment declined, by: orders/decline-payment }
+      - { from: 20, to: 30, label: warehouse ships it }
+      - { from: 20, to: 90, label: refunded, by: orders/refund-payment }
+  - id: payment-status
+    label: Payment status
+    doc: Stored as text in payments.status. The provider's webhook moves it on after checkout.
+    code: services/orders/payments/status.go:6
+    values:
+      - { value: authorized, name: authorized, doc: Inserted with the order. The provider holds the amount on the card. }
+      - { value: captured, name: captured, doc: The provider took the money. }
+      - { value: refunded, name: refunded, terminal: true, doc: The money went back to the customer. }
+      - { value: failed, name: failed, terminal: true, doc: The provider declined the capture. }
+    transitions:
+      - { from: authorized, to: captured, label: provider captures, by: orders/capture-payment }
+      - { from: authorized, to: failed, label: provider declines, by: orders/decline-payment }
+      - { from: captured, to: refunded, label: refund, by: orders/refund-payment }
+
 groups:
   - { id: backend, label: Checkout backend, kind: cluster }
 
@@ -186,7 +215,7 @@ nodes:
         query: |
           BEGIN;
           INSERT INTO orders (id, user_id, status, total_cents, currency, idempotency_key)
-            VALUES ($1, $2, 'placed', $3, 'EUR', $4);
+            VALUES ($1, $2, 10, $3, 'EUR', $4);
           INSERT INTO order_items (order_id, sku, qty, price_cents)
             SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
           INSERT INTO payments (id, order_id, token, amount_cents, status) VALUES ($9, $1, $10, $3, 'authorized');
@@ -264,7 +293,7 @@ nodes:
         label: OrderPlaced
         topic: order-events
         key: order_id
-        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
+        payload: '{ "order_id": "o_9k2", "status": 10, "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
         calls: mailer/on-order-placed
         code: services/orders/events/producer.go:29
         doc: In production the outbox relay publishes this row after COMMIT. The overview publishes at commit to show the route.
@@ -272,6 +301,61 @@ nodes:
           acks: all
           idempotent producer: "yes"
           schema: orders.v1.OrderPlaced (protobuf)
+      - id: payment-webhook
+        kind: http
+        label: POST /v1/payments/webhook
+        method: POST
+        path: /v1/payments/webhook
+        request: '{ "type": "payment.captured", "payment_id": "p_5x4", "order_id": "o_9k7", "status": "captured" }'
+        status: ["200 ok", "401 bad signature", "409 payment already moved on"]
+        code: services/orders/payments/webhook.go:24
+        doc: The payment provider calls it when it captures, declines or refunds a payment. It checks the signature, then runs the matching update. Not part of checkout, so no flow names it.
+        facts:
+          auth: HMAC signature header, checked before the body is parsed
+          idempotency: each update names the state it expects, so a replayed event changes nothing (409)
+      - id: capture-payment
+        kind: sql
+        target: db
+        label: Capture payment
+        access: write
+        tables: [payments, orders]
+        tx: true
+        locks: row
+        query: |
+          -- name: CapturePayment :exec
+          UPDATE payments SET status = 'captured' WHERE id = $1 AND status = 'authorized';
+          UPDATE orders SET status = 20 WHERE id = $2 AND status = 10;
+        code: services/orders/db/queries/payments.sql:8
+        doc: Marks the payment captured and the order paid in one transaction.
+      - id: decline-payment
+        kind: sql
+        target: db
+        label: Decline payment
+        access: write
+        tables: [payments, orders]
+        tx: true
+        locks: row
+        query: |
+          -- name: DeclinePayment :exec
+          UPDATE payments SET status = 'failed' WHERE id = $1 AND status = 'authorized';
+          UPDATE orders SET status = 90 WHERE id = $2 AND status = 10;
+        code: services/orders/db/queries/payments.sql:21
+        doc: The provider declined the capture, so the order is cancelled.
+      - id: refund-payment
+        kind: sql
+        target: db
+        label: Refund payment
+        access: write
+        tables: [payments, orders]
+        tx: true
+        locks: row
+        query: |
+          -- name: RefundPayment :exec
+          UPDATE payments SET status = 'refunded' WHERE id = $1 AND status = 'captured';
+          UPDATE orders SET status = 90 WHERE id = $2 AND status IN (10, 20);
+        code: services/orders/db/queries/payments.sql:34
+        doc: A refund cancels the order unless it has already shipped.
+        risks: [a refund after shipping leaves the order shipped; returns are handled outside this map]
     entities:
       - name: Order
         root: orders
@@ -562,7 +646,7 @@ nodes:
         columns:
           - { name: id, type: text, pk: true, note: "o_ prefix" }
           - { name: user_id, type: text, ref: users.id }
-          - { name: status, type: text, note: "placed | paid | shipped | cancelled" }
+          - { name: status, type: smallint, enum: order-status }
           - { name: total_cents, type: bigint }
           - { name: currency, type: char(3) }
           - { name: idempotency_key, type: uuid, unique: true, note: the gateway's Idempotency-Key }
@@ -572,10 +656,10 @@ nodes:
           - orders_idempotency_key_key UNIQUE (idempotency_key)
           - orders_user_id_created_at_idx (user_id, created_at DESC)
         rows:
-          - [o_9k2, u_17, paid, 4200, EUR, 7f3c2a90-1b4e-4c1d-9a55-0e8b1f6c2d17, "2025-11-14 10:02"]
-          - [o_9k3, u_18, cancelled, 899, EUR, 2d81c4e7-5f60-4a3b-8c19-b7e2d4f09a63, "2025-11-14 10:05"]
-          - [o_9k4, u_17, shipped, 7499, EUR, c94b0f18-3e7a-4d25-a6f1-58d2e9c7b304, "2025-11-14 10:11"]
-          - [o_9k7, u_21, placed, 1700, EUR, 61e5a3d2-9c84-4f07-b2e6-0a7f3c1d8e95, "2025-11-14 10:19"]
+          - [o_9k2, u_17, 20, 4200, EUR, 7f3c2a90-1b4e-4c1d-9a55-0e8b1f6c2d17, "2025-11-14 10:02"]
+          - [o_9k3, u_18, 90, 899, EUR, 2d81c4e7-5f60-4a3b-8c19-b7e2d4f09a63, "2025-11-14 10:05"]
+          - [o_9k4, u_17, 30, 7499, EUR, c94b0f18-3e7a-4d25-a6f1-58d2e9c7b304, "2025-11-14 10:11"]
+          - [o_9k7, u_21, 10, 1700, EUR, 61e5a3d2-9c84-4f07-b2e6-0a7f3c1d8e95, "2025-11-14 10:19"]
         volume: { rows: 140M, growth: 400k/day }
       - table: order_items
         doc: One row per cart line. The price is copied from prices when the order is placed.
@@ -600,7 +684,7 @@ nodes:
           - { name: order_id, type: text, unique: true, ref: orders.id }
           - { name: token, type: text, note: the provider's payment token }
           - { name: amount_cents, type: bigint }
-          - { name: status, type: text, note: "authorized | captured | refunded | failed" }
+          - { name: status, type: text, enum: payment-status }
           - { name: created_at, type: timestamptz }
         indexes: ["payments_pkey (id)", "payments_order_id_key UNIQUE (order_id)"]
         rows:
@@ -624,28 +708,28 @@ nodes:
           - id: 88120
             topic: order-events
             key: o_9k2
-            payload: { order_id: o_9k2, user_id: u_17, email: ada.k@example.com, total_cents: 4200, currency: EUR }
+            payload: { order_id: o_9k2, status: 10, user_id: u_17, email: ada.k@example.com, total_cents: 4200, currency: EUR }
             created_at: "2025-11-14 10:02"
             claimed_at: "2025-11-14 10:02"
             published_at: "2025-11-14 10:02"
           - id: 88121
             topic: order-events
             key: o_9k3
-            payload: { order_id: o_9k3, user_id: u_18, email: noor.s@example.net, total_cents: 899, currency: EUR }
+            payload: { order_id: o_9k3, status: 10, user_id: u_18, email: noor.s@example.net, total_cents: 899, currency: EUR }
             created_at: "2025-11-14 10:05"
             claimed_at: "2025-11-14 10:05"
             published_at: "2025-11-14 10:05"
           - id: 88127
             topic: order-events
             key: o_9k4
-            payload: { order_id: o_9k4, user_id: u_17, email: ada.k@example.com, total_cents: 7499, currency: EUR }
+            payload: { order_id: o_9k4, status: 10, user_id: u_17, email: ada.k@example.com, total_cents: 7499, currency: EUR }
             created_at: "2025-11-14 10:11"
             claimed_at: "2025-11-14 10:11"
             published_at: "2025-11-14 10:11"
           - id: 88139
             topic: order-events
             key: o_9k7
-            payload: { order_id: o_9k7, user_id: u_21, email: teo.m@example.org, total_cents: 1700, currency: EUR }
+            payload: { order_id: o_9k7, status: 10, user_id: u_21, email: teo.m@example.org, total_cents: 1700, currency: EUR }
             created_at: "2025-11-14 10:19"
             claimed_at: null
             published_at: null
@@ -676,7 +760,7 @@ nodes:
         topic: order-events
         group: mailer
         key: order_id
-        payload: '{ "order_id": "o_9k2", "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
+        payload: '{ "order_id": "o_9k2", "status": 10, "user_id": "u_17", "email": "ada.k@example.com", "total_cents": 4200, "currency": "EUR" }'
         code: services/mailer/consumer.go:40
         facts:
           commit: offset committed after SendGrid accepts the email
