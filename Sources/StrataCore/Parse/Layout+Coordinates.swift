@@ -127,7 +127,16 @@ extension LayeredGraph {
         // Tall, stepped placements read worse than compact ones with a bend.
         let cards = vertices.indices.filter { vertices[$0].node != nil }
         let height = (cards.map { y[$0] }.max() ?? 0) - (cards.map { y[$0] }.min() ?? 0)
-        return score - 0.6 * height / LayoutMetrics.row
+        score -= 0.6 * height / LayoutMetrics.row
+        // A node fanning out to (or in from) three or more reads best centred on its fan.
+        for v in cards {
+            for fan in [succs[v], preds[v]] where fan.count >= 3 {
+                let ys = fan.map { y[$0] }.sorted()
+                let middle = ys.count % 2 == 1 ? ys[ys.count / 2] : (ys[ys.count / 2 - 1] + ys[ys.count / 2]) / 2
+                score -= 2.5 * abs(y[v] - middle) / LayoutMetrics.row
+            }
+        }
+        return score
     }
 
     /// The balanced placement first, then the four alignments (up-left, up-right, down-left, down-right).
