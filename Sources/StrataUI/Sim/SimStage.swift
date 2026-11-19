@@ -122,7 +122,7 @@ struct SimStage: View {
                         trackComponents(target, at: point, camera)
                         let badge = SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
                         guard hovered != target || hoveredBadge != badge else { return }
-                        clearHover()
+                        clearTermHover()
                         hovered = target
                         hoveredBadge = badge
                         // The ƒ badge shows the node's formula; the rest of the card its term, else its formula.
@@ -276,11 +276,17 @@ struct SimStage: View {
     }
 
     private func clearHover() {
+        clearTermHover()
+        SimComponentsHover.of(sim).clear()
+    }
+
+    /// Ends the term or formula hover, but not the components hover that `trackComponents` keeps, so
+    /// moving onto the ƒ badge or another card doesn't restart the components card's delay.
+    private func clearTermHover() {
         hoverTask?.cancel()
         if hovered != nil { model.overlays.hideTerm() }
         hovered = nil
         hoveredBadge = false
-        SimComponentsHover.of(sim).clear()
     }
 
     /// Lights the chip under the pointer and, after a moment, lists the components of the card under it.
