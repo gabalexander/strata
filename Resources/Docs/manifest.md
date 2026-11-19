@@ -91,6 +91,7 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `glossaries` | | built-in glossary packs to import: `rabbitmq`, `kafka`, `http`, `grpc`, `postgres`, `postgres-internals`, `clickhouse`, `redis`, `elasticsearch`, `go`, `linux`, `tcp-udp`, `connections`, `cdn-dns`, `kubernetes`, `raft`, `replication`, `consistency`, `resilience`, `scaling`, `queueing`, `cpu-memory`, `llm` |
 | `terms` | | local glossary, see [Terms](#terms) |
 | `enums` | | value dictionaries such as status codes, see [Enums](#enums) |
+| `journeys` | | entities followed end to end, step by step, see [Journeys](#journeys) |
 | `layout` | | `auto` (default: the layout engine places every node; `at` is a hint) or `manual` (use `at` exactly) |
 | `direction` | | `right` (default: flow runs left to right) or `down` (top to bottom); a level's key, so a deep dive can set its own. See [Layout](#layout) |
 | `notes` | | long markdown shown in the sim's About tab |
@@ -748,6 +749,116 @@ hidden dirs, build output, `testdata/`, generated code (`Code generated … DO N
   fingerprint of the map file. Opening a map checks again in the background when either changed;
   ⌘K "Check drift against the repo" runs a check now. Stale nodes get a small mark, and the inspector
   lists the findings.
+
+## Journeys
+
+A journey follows one real entity end to end: a lead, an order, a payment. Flows show the kinds of
+traffic, ops the queries, data the tables and enums the status codes; a journey ties them into one
+story you can step through on the architecture itself. Each step says where it happens, the op it
+runs with its placeholders filled in, the rows it changes and the status codes it moves.
+
+```yaml
+journeys:
+  - id: order-paid
+    title: An order from placed to paid
+    brief: Order o-77ab is placed, charged by the payment provider and marked paid.
+    entity: { table: orders, id: o-77ab, label: order }
+    related:
+      - { table: payments, id: p-31, label: payment }
+    steps:
+      - id: place
+        at: "10:02:00.000"
+        label: The customer places the order
+        op: orders/create-order
+        message: { payload: { sku: A-1, qty: 2 } }
+      - id: insert
+        at: +12ms
+        label: Insert the order and its payment
+        op: orders/insert-order
+        binds: [o-77ab, u-42, 1999, p-31]
+        rows:
+          - insert: orders
+            values: { id: o-77ab, user_id: u-42, status: pending, total_cents: 1999 }
+          - insert: payments
+            values: { id: p-31, order_id: o-77ab, status: authorized }
+      - id: event
+        at: +3ms
+        label: Publish OrderPlaced
+        op: orders/order-placed
+        message: { to: events, key: o-77ab, payload: { order_id: o-77ab, status: pending } }
+      - id: capture
+        at: "10:02:41.300"
+        label: The provider captures the payment and the order is paid
+        op: orders/capture
+        binds: { id: o-77ab }
+        status: { enum: order-status, from: pending, to: paid }
+        rows:
+          - update: payments
+            id: p-31
+            set: { status: captured }
+        note: The UPDATE names the status it expects, so a replayed webhook changes nothing.
+        how: orders/capture-lock
+```
+
+| Key | Meaning |
+|---|---|
+| `id`, `title` | required; `brief` is one line saying what the journey shows |
+| `entity` | the row it follows: `table` (or `node.table` when several databases have one), `id` (the value of the table's first key column, or `key: { col: value, … }` for a composite key) and a `label` such as `lead` |
+| `related` | other rows shown beside it, the same way: the attempt a lead becomes, the payment of an order |
+| `steps` | the story, in order |
+
+A step:
+
+| Key | Meaning |
+|---|---|
+| `id` | defaults to `s1`, `s2`, … |
+| `at` | when: an offset from the start (`40ms`), from the step before (`+16ms`), a clock time (`14:31:17.020`) or a timestamp (`2026-11-19T14:31:17Z`). A step without `at` happens when the one before did |
+| `label` | required: what happens, in a sentence |
+| `node`, `path` | where it happens: a node, on the deep-dive level at `path` (`[orders]`, `orders/relay`, `node#op` for an op's level). Defaults to the op's node |
+| `op` | the op it runs: `node/op`, or an op id on `node`, resolved like a flow step's op (`../op` in a deep dive). Its query, key, payload or request is shown filled in, with its enums and code |
+| `binds` | values for the op's placeholders: a list fills `?` and `$1, $2, …` in order; a map fills named ones (`@id`, `:id`, `sqlc.arg(id)`, `$2`, and `{sku}` in a key pattern, a path or a payload). Numbers stay bare, `null` is NULL, a function call such as `now()` is kept, everything else (and anything quoted) becomes a quoted string |
+| `rows` | the rows it changes: `insert: table` with `values`, `update: table` with `id` (or `key`) and `set`, `delete: table` with `id` |
+| `status` | a status code it moves: `{ enum, from, to }` (or a list); `from` left out means the value is entered. Add `column: table.column` when several rows hold that enum |
+| `message` | what it sends: for a publish, the queue or topic (`to`, default the op's target), `topic`, `key` and `payload`; for an HTTP or RPC call, the request body (`payload`). A consumer step receives the payload last sent to its queue |
+| `note` | at most two lines, shown with the step |
+| `how` | a How it works mechanism that explains the step: `node/mechanism` (the node's own, then its ops') |
+
+**Rows and statuses.** Strata replays the journey: the entity and related rows start as their sample
+rows in `schema:` (or absent, when a step inserts them), and each step's `rows` change them. A change to a
+column with `enum:` is a status move by itself, so most steps need no `status:`. A `status:` that no row
+change makes is applied to the row of the journey that holds `from` in a column of that enum (an insert's
+start, a lead's 2100), or, when no row holds the enum, shown on the timeline alone. Every move is checked
+against the enum's `transitions`, and against the `by:` that makes it.
+
+**Validation** (with line numbers and a suggestion, like the rest of the format):
+
+- errors: an unknown table, column, node, deep-dive path, op, enum, enum value (a name where a value
+  belongs says which value), mechanism or queue; an entity or related id that is neither a sample row nor
+  inserted by a step; an update or delete of a row that doesn't exist at that step; an insert of a row
+  that already does, or that is already a sample row; a `status` whose `from` no row holds;
+- warnings: a move with no declared transition (the warning lists where that value can go), a move made
+  by another op than the transition's `by:`, a move out of a terminal value, binds that don't match the
+  op's placeholders (count, names), an op whose `tables` don't include a table the step changes, an update
+  that changes nothing, a note longer than two lines, `at` going back in time or mixing kinds, a `brief`
+  longer than a line, and an entity no step changes.
+
+`strata journey <file|id> [--journey id] [--full]` prints each journey as a timeline: the step's time and
+the gap since the one before, where it happens and what it talks to, the op and the first statement of its
+query with the binds filled in (`--full` prints every statement), each row change (`+` insert, `~` update,
+`-` delete) with old and new values, each status move with the enum names and the transition, and at the end
+each row's status codes in order.
+
+`strata journey draft <file|id> --entity <table> [--id N] [--as <journey id>]` writes a skeleton journey to
+stdout from what the map already knows. It starts from the flow that moves the row out of its current status
+(or, for an id no sample row has, the flow whose query inserts it), follows the queues that flow publishes
+to into the flows that consume them, and keeps each step whose op touches the entity's tables or makes one of
+its transitions, then walks the rest of the lifecycle by the transitions' `by:` ops. Statuses come out in a
+valid order, rows of tables that point at the entity get fresh ids when a step's query inserts them, and
+comments list the placeholders to bind. It is a starting point: check every step against the code.
+
+In the app, the inspector's overview lists the map's journeys, and ⌘K has Follow for each. Playing one
+keeps the stage in view and lights the route: the current step's node with its number, the edge it came
+along and the node it talks to, and the route so far faintly, each node carrying its latest step's number.
 
 ## Edges
 

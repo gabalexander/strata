@@ -967,3 +967,118 @@ scenarios:
         do: "set api.retries 2"
         say: "Watch retry rate and order slots. The original attempts can still commit and send OrderPlaced after the gateway gives up."
     watch: [place-order.retries, orders.util, place-order.errors, email.ok]
+
+journeys:
+  - id: order-to-paid
+    title: An order from cart to paid
+    brief: Lin's order o_9k8 is committed with its outbox row, emailed, then paid when the provider captures it.
+    entity: { table: orders, id: o_9k8, label: order }
+    related:
+      - { table: payments, id: p_5x5, label: payment }
+      - { table: outbox, id: 88140, label: OrderPlaced row }
+    steps:
+      - id: submit
+        at: "10:24:03.120"
+        label: Lin places the order in the web app
+        node: web
+        op: submit-order
+        message: { payload: { cart_id: c_92a7, payment_token: tok_1Qe3 } }
+        note: The page sends one Idempotency-Key per checkout and reuses it if Lin presses retry.
+      - id: gateway
+        at: +16ms
+        label: The gateway checks the session and forwards PlaceOrder
+        op: api/post-orders
+        message: { payload: { cart_id: c_92a7, payment_token: tok_1Qe3 } }
+        note: Envoy transcodes the JSON body to gRPC and applies the per-user rate limit first.
+      - id: place
+        at: +2ms
+        label: orders-svc starts PlaceOrder
+        op: orders/place-order
+        message: { payload: { user_id: u_34, cart_id: c_92a7, idempotency_key: 3b0e6c2a-8f41-4d7e-9c35-1a2b4c6d8e90 } }
+      - id: price
+        at: +1ms
+        label: Read the price of C-3 from Redis
+        op: orders/get-price
+        binds: { sku: C-3 }
+        note: A hit, as nine reads in ten are. A miss reads prices in Postgres and caches it for five minutes.
+      - id: commit
+        at: +9ms
+        label: Commit the order, its items, the payment and the outbox row
+        op: orders/insert-order
+        binds:
+          - o_9k8
+          - u_34
+          - 2149
+          - 3b0e6c2a-8f41-4d7e-9c35-1a2b4c6d8e90
+          - "{C-3,A-1}"
+          - "{1,1}"
+          - "{899,1250}"
+          - '{"order_id": "o_9k8", "status": 10, "user_id": "u_34", "total_cents": 2149}'
+          - p_5x5
+          - tok_1Qe3
+        rows:
+          - insert: orders
+            values: { id: o_9k8, user_id: u_34, status: 10, total_cents: 2149, currency: EUR, idempotency_key: 3b0e6c2a-8f41-4d7e-9c35-1a2b4c6d8e90, created_at: "2025-11-14 10:24" }
+          - insert: order_items
+            values: { order_id: o_9k8, sku: C-3, qty: 1, price_cents: 899 }
+          - insert: order_items
+            values: { order_id: o_9k8, sku: A-1, qty: 1, price_cents: 1250 }
+          - insert: payments
+            values: { id: p_5x5, order_id: o_9k8, token: tok_1Qe3, amount_cents: 2149, status: authorized, created_at: "2025-11-14 10:24" }
+          - insert: outbox
+            values: { id: 88140, topic: order-events, key: o_9k8, payload: { order_id: o_9k8, status: 10, user_id: u_34, total_cents: 2149 }, created_at: "2025-11-14 10:24" }
+        note: One transaction, so the OrderPlaced row exists only if the order does.
+      - id: claim
+        at: +410ms
+        label: The outbox relay claims the event row
+        path: [orders]
+        node: relay
+        op: poll-outbox
+        rows:
+          - update: outbox
+            id: 88140
+            set: { claimed_at: "2025-11-14 10:24:03" }
+        note: The relay polls every 500 ms; SKIP LOCKED keeps a second replica off the same rows.
+        how: relay/relay-cycle
+      - id: publish
+        at: +4ms
+        label: OrderPlaced reaches Kafka and the row is marked published
+        op: orders/order-placed
+        message:
+          to: events
+          key: o_9k8
+          payload: { order_id: o_9k8, status: 10, user_id: u_34, email: lin.w@example.com, total_cents: 2149, currency: EUR }
+        rows:
+          - update: outbox
+            id: 88140
+            set: { published_at: "2025-11-14 10:24:03" }
+        note: The relay produces it with acks=all and marks the row only after the broker acks.
+      - id: consume
+        at: +35ms
+        label: The mailer reads OrderPlaced
+        op: mailer/on-order-placed
+      - id: email
+        at: +3ms
+        label: The mailer asks SendGrid to send the confirmation
+        op: mailer/send-confirmation
+        message: { payload: { template_id: d-order-confirmation, personalizations: [{ to: [{ email: lin.w@example.com }], dynamic_template_data: { order_id: o_9k8 } }] } }
+        note: A 202 means queued, not delivered. A retry after a lost 202 sends a second email.
+      - id: webhook
+        at: "10:24:41.300"
+        label: The provider captures the payment and calls the webhook
+        op: orders/payment-webhook
+        message: { payload: { type: payment.captured, payment_id: p_5x5, order_id: o_9k8, status: captured } }
+        note: The signature is checked before the body is parsed.
+      - id: capture
+        at: +6ms
+        label: Mark the payment captured and the order paid
+        op: orders/capture-payment
+        binds: [p_5x5, o_9k8]
+        rows:
+          - update: payments
+            id: p_5x5
+            set: { status: captured }
+          - update: orders
+            id: o_9k8
+            set: { status: 20 }
+        note: Each update names the status it expects, so a replayed webhook changes nothing.

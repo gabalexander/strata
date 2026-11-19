@@ -26,6 +26,8 @@ public struct Manifest: Sendable, Identifiable {
     public var links: [Link] = []
     /// Value dictionaries such as status codes (docs/manifest.md, Enums). Shared by every level.
     public var enums: [EnumDef] = []
+    /// Entities followed end to end through the architecture, step by step (docs/manifest.md, Journeys).
+    public var journeys: [Journey] = []
     /// `auto` (default): the layout engine places every node; `at` positions are only hints.
     public var layout: LayoutMode = .auto
     public var root: Level

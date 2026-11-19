@@ -22,6 +22,9 @@ import StrataCore
 /// `STRATA_SNAP_HOVER=node` shows that node's hover card (processes, term, formula or brief).
 /// `STRATA_SNAP_DRIFT=1` runs `strata drift` on the manifest's repo first (or on
 /// `STRATA_SNAP_DRIFT_REPO`), so the cards show their drift marks and the inspector its Drift sections.
+/// `STRATA_SNAP_JOURNEY=id` opens that journey's player at `STRATA_SNAP_JOURNEY_STEP`
+/// (a step id, or its 1-based number; the start by default); `STRATA_SNAP_JOURNEY_ROWS=1` shows the
+/// rows pane in the narrow layout and `STRATA_SNAP_JOURNEY_EXPAND=1` lists every column of each row.
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -42,6 +45,8 @@ import StrataCore
                 + (env["STRATA_SNAP_HOW"].map { ["how", $0, env["STRATA_SNAP_HOW_BRANCH"] ?? "", env["STRATA_SNAP_HOW_STEP"] ?? "",
                                                  env["STRATA_SNAP_HOW_DETAIL"] == "0" ? "state" : ""] } ?? [])
                 + (env["STRATA_SNAP_MORE"] == "1" ? ["more"] : [])
+                + (env["STRATA_SNAP_JOURNEY"].map { ["journey", $0, env["STRATA_SNAP_JOURNEY_STEP"] ?? "start"] } ?? [])
+                + (dimensionsTag(env).map { [$0] } ?? [])
                     .filter { !$0.isEmpty })
         .joined(separator: "-").replacingOccurrences(of: "#", with: "_").replacingOccurrences(of: "/", with: "_")
     // STRATA_SNAP_SIZE=WxH sets both; STRATA_SNAP_H only the height.
@@ -86,6 +91,11 @@ import StrataCore
                                 branch: env["STRATA_SNAP_HOW_BRANCH"], step: env["STRATA_SNAP_HOW_STEP"] ?? "0")
             if env["STRATA_SNAP_HOW_STEP"] != nil, env["STRATA_SNAP_HOW_DETAIL"] != "0" { SimHowSnapshot.inspect(sim) }
         }
+        if let journey = env["STRATA_SNAP_JOURNEY"] {
+            SimJourneySnapshot.open(model, manifest: manifest, journey: journey, step: env["STRATA_SNAP_JOURNEY_STEP"] ?? "0")
+            if env["STRATA_SNAP_JOURNEY_ROWS"] == "1" { SimJourneySnapshot.showRows(model) }
+            if env["STRATA_SNAP_JOURNEY_EXPAND"] == "1" { SimJourneySnapshot.expandRows(model) }
+        }
         let tab = env["STRATA_SNAP_DOCK"].flatMap { tabs[$0] } ?? (env["STRATA_SNAP_SCENARIO"] == nil ? .controls : .scenarios)
         if hover != nil {
             model.open(.sim(manifest.id, path: levelPath))
@@ -95,4 +105,10 @@ import StrataCore
         let options = SimSnapshotOptions(selectedNode: selected, dockTab: tab, previewMenu: false)
         return AnyView(SimScreen(model: model, id: manifest.id, path: levelPath, snapshot: options))
     }]
+}
+
+/// `1100x800` in a scene name when STRATA_SNAP_SIZE sets one, so renders at several sizes don't overwrite each other.
+private func dimensionsTag(_ env: [String: String]) -> String? {
+    guard env["STRATA_SNAP_JOURNEY"] != nil, let size = env["STRATA_SNAP_SIZE"], !size.isEmpty else { return nil }
+    return size
 }

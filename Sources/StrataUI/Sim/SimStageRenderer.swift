@@ -210,6 +210,7 @@ final class StageRenderer {
                 if let tint = tints[card.node.id], let tag = tint.tag { drawTag(tag, tint: tint, on: card.rect, in: context) }
             }
         }
+        if let markers = highlight?.markers, !markers.isEmpty { drawMarkers(markers, layout: layout, in: context) }
         if let focusToken, let label = focusToken.token.label {
             pill(label, at: focusToken.point + CGPoint(x: 9, y: -18), width: 144, color: Theme.borderStrong,
                  fill: Theme.overlay, style: .node, in: context)
