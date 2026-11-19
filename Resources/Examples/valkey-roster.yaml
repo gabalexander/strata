@@ -13,7 +13,7 @@ terms:
     term: Roster
     short: The set of live members, one Valkey key per instance that expires unless it is renewed.
     detail: A member is live while its key exists. Nothing removes a dead member; its key stops being renewed and expires on its own.
-    match: [roster]
+    match: [the roster, roster membership]
   - id: fencing-token
     term: Fencing token
     short: A number that grows with every change of owner and travels with each write, so the store can reject a stale owner.
@@ -129,7 +129,7 @@ nodes:
             reply: "(integer) 1"
             at: 5s
             state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
-            note: "The reply `1` means the key existed and its deadline moved to 15 s from now. A reply of `0` would mean the key is already gone and A must register again."
+            note: "The reply `1` means the key existed; its deadline is now 15 s away again. A reply of `0` would mean the key is already gone and A must register again."
           - id: hb2
             from: a
             to: v
@@ -182,7 +182,7 @@ nodes:
                 command: "SCAN 0 MATCH roster:inst:* COUNT 100"
                 reply: "0 [roster:inst:b roster:inst:c]"
                 at: 22.5s
-                note: "B's next tick after the expiry sees two members. So does C's."
+                note: "B's next tick after the expiry sees two members. So does C's, at its own point in the 5 s rhythm."
               - id: rebalance
                 from: b
                 to: b
@@ -231,6 +231,7 @@ nodes:
                 command: "SCAN 0 MATCH roster:inst:* COUNT 100"
                 reply: "0 [roster:inst:b roster:inst:c]"
                 at: 27.5s
+                note: "B's first tick after the expiry. As far as B can tell, A is gone for good."
               - id: take
                 from: b
                 to: v
@@ -284,6 +285,7 @@ nodes:
                 reply: "(integer) 1"
                 at: 12.4s
                 state: [ { key: "roster:inst:a", value: null } ]
+                note: "`DEL` removes the key at once. Nobody has to wait out a TTL to learn that A is gone."
               - id: announce
                 from: a
                 to: v
@@ -299,6 +301,7 @@ nodes:
                 command: "SCAN 0 MATCH roster:inst:* COUNT 100"
                 reply: "0 [roster:inst:b roster:inst:c]"
                 at: 12.4s
+                note: "B subscribes to `roster:events`, so it rescans on the message instead of waiting up to 5 s for its next tick."
               - id: take
                 from: b
                 to: v
@@ -396,7 +399,7 @@ nodes:
     doc: Run the jobs. They never touch the roster.
 
 edges:
-  - { from: ticker, to: scheduler, label: every 5s }
+  - { from: ticker, to: scheduler, label: tick }
   - { from: due, to: scheduler, label: due }
   - { from: scheduler, to: valkey, protocol: resp }
   - { from: scheduler, to: jobs, protocol: amqp }

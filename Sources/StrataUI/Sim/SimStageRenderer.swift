@@ -260,11 +260,12 @@ final class StageRenderer {
         symbol(node.icon ?? node.kind.symbol, at: CGPoint(x: glyph.midX, y: glyph.midY), size: 15, tint: tint, in: content)
         let markerCount = CGFloat((note ? 1 : 0) + (state.health == .slow ? 1 : 0))
         let x = r.minX + 46
-        let titleWidth = r.maxX - 10 - x - markerCount * 15
+        let titleWidth = r.maxX - 10 - x - markerCount * 15 - SimFormulaStage.reserved(node)
         content.draw(text(node.label, .node, width: titleWidth, in: content),
                      at: CGPoint(x: x, y: r.minY + 16), anchor: .leading)
 
-        var statusX = r.maxX - 14
+        var statusX = r.maxX - 14 - SimFormulaStage.reserved(node)
+        if node.formula != nil { drawFormulaBadge(on: r, lit: selected || hovered, in: content) }
         if state.health == .slow {
             symbol("tortoise", at: CGPoint(x: statusX, y: r.minY + 16), size: 11, tint: Theme.warn, in: context)
             statusX -= 15

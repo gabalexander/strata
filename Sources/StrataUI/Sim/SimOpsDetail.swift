@@ -52,6 +52,11 @@ struct SimOpDetail: View {
                 if let doc = op.doc { SimMarkdown(source: doc, model: model, terms: terms) }
                 live
                 kindBody
+                if let formula = op.formula { SimFormulaSection(formula: formula, model: model, terms: terms, actions: actions) }
+                if !op.how.isEmpty {
+                    SimHowSection(mechanisms: op.how, node: entry.node.id, op: op.id, owner: op.label, model: model, sim: sim,
+                                  terms: terms, actions: actions)
+                }
                 if !op.risks.isEmpty { risks }
                 if !op.facts.isEmpty { SimSection(title: "Facts") { SimOpsTable(rows: op.facts.map { ($0.key, $0.value) }) } }
                 if !op.code.isEmpty {
