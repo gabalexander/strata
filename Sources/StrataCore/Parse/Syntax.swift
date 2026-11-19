@@ -25,10 +25,14 @@ enum Syntax {
         return text
     }
 
-    /// `node/op` (qualified), or also a bare `op` id when `qualified` is false.
-    static func opReference(_ text: String, qualified: Bool) throws -> String {
+    /// `node/op` (qualified), or also a bare `op` id when `qualified` is false. With `owner`, the node
+    /// may be `..`: the node a deep-dive level is inside (`InheritedOps.ownerKey`).
+    static func opReference(_ text: String, qualified: Bool, owner: Bool = false) throws -> String {
         let parts = text.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        let valid = (qualified ? 2...2 : 1...2).contains(parts.count) && parts.allSatisfy(isID)
+        let valid = (qualified ? 2...2 : 1...2).contains(parts.count)
+            && parts.enumerated().allSatisfy { index, part in
+                isID(part) || (owner && index == 0 && parts.count == 2 && part == InheritedOps.ownerKey)
+            }
         guard valid else {
             throw InvalidValue(qualified ? "invalid op reference '\(text)'; use node/op, such as payments/charge"
                                          : "invalid op reference '\(text)'; use an op id or node/op")

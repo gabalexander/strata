@@ -53,15 +53,36 @@ struct SimOpsIndex {
     struct Entry {
         let node: Node
         let op: StrataCore.Operation
-        var ref: OpRef { OpRef(node: node.id, op: op.id) }
-        /// The node this op talks to: its target, or for messages the buffer named by `topic`.
+        /// The node this op talks to: its target, or for messages the buffer named by `topic`. For an
+        /// inherited op, the inner node `InheritedOps` maps it to.
         let peer: String?
+        /// An op of the node this deep-dive level is inside (`InheritedOps`): `node` is that owner,
+        /// which isn't on this level, and the ref's node is `..`.
+        var inherited = false
+        /// The inner process whose code file is an inherited op's (who performs it).
+        var performer: String?
+        var ref: OpRef { OpRef(node: inherited ? InheritedOps.ownerKey : node.id, op: op.id) }
     }
 
     let level: Level
-    /// Every op of the level, in node then op order.
+    /// The ops of the node this deep-dive level is inside, mapped onto it. nil at the root.
+    let inheritance: InheritedOps?
+    /// Every op of the level, in node then op order, then the inherited ops in op order.
     let all: [Entry]
+    /// The inherited ops alone, in op order.
+    let inherited: [Entry]
     private let byRef: [OpRef: Entry]
+    /// Inherited ops named by flow steps: the hops (caller → callee) of each step that performs one.
+    private(set) var hops: [OpRef: [Hop]] = [:]
+    /// Each node's outgoing edges on this level (implicit flow edges included).
+    private let outgoing: [String: Set<String>]
+    /// Each node's incoming edges on this level.
+    private let incoming: [String: [String]]
+
+    struct Hop: Hashable {
+        let from: String
+        let to: String?
+    }
     /// `calls:` reversed: the ops that reach an endpoint (or, for a publish, the consumer it feeds).
     private(set) var linkedCallers: [OpRef: [OpRef]] = [:]
     /// The op an op's `calls:` reaches (`Level.resolveCalls`).
@@ -73,17 +94,26 @@ struct SimOpsIndex {
     /// Flow ids that name this op, on the flow or on a step (`Level.opReferences`).
     let flows: [OpRef: [String]]
 
-    init(level: Level) {
+    init(level: Level, inherited inheritance: InheritedOps? = nil) {
         self.level = level
+        self.inheritance = inheritance
         var entries: [Entry] = []
         for node in level.nodes {
             for op in node.ops { entries.append(Entry(node: node, op: op, peer: Self.peer(of: op, in: level))) }
         }
+        let inherited = (inheritance?.entries ?? []).compactMap { mapped -> Entry? in
+            guard let owner = inheritance?.owner else { return nil }
+            return Entry(node: owner, op: mapped.op, peer: mapped.peer, inherited: true, performer: mapped.performer)
+        }
+        self.inherited = inherited
+        entries += inherited
         all = entries
         byRef = Dictionary(entries.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
-        flows = Dictionary(level.opReferences().compactMap { key, ids in
+        flows = Dictionary(level.opReferences(owner: inheritance?.owner).compactMap { key, ids in
             Self.ref(key).map { ($0, ids) }
         }, uniquingKeysWith: { first, _ in first })
+        outgoing = level.edges.reduce(into: [:]) { $0[$1.from, default: []].insert($1.to) }
+        incoming = level.edges.reduce(into: [:]) { $0[$1.to, default: []].append($1.from) }
         for entry in entries {
             guard let target = level.resolveCalls(entry.op).map({ OpRef(node: $0.node, op: $0.op.id) }) else { continue }
             linked[entry.ref] = target
@@ -93,15 +123,31 @@ struct SimOpsIndex {
             // A flow's own `op:` is resolved on its `by` (consumers) or `from` node, as the engine does.
             let root = flow.op.flatMap { resolve($0, caller: flow.by ?? flow.from, target: nil) }
             guard let start = flow.from ?? flow.by else { continue }
+            if let root { hop(root, flow.by ?? start, nil) }
             walk(flow.steps, at: start, parent: root)
         }
     }
 
     func entry(_ ref: OpRef) -> Entry? { byRef[ref] }
-    func ops(of node: String) -> [Entry] { all.filter { $0.node.id == node } }
+    func ops(of node: String) -> [Entry] { all.filter { !$0.inherited && $0.node.id == node } }
 
-    /// Ops on other nodes that talk to `node`: the reverse view of a database, cache or buffer.
-    func targeting(_ node: String) -> [Entry] { all.filter { $0.peer == node && $0.node.id != node } }
+    /// Ops on other nodes that talk to `node`: the reverse view of a database, cache or buffer. Inherited
+    /// ops mapped to `node` count too.
+    func targeting(_ node: String) -> [Entry] { all.filter { $0.peer == node && $0.ref.node != node } }
+
+    /// The inherited ops a process on this level takes part in: those its flow steps perform, else
+    /// those it performs by code, serves, or reaches over one of its edges.
+    func inherited(through node: String) -> [Entry] {
+        inherited.filter { entry in
+            if entry.peer == node || entry.performer == node { return true }
+            if let hops = hops[entry.ref], !hops.isEmpty { return hops.contains { $0.from == node } }
+            guard entry.performer == nil, let peer = entry.peer else { return false }
+            return outgoing[node]?.contains(peer) == true
+        }
+    }
+
+    /// How many inherited ops map to each node: the ops badge on its card.
+    var inheritedCounts: [String: Int] { inheritance?.counts ?? [:] }
 
     /// Who reaches this op: `calls:` links and the ops whose handling performs it.
     func callers(of ref: OpRef) -> [OpRef] { unique((linkedCallers[ref] ?? []) + (nestedIn[ref] ?? [])) }
@@ -127,8 +173,29 @@ struct SimOpsIndex {
 
     func highlight(_ ref: OpRef) -> StageHighlight {
         var result = StageHighlight()
+        func connect(_ a: String, _ b: String) {
+            result.nodes.formUnion([a, b])
+            result.edges.insert("\(a)->\(b)")
+            result.edges.insert("\(b)->\(a)")
+        }
         for link in chain(ref) {
             guard let entry = byRef[link] else { continue }
+            if entry.inherited {
+                // The owner isn't on this level: light the steps that perform the op, else the process
+                // that performs it (or every node with an edge into its peer) and the peer.
+                if let hops = hops[link], !hops.isEmpty {
+                    for hop in hops {
+                        if let to = hop.to { connect(hop.from, to) } else { result.nodes.insert(hop.from) }
+                    }
+                } else if let peer = entry.peer {
+                    result.nodes.insert(peer)
+                    let sources = entry.performer.map { [$0] } ?? incoming[peer] ?? []
+                    for source in sources { connect(source, peer) }
+                } else if let performer = entry.performer {
+                    result.nodes.insert(performer)
+                }
+                continue
+            }
             result.nodes.insert(entry.node.id)
             if let peer = entry.peer {
                 result.nodes.insert(peer)
@@ -139,9 +206,9 @@ struct SimOpsIndex {
         return result
     }
 
-    /// `Level.resolveOp` as a ref.
+    /// `Level.resolveOp` as a ref; in a deep dive, an op of the node it is inside resolves to `../op`.
     private func resolve(_ reference: String, caller: String?, target: String?) -> OpRef? {
-        level.resolveOp(reference, caller: caller, target: target).map { OpRef(node: $0.node, op: $0.op.id) }
+        level.resolveOp(reference, caller: caller, target: target, owner: inheritance?.owner).map { OpRef(node: $0.node, op: $0.op.id) }
     }
 
     private static func ref(_ key: String) -> OpRef? {
@@ -155,20 +222,27 @@ struct SimOpsIndex {
             switch step.action {
             case .call(let target, let inner, let miss):
                 let ref = step.op.flatMap { resolve($0, caller: node, target: target) }
-                if let ref { record(ref, parent: parent) }
+                if let ref { record(ref, parent: parent); hop(ref, node, target) }
                 // Steps nested in the call run at the target, while handling the endpoint it reached.
                 let handler = ref.map { ref in byRef[ref]?.op.direction == .inbound ? ref : linked[ref] ?? ref }
                 walk(inner, at: target, parent: handler ?? parent)
                 walk(miss, at: node, parent: parent)
             case .publish(let target):
-                if let ref = step.op.flatMap({ resolve($0, caller: node, target: target) }) { record(ref, parent: parent) }
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: target) }) { record(ref, parent: parent); hop(ref, node, target) }
             case .work:
-                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent) }
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent); hop(ref, node, nil) }
             case .parallel(let inner):
-                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent) }
+                if let ref = step.op.flatMap({ resolve($0, caller: node, target: nil) }) { record(ref, parent: parent); hop(ref, node, nil) }
                 walk(inner, at: node, parent: parent)
             }
         }
+    }
+
+    /// Remembers where a step performs an inherited op, for its path on the stage.
+    private mutating func hop(_ ref: OpRef, _ from: String, _ to: String?) {
+        guard ref.node == InheritedOps.ownerKey else { return }
+        let hop = Hop(from: from, to: to)
+        if !(hops[ref]?.contains(hop) ?? false) { hops[ref, default: []].append(hop) }
     }
 
     private mutating func record(_ ref: OpRef, parent: OpRef?) {
@@ -240,9 +314,10 @@ enum SimOpsText {
     }
 
     /// The compact second line of a row: `orders db · write · orders, outbox`, `GET price:{sku} · ttl 5m`.
-    static func summary(_ entry: SimOpsIndex.Entry, in level: Level) -> String {
+    /// Without `namingPeer` it leaves out the node the op talks to, for rows grouped under that node.
+    static func summary(_ entry: SimOpsIndex.Entry, in level: Level, namingPeer: Bool = true) -> String {
         let op = entry.op
-        let peer = entry.peer.flatMap { level.node($0)?.label } ?? op.target
+        let peer = namingPeer ? entry.peer.flatMap { level.node($0)?.label } ?? op.target : nil
         var parts: [String] = []
         switch op.kind {
         case .sql, .search:
@@ -395,7 +470,8 @@ enum SimOpsPath {
     /// A stand-in node for the existing deep-dive route: its id is the `node#op` path element and it
     /// carries the op's `inside:` or `detail:`.
     static func diveNode(_ entry: SimOpsIndex.Entry) -> Node? {
-        guard entry.op.inside != nil || entry.op.detail != nil else { return nil }
+        // An inherited op's own level hangs off the owner, one level up: open it from there.
+        guard !entry.inherited, entry.op.inside != nil || entry.op.detail != nil else { return nil }
         var node = Node(id: element(entry.ref), kind: entry.node.kind, label: entry.op.label)
         node.inside = entry.op.inside
         node.detail = entry.op.detail

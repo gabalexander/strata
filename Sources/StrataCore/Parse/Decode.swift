@@ -155,7 +155,7 @@ enum Decode {
         flow.rate = field["rate"].scalar(Syntax.rate) ?? .manual
         flow.deadline = field["deadline"].duration()
         flow.steps = field["steps"].items().compactMap(step)
-        flow.op = field["op"].scalar { try Syntax.opReference($0, qualified: false) }
+        flow.op = field["op"].scalar { try Syntax.opReference($0, qualified: false, owner: true) }
         flow.traffic = traffic(field["traffic"])
         flow.slo = slo(field["slo"])
         return flow
@@ -190,7 +190,7 @@ enum Decode {
         step.say = field["say"].text()
         step.p = field["p"].probability()
         step.optional = field["optional"].bool() ?? false
-        step.op = field["op"].scalar { try Syntax.opReference($0, qualified: false) }
+        step.op = field["op"].scalar { try Syntax.opReference($0, qualified: false, owner: true) }
         if verb == "call" {
             step.timeout = field["timeout"].duration()
             step.retries = field["retries"].integer(in: 0...Int.max)

@@ -61,7 +61,8 @@ public final class Simulation {
     public init(manifest: Manifest, path: [String] = [], parentRate: Double? = nil, seed: UInt64 = 1) {
         self.manifest = manifest
         self.path = path
-        let topology = ProgramTopology(manifest.level(at: path) ?? manifest.root)
+        let inside = manifest.level(at: path)
+        let topology = ProgramTopology(inside ?? manifest.root, owner: inside == nil ? nil : manifest.deepDiveOwner(at: path)?.node)
         self.topology = topology
         self.level = topology.level
         self.parentRate = parentRate
@@ -237,6 +238,7 @@ public final class Simulation {
 
     /// Live numbers for an operation on a node of this level: every step that names it counts.
     /// Zero, with `referenced == false`, for an op no step names or one that doesn't exist.
+    /// In a deep dive, node `..` (`InheritedOps.ownerKey`) is the node the level is inside.
     public func opMetrics(node: String, op: String) -> OpMetrics {
         opIndex(node: node, op: op).map(opState) ?? OpMetrics()
     }

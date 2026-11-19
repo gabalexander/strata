@@ -57,6 +57,11 @@ struct SimInspector: View {
             if let narration = sim.level.narration {
                 SimSection(title: "This level") { SimMarkdown(source: narration, model: model, terms: terms) }
             }
+            // A deep dive: the ops of the node it is inside, which stay on that node in the overview.
+            if let owner = SimOpsState.of(sim).index.inheritance?.owner {
+                SimOpsSection(model: model, sim: sim, actions: actions, node: owner, selection: selection, pulse: pulse,
+                              still: still, inherited: true)
+            }
             SimHowLevelSection(sim: sim, select: select)
             if !sim.level.flows.isEmpty {
                 SimSection(title: "Flows") {

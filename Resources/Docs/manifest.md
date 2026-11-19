@@ -145,6 +145,8 @@ Any node can have its own level inside it:
 - `kind: port` nodes stand for the outside world inside a deep dive (who calls in, what it calls out to).
 - `rate: parent` makes a flow follow the measured request rate of the node you drilled into
   (5/s when opened directly).
+- **Ops** stay on the node in the overview. Inside, each one maps to the inner node it talks to, and
+  inner steps can name it with `op:` ([In a deep dive](#in-a-deep-dive)).
 - **Processes.** The `service`, `worker`, `cron` and `function` nodes of an `inside:` level are the
   processes the node runs. Its card lists them as chips (`api · worker · scheduler`, then `+N` when
   they don't fit) and is 16 pt taller. Clicking a chip dives in with that process selected; hovering
@@ -240,6 +242,8 @@ it publishes or consumes, the cache keys it touches. They're the bridge between 
 - The inspector lists a node's operations grouped by kind, and clicking one opens its detail.
 - Databases, caches and buffers show the reverse view: every operation on any node of the level
   that targets them, grouped by table, key pattern or topic.
+- Inside a deep dive, the ops of the node it is inside map onto the inner nodes they talk to
+  ([In a deep dive](#in-a-deep-dive)).
 
 ```yaml
 - id: orders
@@ -348,15 +352,76 @@ Validation checks:
 - targets exist and fit the kind: `sql` → database or search, `cache` → cache, `publish`/`consume`
   → queue or topic, `rpc`/`http` → a server. An impossible target (a `sql` op on a queue) is an
   error; a questionable one (a `cache` op on a database) is a warning, and so is a target with no edge;
-- `calls` and step or flow `op` references resolve. It's a warning when they don't line up: `calls`
-  should name an inbound op on the target, and a step should name the op it performs (the caller's
-  outbound op to that target, or the target's inbound op);
+- `calls` and step or flow `op` references resolve (in a deep dive, also on the ops of the node the
+  level is inside). It's a warning when they don't line up: `calls` should name an inbound op on the
+  target, and a step should name the op it performs (the caller's outbound op to that target, or the
+  target's inbound op);
 - a `sql` op has a `query`, and the query is whole: a warning names one that looks elided (`...`,
   `…`, `<query>`, `TODO`), and a statement that isn't (a `SELECT` without `FROM` that computes
   nothing, an `UPDATE` without `SET`, an `INSERT` without `INTO`, a description in words);
 - an op that no flow or step names is fine. It still documents the code.
 
-`strata ops <file|id>` lists every op per level and node, with the flows that name it.
+`strata ops <file|id>` lists every op per level and node, with the flows that name it. Under each
+deep dive it prints how the ops of the node the level is inside map to inner nodes: the peer, the rule
+that matched, the process that performs each op, and the flows that name it (`deepDive` in `--json`).
+
+### In a deep dive
+
+Keep a service's ops on the service node in the overview, with `target:` the overview node. Inside
+its `inside:` level they are the level's inherited ops. With nothing selected, the inspector lists them
+under "Operations of orders-svc", grouped by kind. It also maps each op to the inner node it talks to,
+its peer. The rules are tried in this order, and the first that names one node wins:
+
+1. **target**: the op's `target` is an inner node id, or a message's `topic` names an inner queue or topic.
+2. **code**: an inner node's `code:` names the op's `code:`. The op's entries are tried in order, each
+   with its line and then by file. For an op with a target, a process (service, worker, cron,
+   function) with that code is the one that performs it, not its peer. An op without a target (an
+   endpoint, a consumer) maps to the process that serves it.
+3. **label**: the inner node is labelled like the target, such as a port drawn for that database.
+4. **kind**: the inner node is the only one of a kind the op talks to: a database for `sql`, a cache
+   or store for `cache` and `storage`, a queue or topic for messages, narrowed by the target's tech
+   and name. When the service's ops of that family name several targets, the node must be named like
+   this op's target. For `rpc`, `http`, `call` and `llm`, it is the one port or external named like
+   the target (`payments API` for `payments`).
+
+An op that no rule matches, such as pure compute or a formula, stays unmapped and is still listed.
+Selecting an inner node shows the inherited ops that concern it:
+
+- a database, cache, buffer or port shows the ops mapped to it in its reverse view;
+- a process shows the ops mapped to it or to a node it calls.
+
+Each card's ops badge counts the ops mapped to it.
+
+A flow or step `op:` inside the deep dive that resolves on neither the caller nor the target falls back
+to the ops of the node the level is inside. `orders/insert-order` works when no inner node has the id
+`orders`, and `../insert-order` always works. Naming the op counts its live numbers on this level. It
+also lights the step's exact path when you hover the op, where otherwise every edge into its peer
+lights:
+
+```yaml
+- id: orders
+  kind: service
+  ops:
+    - { id: insert-order, kind: sql, target: db, label: INSERT order, query: "INSERT INTO orders (id) VALUES ($1)", code: repo/orders.go:88 }
+  inside:
+    nodes:
+      - { id: in, kind: port, label: from api-gateway }
+      - { id: handler, kind: service, label: HTTP handler }
+      - { id: tx, kind: database, label: orders tx }
+    edges:
+      - { from: in, to: handler }
+      - { from: handler, to: tx, protocol: sql }
+    flows:
+      - id: requests
+        from: in
+        rate: parent
+        steps:
+          - call: handler
+            steps:
+              - { call: tx, op: insert-order }    # orders-svc's op, mapped to tx
+```
+
+An op that only one inner node performs can live on that inner node instead.
 
 ## Data
 

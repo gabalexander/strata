@@ -242,8 +242,10 @@ private struct SimWorkspace: View {
 
     /// Selects the node a note or the palette asked for.
     private func takeFocus() {
-        guard let node = SimFocus.of(model).take(for: AppModel.sessionKey(id, sim.path)),
-              sim.level.node(node) != nil else { return }
+        guard let node = SimFocus.of(model).take(for: AppModel.sessionKey(id, sim.path)) else { return }
+        // `..`: the node this deep dive is inside, whose ops the overview lists.
+        if node == InheritedOps.ownerKey { select(nil); return }
+        guard sim.level.node(node) != nil else { return }
         select(.node(node))
     }
 

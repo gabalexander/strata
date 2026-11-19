@@ -62,7 +62,8 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Buffers** draw message slots, small rounded rects coloured by flow (`NodeState.held`), plus `+N` past 12.
   - **Replicas** appear as small dots top-right.
   - **Deep dive:** a small layers glyph bottom-right means double-click to zoom in.
-  - **Ops:** a small `6 ops` badge after the tech badge. **Formula:** an ƒ badge top-right; hovering it shows the typeset formula.
+  - **Ops:** a small `6 ops` badge after the tech badge. In a deep dive it also counts the ops of the
+    node the level is inside that map to this card. **Formula:** an ƒ badge top-right; hovering it shows the typeset formula.
   - **Hover cards:** one at a time, so none covers another. The ƒ badge shows the formula after 120 ms and
     hides the processes card while the pointer is on it. The rest of a card with process chips shows the
     processes card; the rest of any other card shows its term (300 ms), else its formula.
@@ -98,6 +99,28 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
 - **Narration:** a strip at the bottom of the stage on `Theme.overlay` at 92%, 13 pt text with
   glossary links, fading in on change.
 - **Paused:** a small "Paused" pill top-right.
+
+## Inspector
+
+- **Nothing selected:** the level's narration under "This level". In a deep dive, "Operations of
+  orders-svc" comes next: the ops of the node the level is inside, grouped by kind as on that node's
+  own level, with a faint line saying how many map to a node here. How it works, Flows and the
+  diagram legend follow.
+- **A node:** its header, doc, How it works, formula, actions, enums, data, Operations, live metrics,
+  code, links, your note and parameters.
+- **Operations:**
+  - A service lists its own ops by kind: Endpoints, Consumes, Queries, Cache, Publishes and Calls.
+  - A database, cache or buffer lists every op that talks to it, by table, key pattern, or producer
+    and consumer.
+  - In a deep dive, the inherited ops mapped to a database, cache, buffer or port join its list,
+    with the owner's name on each row.
+  - A process gets a second header, "Operations of orders-svc", for the inherited ops mapped to it
+    or to a node it calls. They are grouped by that node (`orders db 6`) and introduced by one faint line.
+- **Op rows:** a kind glyph, the label, an R/W badge, the live rate and p99, a risk dot, and a mono
+  second line.
+  - Hovering a row lights the op's path on the stage and dims the rest. For an inherited op that is
+    the steps that name it, else its performer or every edge into its peer.
+  - Clicking a row opens the op detail over the inspector; Back or Esc returns.
 
 ## Overlays
 

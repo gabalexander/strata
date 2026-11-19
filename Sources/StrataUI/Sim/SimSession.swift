@@ -39,6 +39,7 @@ enum SimSessions {
         init(_ sim: Simulation) {
             terms = TermIndex(manifest: sim.manifest)
             renderer = StageRenderer(level: sim.level)
+            renderer.inheritedOps = SimOpsState.of(sim).index.inheritedCounts
         }
     }
     private static let parts = NSMapTable<Simulation, Parts>.weakToStrongObjects()

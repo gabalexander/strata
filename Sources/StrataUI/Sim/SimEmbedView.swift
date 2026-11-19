@@ -173,7 +173,9 @@ private struct SimEmbedWorkspace: View {
         self.handoff = handoff
         self.visible = visible
         self.still = still
-        _renderer = State(initialValue: StageRenderer(level: sim.level))
+        let renderer = StageRenderer(level: sim.level)
+        renderer.inheritedOps = SimOpsState.of(sim).index.inheritedCounts
+        _renderer = State(initialValue: renderer)
         terms = SimSessions.terms(for: sim)
     }
 

@@ -290,7 +290,7 @@ struct SimPressureVolumes: View {
                 .padding(.horizontal, 12).frame(height: 28)
             }
             ForEach(ops(of: flow), id: \.ref) { entry in
-                let op = sim.opMetrics(node: entry.node.id, op: entry.op.id)
+                let op = sim.opMetrics(node: entry.ref.node, op: entry.op.id)
                 HStack(spacing: 10) {
                     HStack(spacing: 6) {
                         Image(systemName: entry.op.kind.symbol).font(Theme.ui(10)).foregroundStyle(Theme.faint).frame(width: 14)

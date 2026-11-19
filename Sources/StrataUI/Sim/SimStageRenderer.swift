@@ -21,6 +21,8 @@ final class StageRenderer {
     @ObservationIgnored var chips: [String: [StageChip]] = [:]
     /// The chip under the pointer, drawn brighter.
     @ObservationIgnored var hoveredChip: StageChip.Ref?
+    /// In a deep dive, how many of the owner's ops map to each node (`InheritedOps`): its ops badge counts them.
+    @ObservationIgnored var inheritedOps: [String: Int] = [:]
     static let tidyDuration = 0.55
 
     enum Lettering: Hashable {
@@ -347,8 +349,10 @@ final class StageRenderer {
             return
         }
 
-        // The ops count ("6 ops") follows the tech badge when the row has room for it.
-        let opsLabel = node.ops.isEmpty || down ? nil : text(node.ops.count == 1 ? "1 op" : "\(node.ops.count) ops", .badge, in: content)
+        // The ops count ("6 ops") follows the tech badge when the row has room for it. In a deep dive it
+        // counts the owner's ops that map to the node too.
+        let opCount = node.ops.count + inheritedOps[node.id, default: 0]
+        let opsLabel = opCount == 0 || down ? nil : text(opCount == 1 ? "1 op" : "\(opCount) ops", .badge, in: content)
         let opsWidth = opsLabel.map { $0.measure(in: CGSize(width: 80, height: 14)).width + 8 } ?? 0
         let replicaDots = min(5, state.replicas)
         let rowEnd = r.maxX - 10 - (state.replicas > 1 && !down ? CGFloat((replicaDots - 1) * 5 + 7 + (state.replicas > 5 ? 20 : 0)) : 0)

@@ -8,6 +8,17 @@ import StrataCore
 /// deep dives, and `node#op` for an op's own `inside:` level.
 struct OpListing: Encodable {
     struct Fact: Encodable { let key: String; let value: String }
+    /// For an op of a node with `inside:`: the inner node of that deep dive it maps to (`InheritedOps`).
+    struct DeepDive: Encodable {
+        /// The inner node it talks to (or that serves it); nil when no rule matched.
+        let peer: String?
+        /// target, code, kind or label.
+        let rule: String?
+        /// The inner process whose code file is the op's.
+        let performer: String?
+        /// Flows of the deep dive whose steps name it.
+        let flows: [String]
+    }
     let level: String
     let node: String
     let id: String
@@ -43,9 +54,10 @@ struct OpListing: Encodable {
     let inside: Bool
     /// Flows that name this op, on the flow or on a step (its live numbers come from them).
     let flows: [String]
+    let deepDive: DeepDive?
     let line: Int?
 
-    init(level: String, node: String, op: StrataCore.Operation, flows: [String]) {
+    init(level: String, node: String, op: StrataCore.Operation, flows: [String], deepDive: DeepDive? = nil) {
         self.level = level; self.node = node; id = op.id; kind = op.kind.rawValue
         direction = op.direction.rawValue; label = op.label; target = op.target; access = op.access?.rawValue
         tables = op.tables; indexes = op.indexes; tx = op.tx; locks = op.locks; query = op.query
@@ -53,7 +65,7 @@ struct OpListing: Encodable {
         method = op.method; path = op.path; request = op.request; response = op.response; streaming = op.streaming
         status = op.status; calls = op.calls; code = op.code; risks = op.risks; tags = op.tags
         facts = op.facts.map { Fact(key: $0.key, value: $0.value) }; doc = op.doc; detail = op.detail
-        inside = op.inside != nil; self.flows = flows; line = op.line
+        inside = op.inside != nil; self.flows = flows; self.deepDive = deepDive; line = op.line
     }
 }
 
@@ -62,49 +74,81 @@ func listOps(_ args: Arguments) throws -> Int32 {
     let entry = try loadEntry(args.positional[0], command: "ops")
     guard let manifest = entry.manifest else { return 1 }
     var listings: [OpListing] = []
-    collectOps(manifest.root, path: "", into: &listings)
+    var levels: [String] = []
+    collectOps(manifest.root, path: "", into: &listings, levels: &levels)
     if args.flags.contains("--json") {
         try printJSON(listings)
     } else {
-        print(renderOps(listings, manifest: manifest))
+        print(renderOps(listings, levels: levels, manifest: manifest))
     }
     return 0
 }
 
-private func collectOps(_ level: Level, path: String, into listings: inout [OpListing]) {
+/// `levels`: every level path with ops of its own, or inherited from the node it is inside, in order.
+private func collectOps(_ level: Level, path: String, into listings: inout [OpListing], levels: inout [String]) {
     let references = level.opReferences()
+    let inheriting = path.split(separator: "/").last.map { !$0.contains("#") } ?? false
+    if level.nodes.contains(where: { !$0.ops.isEmpty }) || inheriting { levels.append(path) }
     for node in level.nodes {
+        let inherited = node.inside.map { InheritedOps(owner: node, ownerLevel: level, inside: $0) }
+        let insideReferences = node.inside?.opReferences(owner: node) ?? [:]
         for op in node.ops {
-            listings.append(OpListing(level: path, node: node.id, op: op, flows: references["\(node.id)/\(op.id)"] ?? []))
+            let deepDive = inherited?.entry(op.id).map { entry in
+                OpListing.DeepDive(peer: entry.peer, rule: entry.rule?.rawValue, performer: entry.performer,
+                                   flows: insideReferences["\(InheritedOps.ownerKey)/\(op.id)"] ?? [])
+            }
+            listings.append(OpListing(level: path, node: node.id, op: op, flows: references["\(node.id)/\(op.id)"] ?? [],
+                                      deepDive: deepDive))
         }
     }
     for node in level.nodes {
         let nodePath = path.isEmpty ? node.id : "\(path)/\(node.id)"
-        if let inside = node.inside { collectOps(inside, path: nodePath, into: &listings) }
+        if let inside = node.inside { collectOps(inside, path: nodePath, into: &listings, levels: &levels) }
         for op in node.ops {
-            if let inside = op.inside { collectOps(inside, path: "\(nodePath)#\(op.id)", into: &listings) }
+            if let inside = op.inside { collectOps(inside, path: "\(nodePath)#\(op.id)", into: &listings, levels: &levels) }
         }
     }
 }
 
-private func renderOps(_ listings: [OpListing], manifest: Manifest) -> String {
+private func renderOps(_ listings: [OpListing], levels: [String], manifest: Manifest) -> String {
     guard !listings.isEmpty else { return "No operations in \(manifest.id)." }
-    var levels: [String] = []
-    for listing in listings where !levels.contains(listing.level) { levels.append(listing.level) }
     var sections: [String] = []
+    var inheritedCount = 0, mappedCount = 0
     for level in levels {
+        let title = level.isEmpty ? "\(manifest.id) (root)" : "\(manifest.id) › \(level)"
         var rows = [["NODE", "OP", "KIND", "DIR", "TARGET", "LABEL", "DETAIL", "CODE", "FLOWS"]]
         for op in listings where op.level == level {
             rows.append([op.node, op.id, op.kind, op.direction, op.target ?? "–", op.label, opDetail(op),
                          op.code.isEmpty ? "–" : op.code.joined(separator: ", "),
                          op.flows.isEmpty ? "–" : op.flows.joined(separator: ", ")])
         }
-        sections.append((level.isEmpty ? "\(manifest.id) (root)" : "\(manifest.id) › \(level)") + "\n" + alignedTable(rows))
+        if rows.count > 1 { sections.append(title + "\n" + alignedTable(rows)) }
+        // A deep dive: the ops of the node it is inside, by the inner node each talks to.
+        let parts = level.split(separator: "/").map(String.init)
+        guard let ownerID = parts.last, !ownerID.contains("#") else { continue }
+        let parent = parts.dropLast().joined(separator: "/")
+        let inherited = listings.filter { $0.level == parent && $0.node == ownerID && $0.deepDive != nil }
+        guard !inherited.isEmpty else { continue }
+        var mapping = [["OP", "KIND", "TARGET", "PEER", "RULE", "BY", "FLOWS"]]
+        for op in inherited {
+            let dive = op.deepDive
+            let flows = dive?.flows ?? []
+            mapping.append([op.id, op.kind, op.target ?? "–", dive?.peer ?? "–", dive?.rule ?? "–", dive?.performer ?? "–",
+                            flows.isEmpty ? "–" : flows.joined(separator: ", ")])
+        }
+        let mapped = inherited.filter { $0.deepDive?.peer != nil }.count
+        inheritedCount += inherited.count
+        mappedCount += mapped
+        sections.append("\(title): ops of \(ownerID) by the inner node each talks to, \(mapped) of \(inherited.count) mapped\n"
+                        + alignedTable(mapping))
     }
     let nodes = Set(listings.map { "\($0.level)\u{0}\($0.node)" }).count
     let named = listings.filter { !$0.flows.isEmpty }.count
+    let ownLevels = Set(listings.map(\.level)).count
     func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
-    sections.append("\(count(listings.count, "op")) on \(count(nodes, "node")) in \(count(levels.count, "level")); \(named) named by flows")
+    var summary = "\(count(listings.count, "op")) on \(count(nodes, "node")) in \(count(ownLevels, "level")); \(named) named by flows"
+    if inheritedCount > 0 { summary += "; \(mappedCount) of \(inheritedCount) mapped into deep dives" }
+    sections.append(summary)
     return sections.joined(separator: "\n\n")
 }
 

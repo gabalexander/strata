@@ -154,7 +154,8 @@ hint to fix one specific ordering.
 
 `strata validate` must print nothing. Then read each report as a reviewer and fix what's missing:
 
-- `strata ops <id>`: every binary has its endpoints, queries, keys and topics, and the ops you care about are named by a flow;
+- `strata ops <id>`: every binary has its endpoints, queries, keys and topics, the ops you care about are named by a flow,
+  and in each deep dive every op that talks to something maps to an inner node;
 - `strata data <id>`: tables, keys and sample rows join, and entities assemble;
 - `strata how <id>`: every mechanism plays from start to end with exact commands and its failure branches
   (`--mechanism <id>` or `--branch <id>` prints just one);
@@ -182,6 +183,16 @@ pattern, with `code:` pointing at it. `strata schema` lists the fields for each 
   endpoint reached, so a request can be followed across services. Timeouts, retries, auth and
   idempotency go in `facts`.
 - **Live numbers**: put `op:` on the flow step that performs each op, and on each consumer flow.
+- **Ops in a deep dive**: keep a service's ops on the service node in the overview, with `target:`
+  the overview node (`orders-db`, `redis`). Inside its `inside:` level, Strata maps each one to the inner
+  node it talks to (the target's id, the node whose `code:` file is the op's, a node labelled like the
+  target, or the only database, cache or port that fits), and lists them on that node and under
+  "Operations of <service>". To light the exact path, name the op on the inner step that performs it:
+  `{ call: tx, op: insert-order }` resolves on the service when neither inner node has it (or write
+  `../insert-order`). An op only one inner node performs can live on that node instead. Give inner
+  stores, caches and clients the same `code:` file as their ops, and label a port drawn for an
+  overview node like that node, so the mapping is exact. `strata ops <id>` prints the mapping per
+  deep dive: check that every op that talks to something has a peer.
 
 ## Data
 
@@ -222,6 +233,7 @@ that moves and whether that's good; 2-4 scenarios that each prove one point; `na
   `on: <buffer>` + `by: <consumer>`, with no `rate`.
 - Nested `steps` under a `call` run *at the callee*. Order them as the code does.
 - A step's `op:` resolves on the calling node first, then the target; write `node/op` when both have it.
+  In a deep dive it then falls back to the ops of the node the level is inside (`../op` names one outright).
 - A service holds its slot while it waits on downstream calls. Set `async: true` for event-loop servers.
 - Keep ids stable once the user has notes on them (`~/.strata/vault/Sims/<sim>/<node>.md`).
 
