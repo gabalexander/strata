@@ -104,6 +104,7 @@ struct SimStage: View {
     @State private var clock = StageClock()
     @State private var hovered: StageSelection?
     @State private var hoverTask: Task<Void, Never>?
+    @State private var hoveredBadge = false
 
     var body: some View {
         let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
@@ -116,18 +117,21 @@ struct SimStage: View {
                     switch phase {
                     case .active(let point):
                         let target = hit(point, camera)
-                        guard hovered != target else { return }
+                        let badge = SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
+                        guard hovered != target || hoveredBadge != badge else { return }
                         clearHover()
                         hovered = target
+                        hoveredBadge = badge
+                        // The ƒ badge shows the node's formula; the rest of the card its term, else its formula.
                         if case .node(let id) = target,
                            let card = renderer.layout.cardsByID[id],
-                           let name = card.node.term, let term = terms.term(name) {
+                           let show = SimFormulaStage.hoverCard(card.node, badge: badge, terms: terms) {
                             hoverTask = Task { @MainActor in
                                 try? await Task.sleep(for: .milliseconds(300))
                                 guard !Task.isCancelled, hovered == target else { return }
                                 let rect = viewport.current(renderer.layout, in: proxy.size, compact: compact).screen(card.rect)
                                 let origin = proxy.frame(in: .global).origin
-                                model.overlays.showTerm(term, anchor: rect.offsetBy(dx: origin.x, dy: origin.y), index: terms)
+                                show(model.overlays, rect.offsetBy(dx: origin.x, dy: origin.y))
                             }
                         }
                     case .ended: clearHover()
@@ -185,6 +189,7 @@ struct SimStage: View {
                 if !compact { SimPressureLegend(sim: sim, selection: selection, tabOpen: pressureOpen) }
             }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { viewport.size = $0 }
+            .onAppear { SimFormulaStage.showRequested(sim, layout: renderer.layout, camera: { viewport.current(renderer.layout, in: proxy.size, compact: compact) }, frame: { proxy.frame(in: .global) }, overlays: model.overlays) }
         }
         .clipped()
         .background(Theme.bg)
@@ -251,6 +256,9 @@ struct SimStage: View {
         if let target {
             onSelect(target)
             if clicks == 2, case .node(let id) = target { onDive(id) }
+            if case .node(let id) = target, SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout) {
+                SimHowState.of(sim).revealFormula(of: id, over: SimDataState.of(sim).scroll)
+            }
         }
         return StagePress(pans: hit(point, camera, includeTokens: false) == nil, empty: target == nil, camera: camera)
     }
@@ -259,6 +267,7 @@ struct SimStage: View {
         hoverTask?.cancel()
         if hovered != nil { model.overlays.hideTerm() }
         hovered = nil
+        hoveredBadge = false
     }
 }
 

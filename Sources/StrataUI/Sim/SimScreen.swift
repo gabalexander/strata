@@ -183,6 +183,10 @@ private struct SimWorkspace: View {
                     }
                 }
                 .frame(width: columnWidth, height: size.height)
+                .overlay {
+                    SimHowHost(model: model, sim: sim, terms: terms, actions: actions, select: select, still: snapshot != nil)
+                        .padding(.top, 45)
+                }
                 if model.inspectorVisible {
                     Rectangle().fill(Theme.border).frame(width: 1, height: size.height)
                     SimInspector(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select,
@@ -326,6 +330,7 @@ private struct SimWorkspace: View {
 
     private func key(_ event: NSEvent) -> Bool {
         guard !model.paletteOpen, !model.switcherOpen else { return false }
+        if model.overlays.menu == nil, model.overlays.card == nil, SimHowState.of(sim).key(event) { return true }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.keyCode == 53 {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }

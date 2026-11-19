@@ -26,7 +26,7 @@ struct SimInspector: View {
             .padding(.horizontal, 14).frame(height: 44)
             Rectangle().fill(Theme.border).frame(height: 1)
             // Selection changes rebuild this on the same frame; only the SimLive leaves inside tick.
-            SimPanelScroll(still: still, resetOn: selection, scrollTo: SimDataState.of(sim).scroll) {
+            SimPanelScroll(still: still, resetOn: selection, scrollTo: SimHowState.of(sim).scrollTarget(over: SimDataState.of(sim).scroll)) {
                 VStack(alignment: .leading, spacing: 16) {
                     switch selection {
                     case .node(let id):
@@ -56,6 +56,7 @@ struct SimInspector: View {
             if let narration = sim.level.narration {
                 SimSection(title: "This level") { SimMarkdown(source: narration, model: model, terms: terms) }
             }
+            SimHowLevelSection(sim: sim, select: select)
             if !sim.level.flows.isEmpty {
                 SimSection(title: "Flows") {
                     ForEach(sim.level.flows) { flow in flowCard(flow, selectable: true) }
@@ -102,6 +103,10 @@ struct SimInspector: View {
                 }
             }
             if let doc = node.doc { SimMarkdown(source: doc, model: model, terms: terms) }
+            if !node.how.isEmpty {
+                SimHowSection(mechanisms: node.how, node: node.id, owner: node.label, model: model, sim: sim, terms: terms, actions: actions)
+            }
+            if let formula = node.formula { SimFormulaSection(formula: formula, model: model, terms: terms, actions: actions) }
             SimPressureInspectorRow(sim: sim, node: node)
             live {
                 let items = actions.nodeActions(node, state: nodeState(node))

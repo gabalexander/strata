@@ -471,6 +471,12 @@ command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases 
   state panel. `value: null` deletes a key, and `ttl` counts down while playing.
 - Participants with `node:` link to the diagram.
 - An operation can have `how:` too.
+- Step `id`s default to `s1`, `s2`, … (`<branch>-s1`, … in a branch). Validation checks that participants
+  are unique, `from`, `to` and `node` resolve, `after` names a main step, and (a warning) that `at` never
+  goes back in time.
+
+`strata how <file|id> [--mechanism id] [--branch id]` prints a mechanism as a numbered transcript: time,
+from → to, label, command → reply, and the state after each step with TTLs aged by `at`.
 
 ## Formulas
 
@@ -489,6 +495,11 @@ A node or operation that computes something gets a `formula`, shown on hover and
     example: "age 3 h, ctr 0.04, not spam → 0.6 · e^(−0.5) + 0.4 · 0.04 = 0.38"
     code: internal/rank/score.go:22
 ```
+
+`expr` is typeset: variables in italics, `e`, `log`, `min`, `max`, `argmax` and friends upright, `w_r` and
+`x_(i,j)` as subscripts, `e^x` and `e^(…)` as superscripts, `(a / b)` as a stacked fraction, Greek letters
+written as `τ` or `tau`, and `*`, `-`, `<=`, `>=`, `!=`, `->` as `·`, `−`, `≤`, `≥`, `≠`, `→`. Anything it can't
+read is shown as written, in mono. Each `where` key should appear in `expr` (a warning otherwise).
 
 ## Enums
 

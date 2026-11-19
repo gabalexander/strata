@@ -158,6 +158,7 @@ struct LevelValidation {
             commands(action.commands, at: location["do"])
         }
         ops(of: node, at: field)
+        how(of: node, at: field)
     }
 
     mutating func flow(_ flow: Flow, at field: Field) {

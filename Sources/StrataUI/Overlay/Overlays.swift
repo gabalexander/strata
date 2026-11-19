@@ -42,6 +42,8 @@ public final class Overlays {
         public var anchor: CGRect          // global (window) coordinates, top-left origin
         public var pinned: Bool
         public var index: TermIndex?       // to resolve `related` chips
+        /// A formula to typeset instead of the term's text (a node's ƒ badge); `term.term` is its title.
+        public var formula: Formula?
     }
 
     public var menu: Menu?
@@ -58,6 +60,12 @@ public final class Overlays {
     public func showTerm(_ term: Term, anchor: CGRect, pinned: Bool = false, index: TermIndex? = nil) {
         if let c = card, c.pinned, !pinned { return }
         card = Card(term: term, anchor: anchor, pinned: pinned, index: index)
+    }
+    /// A formula card (docs/manifest.md, Formulas), placed and dismissed like a term card.
+    public func showFormula(_ formula: Formula, title: String, anchor: CGRect, pinned: Bool = false) {
+        if let c = card, c.pinned, !pinned { return }
+        card = Card(term: Term(id: "formula:" + title, term: title, short: formula.expr), anchor: anchor, pinned: pinned,
+                    index: nil, formula: formula)
     }
     /// Hides an unpinned card (hover ended). Pinned cards close via `closeTerm`.
     public func hideTerm() { if card?.pinned == false { card = nil } }

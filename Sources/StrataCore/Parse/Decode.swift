@@ -54,7 +54,7 @@ enum Decode {
 
     static func node(_ field: Field) -> Node? {
         let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops",
-                                  "schema", "entities"]
+                                  "schema", "entities", "how", "formula"]
         let behaviour = Set(ParameterType.node.keys).subtracting(["up", "slow"])
         guard field.mapping(keys.union(behaviour)) else { return nil }
         let id = field["id"].id(required: true)
@@ -84,6 +84,8 @@ enum Decode {
         node.ops = field["ops"].items(named: true).compactMap(operation)
         node.schema = field["schema"].items(named: true, nameKey: "table").compactMap(table)
         node.entities = field["entities"].items(named: true, nameKey: "name").compactMap(entity)
+        node.how = mechanisms(field["how"])
+        node.formula = formula(field["formula"])
         return node
     }
 

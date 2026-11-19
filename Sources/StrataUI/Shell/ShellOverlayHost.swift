@@ -80,7 +80,7 @@ private struct TermCardOverlay: View {
         let y = min(max(margin, proposedY), max(margin, size.height - height - margin))
 
         ScrollView {
-            details
+            content
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = ceil($0) }
@@ -97,6 +97,14 @@ private struct TermCardOverlay: View {
         .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
         .position(x: x + width / 2, y: y + height / 2)
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private var content: some View {
+        if let formula = card.formula {
+            SimFormulaCard(title: card.term.term, formula: formula, pinned: card.pinned, close: overlays.closeTerm)
+        } else {
+            details
+        }
     }
 
     private var details: some View {

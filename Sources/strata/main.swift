@@ -17,6 +17,9 @@ Usage: strata <command>
   analyze <file|id> [--rates flow=50/s,...] [--json]
                                           Capacity, bottlenecks, what to scale, database
                                           pressure and blast radius (the Pressure tab)
+  how <file|id> [--mechanism id] [--branch id]
+                                          Print a mechanism step by step: time, who
+                                          talks to whom, command and reply, state after
   schema                                  Print the manifest reference
   paths                                   Print local data paths
   --help                                  Show this help
@@ -67,6 +70,10 @@ private func run(_ arguments: [String]) throws -> Int32 {
         let args = try Arguments(remaining, flags: ["--json"], options: ["--rates"])
         try args.require(1, usage: "strata analyze <file|id> [--rates flow=50/s,...] [--json]")
         return try analyze(args)
+    case "how":
+        let args = try Arguments(remaining, options: ["--mechanism", "--branch"])
+        try args.require(1, usage: "strata how <file|id> [--mechanism <id>] [--branch <id>]")
+        return try printHow(args)
     case "schema":
         try Arguments(remaining).require(0, usage: "strata schema")
         guard let url = StrataResources.url("Docs/manifest.md") else { throw CLIError("manifest reference is missing") }

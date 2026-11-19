@@ -3,7 +3,7 @@ import Foundation
 /// Which op fields fit which kinds (docs/manifest.md, Operations: "Fields by kind").
 enum OpFields {
     static let common: Set<String> = ["id", "kind", "label", "direction", "target", "doc", "code", "risks", "tags",
-                                      "facts", "inside", "detail"]
+                                      "facts", "inside", "detail", "how", "formula"]
     private static let data: Set<String> = ["query", "tables", "indexes", "access", "tx", "locks"]
     private static let endpoint: Set<String> = ["method", "path", "request", "response", "streaming", "status", "calls"]
 
@@ -73,6 +73,8 @@ extension Decode {
         op.status = field["status"].anyTextList()
         op.calls = field["calls"].scalar { try Syntax.opReference($0, qualified: true) }
         op.facts = facts(field["facts"])
+        op.how = mechanisms(field["how"])
+        op.formula = formula(field["formula"])
         if field["inside"].present { op.inside = decodeLevel(field["inside"]) }
         op.detail = field["detail"].id()
         if field["inside"].present, field["detail"].present { field["detail"].diagnose("use either inside or detail for a deep dive") }
