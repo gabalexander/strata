@@ -285,7 +285,7 @@ struct LayeredGraph {
         for _ in 0..<3 {
             for v in order {
                 guard let column = hintColumn[v], let mates = columns[column], mates.count > 1,
-                      !(dagPreds[v].isEmpty && dagSuccs[v].isEmpty) else { continue }
+                      !dagPreds[v].isEmpty else { continue }    // sources stay on the left
                 let others = mates.filter { $0 != v }.map { layer[$0] }.sorted()
                 let wanted = others[others.count / 2]
                 let bounds = range(v)

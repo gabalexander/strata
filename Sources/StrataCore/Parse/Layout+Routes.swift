@@ -164,11 +164,20 @@ public enum EdgeRouter {
             let ends = sides[key]!.sorted { ($0.approach, $0.edge, $0.start ? 0 : 1) < ($1.approach, $1.edge, $1.start ? 0 : 1) }
             let rect = cards[key[0]].rect
             let side = Side(rawValue: key[1])!
-            let length = side == .left || side == .right ? rect.height : rect.width
-            let room = length - (side == .left || side == .right ? 24 : 48)
-            let spacing = ends.count > 1 ? min(portSpacing, room / CGFloat(ends.count - 1)) : 0
+            let vertical = side == .left || side == .right
+            let length = vertical ? rect.height : rect.width
+            let half = (length - (vertical ? 24 : 48)) / 2
+            let middle = vertical ? rect.midY : rect.midX
+            // A port sits level with where its edge heads when that is on this side, so edges between
+            // aligned cards run straight; the rest keep to the side's ends; then they spread apart.
+            let wanted = ends.map { end -> CGFloat in
+                let offset = end.approach - middle
+                if abs(offset) <= half { return end.approach }
+                return ends.count == 1 ? middle : middle + (offset > 0 ? half : -half)
+            }
+            let placed = spread(wanted, within: middle - half, middle + half, spacing: portSpacing)
             for (i, end) in ends.enumerated() {
-                let offset = (CGFloat(i) - CGFloat(ends.count - 1) / 2) * spacing
+                let offset = placed[i] - middle
                 let point: CGPoint = switch side {
                 case .left: CGPoint(x: rect.minX, y: rect.midY + offset)
                 case .right: CGPoint(x: rect.maxX, y: rect.midY + offset)
@@ -351,10 +360,10 @@ public enum EdgeRouter {
     }
 
     /// Positions as close to `wanted` (sorted) as possible, at least `trackSpacing` apart, within lo...hi.
-    static func spread(_ wanted: [CGFloat], within lo: CGFloat, _ hi: CGFloat) -> [CGFloat] {
+    static func spread(_ wanted: [CGFloat], within lo: CGFloat, _ hi: CGFloat, spacing preferred: CGFloat = trackSpacing) -> [CGFloat] {
         guard !wanted.isEmpty else { return [] }
         let room = max(0, hi - lo)
-        let spacing = wanted.count > 1 ? min(trackSpacing, room / CGFloat(wanted.count - 1)) : 0
+        let spacing = wanted.count > 1 ? min(preferred, room / CGFloat(wanted.count - 1)) : 0
         var ys = wanted
         // Push apart around the mean of each cluster, then keep inside the gap.
         for _ in 0..<wanted.count {
