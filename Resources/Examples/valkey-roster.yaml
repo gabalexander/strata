@@ -1,0 +1,478 @@
+strata: 1
+id: valkey-roster
+title: Roster membership in Valkey
+kind: sim
+category: distributed
+summary: Three scheduler instances keep a roster in Valkey with TTL'd keys and heartbeats, then split shards by rendezvous hashing. Play the sequence, then kill an instance and watch its shards move.
+tags: [valkey, membership, heartbeat, sharding]
+glossaries: [redis, raft, scaling, resilience]
+narration: "Select scheduler and press Play on Roster membership to step through the exact Valkey commands. Then try Kill an instance: its key expires a TTL later and the others take its shards."
+
+terms:
+  - id: roster
+    term: Roster
+    short: The set of live members, one Valkey key per instance that expires unless it is renewed.
+    detail: A member is live while its key exists. Nothing removes a dead member; its key stops being renewed and expires on its own.
+    match: [roster]
+  - id: fencing-token
+    term: Fencing token
+    short: A number that grows with every change of owner and travels with each write, so the store can reject a stale owner.
+    detail: Here it is the shard's epoch, from INCR shard:<n>:epoch. An instance that was paused or partitioned still holds the old epoch, and its late writes are refused.
+    design: Generate it in the store that checks it. A token from anywhere else can race the check.
+    match: [fencing token, fencing tokens, epoch]
+  - id: rendezvous
+    term: Rendezvous hashing
+    short: Every member scores every shard with a hash; the highest score owns the shard.
+    detail: Also called highest random weight hashing. All instances reach the same answer from the same member list, and a member that leaves moves only its own shards.
+    match: [rendezvous hashing, rendezvous hash, highest random weight]
+
+groups:
+  - { id: fleet, label: scheduler deployment, kind: cluster }
+
+nodes:
+  - id: ticker
+    kind: cron
+    label: Heartbeat timer
+    doc: Fires every 5 s on each instance. One tick renews the instance's roster key and lists the roster in a single pipelined round trip.
+  - id: due
+    kind: cron
+    label: Due jobs
+    doc: Scheduled jobs coming due, about 40 a second spread over 12 shards. Only the shard's owner dispatches a job.
+  - id: scheduler
+    kind: service
+    label: scheduler
+    tech: Go
+    group: fleet
+    replicas: 3
+    concurrency: 1
+    latency: 20ms
+    term: roster
+    code: internal/roster/roster.go
+    doc: |
+      Three instances share 12 shards of scheduled jobs, each with one dispatch loop. Each keeps a key in Valkey alive with
+      heartbeats, lists the live keys on every tick, and runs the same rendezvous hash over them,
+      so they agree on who owns which shard without talking to each other.
+    formula:
+      expr: "owner(s) = argmax_(m ∈ M) h(m, s)"
+      where:
+        s: shard number, 0 to 11
+        M: "live members: the roster:inst:* keys one SCAN returns"
+        m: a member id (a, b or c)
+        h: 64-bit xxh3 of the member id and the shard, read as a number in [0, 1)
+      example: "s = 7, M = {a, b, c}: h(a, 7) = 0.91, h(b, 7) = 0.62, h(c, 7) = 0.18 → owner a. When a leaves, b wins shard 7; shards a never owned stay put."
+      doc: Rendezvous hashing (highest random weight). Every instance computes the same owners from the same member list, and a member that leaves only gives up its own shards.
+      code: internal/roster/assign.go:18
+    how:
+      - id: roster
+        title: Roster membership with heartbeats
+        summary: |
+          Each instance owns one key, `roster:inst:<id>`, that Valkey deletes 15 s after its last write.
+          A heartbeat every 5 s pushes that deadline back, so two heartbeats land inside every TTL and
+          one lost heartbeat is harmless. A crashed instance simply stops renewing: its key expires and
+          the others take its shards. Two of the three instances are drawn; C behaves exactly like B.
+        code: internal/roster/roster.go:40
+        participants:
+          - { id: a, label: instance A, node: scheduler }
+          - { id: b, label: instance B, node: scheduler }
+          - { id: v, label: Valkey, node: valkey }
+        initial:
+          - { key: "roster:inst:b", value: "10.0.1.8:7070" }
+          - { key: "roster:inst:c", value: "10.0.1.9:7070" }
+          - { key: "shard:7:epoch", value: 2 }
+        steps:
+          - id: join
+            from: a
+            to: v
+            label: A registers
+            command: "SET roster:inst:a 10.0.1.7:7070 NX PX 15000"
+            reply: OK
+            at: 0s
+            state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+            note: "`NX` refuses to overwrite a live key, so two processes can't both claim the name `a`. `PX 15000` makes Valkey delete the key 15 000 ms after this write unless something renews it."
+          - id: list
+            from: a
+            to: v
+            label: A lists the roster
+            command: "SCAN 0 MATCH roster:inst:* COUNT 100"
+            reply: "0 [roster:inst:a roster:inst:b roster:inst:c]"
+            at: 0s
+            note: "Cursor `0` in the reply means the scan is complete. The live keys are the roster: a, b and c. SCAN never blocks Valkey the way `KEYS` would."
+          - id: rank
+            from: a
+            to: a
+            label: A ranks the 12 shards
+            at: 0s
+            note: "For each shard every instance computes the rendezvous hash `h(member, shard)` for every member; the highest score owns the shard. A wins shards 2, 7 and 9. This sequence follows shard 7. B and C compute the same table from the same list."
+          - id: claim
+            from: a
+            to: v
+            label: A claims shard 7 and gets its epoch
+            command: "INCR shard:7:epoch"
+            reply: "(integer) 3"
+            at: 0s
+            state: [ { key: "shard:7:epoch", value: 3 } ]
+            note: "The reply is A's **fencing token** for shard 7. It is larger than any epoch a previous owner held, and every write A makes for shard 7 carries it."
+          - id: write
+            from: a
+            to: v
+            label: A records progress with its epoch
+            command: "FCALL fenced_set 2 shard:7:epoch shard:7:cursor 3 job-4411"
+            reply: "(integer) 1"
+            at: 1s
+            state: [ { key: "shard:7:cursor", value: job-4411 } ]
+            note: "`fenced_set` is a Valkey function: it writes the cursor only if `shard:7:epoch` still equals the epoch the caller passes (3). The check and the write are one atomic step inside Valkey."
+          - id: hb1
+            from: a
+            to: v
+            label: heartbeat 1
+            command: "PEXPIRE roster:inst:a 15000"
+            reply: "(integer) 1"
+            at: 5s
+            state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+            note: "The reply `1` means the key existed and its deadline moved to 15 s from now. A reply of `0` would mean the key is already gone and A must register again."
+          - id: hb2
+            from: a
+            to: v
+            label: heartbeat 2
+            command: "PEXPIRE roster:inst:a 15000"
+            reply: "(integer) 1"
+            at: 10s
+            state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+            note: "Heartbeats every 5 s against a 15 s TTL: after any renewal, two more heartbeats land before the key could expire. One lost heartbeat never drops a healthy member."
+          - id: hb3
+            from: a
+            to: v
+            label: heartbeat 3
+            command: "PEXPIRE roster:inst:a 15000"
+            reply: "(integer) 1"
+            at: 15s
+            state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+            note: "Steady state: the deadline always stays 10 to 15 s ahead. Pick a branch to see a crash, a partition or a clean shutdown."
+        branches:
+          - id: crash
+            label: A crashes after heartbeat 1
+            after: hb1
+            note: Nothing tells Valkey that A died. The roster notices only when the key's TTL runs out.
+            steps:
+              - id: die
+                from: a
+                to: a
+                label: A crashes (kill -9)
+                at: 6s
+                note: "No goodbye, no more heartbeats. A's key still has 14 s left, so for now A is in the roster and still owns shards 2, 7 and 9."
+              - id: stale
+                from: b
+                to: v
+                label: B's tick still lists A
+                command: "SCAN 0 MATCH roster:inst:* COUNT 100"
+                reply: "0 [roster:inst:a roster:inst:b roster:inst:c]"
+                at: 12.5s
+                note: "A has been dead for 6.5 s, but its key lives until 20 s. Detection takes the TTL left at the crash plus up to one tick. Meanwhile nobody dispatches A's shards."
+              - id: expire
+                from: v
+                to: v
+                label: roster:inst:a expires
+                at: 20s
+                state: [ { key: "roster:inst:a", value: null } ]
+                note: "15 s after the last heartbeat (5 s) Valkey drops the key: lazily when something touches it, or in its active expiry cycle, which samples keys with a TTL about 10 times a second. No read after 20 s can see it."
+              - id: gone
+                from: b
+                to: v
+                label: B's tick no longer lists A
+                command: "SCAN 0 MATCH roster:inst:* COUNT 100"
+                reply: "0 [roster:inst:b roster:inst:c]"
+                at: 22.5s
+                note: "B's next tick after the expiry sees two members. So does C's."
+              - id: rebalance
+                from: b
+                to: b
+                label: B re-ranks with members b and c
+                at: 22.5s
+                note: "With a out of the list, each of A's shards goes to its next-highest score: shard 7 to B, shards 2 and 9 split between B and C. Shards B and C already owned don't move."
+              - id: take
+                from: b
+                to: v
+                label: B takes shard 7 with a new epoch
+                command: "INCR shard:7:epoch"
+                reply: "(integer) 4"
+                at: 22.5s
+                state: [ { key: "shard:7:epoch", value: 4 } ]
+                note: "B's writes for shard 7 now carry epoch 4. Anything still carrying 3 is refused, which matters in the partition branch."
+          - id: partition
+            label: A pauses past its TTL (split brain risk)
+            after: hb2
+            note: A is alive but cut off, so it still believes it owns shard 7 when it comes back.
+            steps:
+              - id: freeze
+                from: a
+                to: a
+                label: A freezes (long GC pause or partition)
+                at: 11s
+                note: "A stops for 17 s: a stop-the-world pause, a stalled VM, or a network partition. From A's point of view no time passes."
+              - id: stuck
+                from: a
+                to: v
+                label: heartbeat 3 is stuck
+                command: "PEXPIRE roster:inst:a 15000"
+                reply: (no reply)
+                at: 15s
+                note: "The heartbeat never reaches Valkey in time. Its deadline, 25 s, keeps coming."
+              - id: expire
+                from: v
+                to: v
+                label: roster:inst:a expires
+                at: 25s
+                state: [ { key: "roster:inst:a", value: null } ]
+                note: "15 s after heartbeat 2 the key is gone. To the rest of the fleet, A is dead."
+              - id: gone
+                from: b
+                to: v
+                label: B's tick no longer lists A
+                command: "SCAN 0 MATCH roster:inst:* COUNT 100"
+                reply: "0 [roster:inst:b roster:inst:c]"
+                at: 27.5s
+              - id: take
+                from: b
+                to: v
+                label: B takes shard 7 with epoch 4
+                command: "INCR shard:7:epoch"
+                reply: "(integer) 4"
+                at: 27.5s
+                state: [ { key: "shard:7:epoch", value: 4 } ]
+                note: "Now two instances believe they own shard 7: B (epoch 4) and the frozen A (epoch 3). That is split brain."
+              - id: fenced
+                from: a
+                to: v
+                label: A wakes up and writes with epoch 3
+                command: "FCALL fenced_set 2 shard:7:epoch shard:7:cursor 3 job-4412"
+                reply: "(error) STALE epoch 3, current 4"
+                at: 28s
+                note: "The **fencing token** saves the shard: Valkey compares 3 with the current epoch 4 and refuses the write. Without it, A would overwrite the cursor B just advanced and jobs would run twice."
+              - id: late
+                from: a
+                to: v
+                label: heartbeat 3 lands 13 s late
+                command: "PEXPIRE roster:inst:a 15000"
+                reply: "(integer) 0"
+                at: 28s
+                note: "`0`: the key does not exist. A learns it was dropped from the roster and must give up every shard before doing anything else."
+              - id: rejoin
+                from: a
+                to: v
+                label: A drops its shards and registers again
+                command: "SET roster:inst:a 10.0.1.7:7070 NX PX 15000"
+                reply: OK
+                at: 28s
+                state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+                note: "A rejoins as a new member. On the next ticks everyone re-ranks and A wins some shards back, each with a fresh epoch."
+          - id: leave
+            label: A leaves gracefully
+            after: hb2
+            note: A clean shutdown hands shards over in milliseconds instead of waiting out the TTL.
+            steps:
+              - id: sigterm
+                from: a
+                to: a
+                label: SIGTERM; A drains in-flight jobs
+                at: 12s
+                note: "A stops dispatching new jobs for its shards and lets running ones finish."
+              - id: release
+                from: a
+                to: v
+                label: A deletes its key
+                command: "DEL roster:inst:a"
+                reply: "(integer) 1"
+                at: 12.4s
+                state: [ { key: "roster:inst:a", value: null } ]
+              - id: announce
+                from: a
+                to: v
+                label: A announces it left
+                command: "PUBLISH roster:events left:a"
+                reply: "(integer) 2"
+                at: 12.4s
+                note: "The reply counts subscribers that received it: B and C."
+              - id: hear
+                from: v
+                to: b
+                label: B receives left:a and rescans
+                command: "SCAN 0 MATCH roster:inst:* COUNT 100"
+                reply: "0 [roster:inst:b roster:inst:c]"
+                at: 12.4s
+              - id: take
+                from: b
+                to: v
+                label: B takes shard 7 with epoch 4
+                command: "INCR shard:7:epoch"
+                reply: "(integer) 4"
+                at: 12.5s
+                state: [ { key: "shard:7:epoch", value: 4 } ]
+                note: "The hand-off took 0.1 s instead of up to 20 s (the TTL plus one tick)."
+    ops:
+      - id: register
+        kind: cache
+        target: valkey
+        label: Register in the roster
+        command: SET NX PX 15000
+        key: "roster:inst:{id}"
+        ttl: 15s
+        access: write
+        code: internal/roster/roster.go:52
+        doc: Claims the instance's name. NX fails if another live process already holds it.
+      - id: heartbeat
+        kind: cache
+        target: valkey
+        label: Heartbeat
+        command: PEXPIRE 15000
+        key: "roster:inst:{id}"
+        ttl: 15s
+        access: write
+        code: internal/roster/roster.go:77
+        doc: Pushes the key's deadline 15 s ahead. A reply of 0 means the key expired and the instance must register again.
+        formula:
+          expr: "interval = (ttl / (k + 1))"
+          where:
+            interval: time between heartbeats (5 s)
+            ttl: the roster key's TTL (15 s)
+            k: heartbeats that must land inside one TTL (2)
+          example: "ttl = 15 s, k = 2 → interval = 5 s. One lost heartbeat still leaves one renewal before the key expires."
+          code: internal/roster/roster.go:31
+        facts:
+          timeout: 1s, then retried on the next tick
+          pipelined with: SCAN roster:inst:*
+      - id: list-roster
+        kind: cache
+        target: valkey
+        label: List the roster
+        command: SCAN MATCH roster:inst:*
+        key: "roster:inst:*"
+        access: read
+        code: internal/roster/roster.go:96
+      - id: claim-shard
+        kind: cache
+        target: valkey
+        label: Claim a shard's epoch
+        command: INCR
+        key: "shard:{n}:epoch"
+        access: read-write
+        code: internal/roster/assign.go:61
+        doc: The new epoch is the owner's fencing token for that shard.
+      - id: fenced-write
+        kind: cache
+        target: valkey
+        label: Fenced write
+        command: FCALL fenced_set
+        key: "shard:{n}:cursor"
+        access: write
+        code: internal/roster/fence.lua:1
+        doc: Writes only if the caller's epoch equals shard:{n}:epoch, so a stale owner's writes are refused.
+      - id: dispatch
+        kind: publish
+        target: jobs
+        label: Dispatch job run
+        topic: job-runs
+        key: shard
+        payload: '{ "job": "job-4411", "shard": 7, "epoch": 3 }'
+  - id: valkey
+    kind: cache
+    label: Valkey
+    tech: Valkey 8
+    latency: fixed 400us
+    term: redis/expiry
+    doc: |
+      Holds the roster keys, each shard's epoch and cursor. Keys with a TTL disappear at their deadline,
+      which is how a dead instance leaves the roster without anyone removing it.
+  - id: jobs
+    kind: queue
+    label: job-runs
+    tech: RabbitMQ
+    doc: Job runs dispatched by each shard's owner.
+  - id: workers
+    kind: worker
+    label: job workers
+    replicas: 4
+    concurrency: 8
+    latency: 150ms
+    doc: Run the jobs. They never touch the roster.
+
+edges:
+  - { from: ticker, to: scheduler, label: every 5s }
+  - { from: due, to: scheduler, label: due }
+  - { from: scheduler, to: valkey, protocol: resp }
+  - { from: scheduler, to: jobs, protocol: amqp }
+  - { from: jobs, to: workers }
+
+flows:
+  - id: heartbeats
+    label: Heartbeats
+    from: ticker
+    rate: 0.6/s
+    color: 5
+    steps:
+      - call: scheduler
+        label: tick
+        steps:
+          - { call: valkey, label: PEXPIRE roster:inst, op: heartbeat, timeout: 1s }
+          - { call: valkey, label: SCAN roster, op: list-roster }
+  - id: dispatch
+    label: Dispatch due jobs
+    from: due
+    rate: 40/s
+    steps:
+      - call: scheduler
+        label: job due
+        steps:
+          - { call: valkey, label: fenced write, op: fenced-write }
+          - { publish: jobs, label: job run, op: dispatch }
+  - id: run
+    label: Run jobs
+    on: jobs
+    by: workers
+    steps:
+      - work: 150ms
+
+controls:
+  - label: Scheduler instances
+    bind: scheduler.replicas
+    options: [2, 3, 4]
+    term: rendezvous
+    insights:
+      - when: "== 2"
+        text: Two members share 12 shards. Losing one more leaves a single instance doing all the dispatching.
+        effects: [{ metric: Scheduler utilization, dir: up }]
+      - when: "== 3"
+        text: Three members own about four shards each. Rendezvous hashing moves only the leaving member's shards.
+        effects: [{ metric: Scheduler utilization, dir: flat }]
+      - text: A fourth member takes about three shards, roughly a quarter from each of the others.
+        effects: [{ metric: Scheduler utilization, dir: down, good: true }]
+  - label: Valkey latency
+    bind: valkey.latency
+    options: [fixed 400us, fixed 20ms, fixed 1.2s]
+    term: redis/rtt
+    insights:
+      - when: "== fixed 400us"
+        text: Every heartbeat lands well inside its 1 s timeout.
+        effects: [{ metric: Heartbeat errors, dir: flat }]
+      - when: "== fixed 20ms"
+        text: Slower, but heartbeats still land. Fenced writes hold scheduler slots a little longer.
+        effects: [{ metric: Dispatch p99, dir: up }]
+      - text: Heartbeats now time out. Healthy members stop renewing their keys and will expire one TTL later.
+        effects: [{ metric: Heartbeat errors, dir: up, good: false }, { metric: Dispatch p99, dir: up, good: false }]
+
+scenarios:
+  - id: kill-instance
+    label: Kill an instance
+    goal: How long does a dead instance keep its shards, and who takes them?
+    steps:
+      - { at: 3s, do: "scale scheduler 2", say: "Instance A crashed. Nothing tells Valkey, so roster:inst:a lives until its TTL runs out, up to 15 s after A's last heartbeat." }
+      - { at: 10s, say: "B and C still list A on every tick. Jobs on A's shards wait: nobody dispatches them until the roster changes." }
+      - { at: 18s, say: "A's key has expired. On their next tick B and C list two members, re-run the rendezvous hash and take A's shards with new epochs." }
+    watch: [scheduler.util, dispatch.p99, heartbeats.rate]
+  - id: slow-valkey
+    label: Slow Valkey
+    goal: What happens to the roster when Valkey answers slower than the heartbeat timeout?
+    steps:
+      - { at: 3s, do: "slow valkey 3000", say: "Valkey now takes about 1.2 s per command. Heartbeats time out after 1 s, so renewals stop landing although every instance is healthy." }
+      - { at: 12s, say: "Fenced writes queue behind the slow commands and hold scheduler slots. If this lasts a full TTL, healthy members expire and shards churn." }
+      - { at: 20s, do: "restore valkey", say: "Valkey is fast again. The next heartbeat renews every key, and any member that expired registers again with SET NX." }
+    watch: [heartbeats.errors, scheduler.util, dispatch.p99]

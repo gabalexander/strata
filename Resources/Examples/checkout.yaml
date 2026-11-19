@@ -101,6 +101,16 @@ nodes:
         status: [OK, INVALID_ARGUMENT empty cart, ALREADY_EXISTS duplicate idempotency key, UNAVAILABLE database down]
         code: services/orders/grpc/server.go:57
         doc: Prices the cart, commits the order with its outbox row, then emits OrderPlaced.
+        formula:
+          expr: "total = Σ_i qty_i · price_i · (1 − d) + ship"
+          where:
+            qty_i: quantity of cart line i
+            price_i: "unit price in cents, read through price:{sku} (cached for 5 min)"
+            d: discount rate of the applied promo code (0 without one)
+            ship: shipping in cents (0 for orders above 40 EUR)
+          example: "o_9k2: 2 · 1250 + 1 · 1700 = 4200, no promo, free shipping → total_cents 4200"
+          doc: Computed in integer cents after every price is known, so the total written to orders.total_cents and the payment amount always agree.
+          code: services/orders/pricing/total.go:14
         facts:
           deadline: inherits the gateway timeout
           idempotency: unique index on orders.idempotency_key
@@ -355,6 +365,92 @@ nodes:
           doc: |
             Polls Postgres for pending rows on its own schedule.
             A failed poll delays publication. The overview shows the Kafka handoff.
+          how:
+            - id: relay-cycle
+              title: Outbox relay claim, publish and ack
+              summary: |
+                Every 500 ms the relay locks a batch of unpublished outbox rows, produces them to Kafka, and
+                marks them published in the same transaction once the broker acks. A crash before COMMIT
+                rolls the claim back, so the next poll sends the batch again: delivery is at least once.
+              code: services/orders/outbox/relay.go:52
+              participants:
+                - { id: relay, label: outbox relay, node: relay }
+                - { id: pg, label: Postgres, node: tx }
+                - { id: kafka, label: Kafka, kind: topic }
+              initial:
+                - { key: "outbox#88124", value: pending }
+                - { key: "outbox#88125", value: pending }
+              steps:
+                - id: claim
+                  from: relay
+                  to: pg
+                  label: BEGIN and lock a batch
+                  command: "SELECT id, payload FROM outbox WHERE published_at IS NULL ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED"
+                  reply: "88124, 88125"
+                  at: 0ms
+                  state: [ { key: "outbox#88124", value: locked }, { key: "outbox#88125", value: locked } ]
+                  note: "The row locks last until COMMIT. `SKIP LOCKED` lets a second relay replica take other rows instead of waiting for these."
+                - id: produce
+                  from: relay
+                  to: kafka
+                  label: produce both events
+                  command: "produce order-events keys [o_9m1, o_9m2] acks=all"
+                  reply: "offsets 51007, 51008"
+                  at: 4ms
+                  note: "`acks=all`: the broker answers once every in-sync replica has the events."
+                - id: ack
+                  from: relay
+                  to: pg
+                  label: mark published and COMMIT
+                  command: "UPDATE outbox SET published_at = now() WHERE id = ANY($1); COMMIT"
+                  reply: "UPDATE 2 · COMMIT"
+                  at: 9ms
+                  state: [ { key: "outbox#88124", value: published }, { key: "outbox#88125", value: published } ]
+                - id: idle
+                  from: relay
+                  to: pg
+                  label: the next poll finds nothing
+                  command: "SELECT id, payload FROM outbox WHERE published_at IS NULL … FOR UPDATE SKIP LOCKED"
+                  reply: "(0 rows)"
+                  at: 500ms
+              branches:
+                - id: crash
+                  label: Relay dies before COMMIT
+                  after: produce
+                  note: Kafka already has both events, but Postgres never hears that they were sent.
+                  steps:
+                    - { id: die, from: relay, to: relay, label: relay crashes, at: 6ms }
+                    - id: rollback
+                      from: pg
+                      to: pg
+                      label: connection drops, Postgres rolls back
+                      at: 6ms
+                      state: [ { key: "outbox#88124", value: pending }, { key: "outbox#88125", value: pending } ]
+                      note: "The locks go away with the transaction. The rows look exactly as they did before the claim."
+                    - id: reclaim
+                      from: relay
+                      to: pg
+                      label: the restarted relay locks the same rows
+                      command: "SELECT id, payload FROM outbox WHERE published_at IS NULL ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED"
+                      reply: "88124, 88125"
+                      at: 500ms
+                      state: [ { key: "outbox#88124", value: locked }, { key: "outbox#88125", value: locked } ]
+                    - id: again
+                      from: relay
+                      to: kafka
+                      label: produce the same events again
+                      command: "produce order-events keys [o_9m1, o_9m2] acks=all"
+                      reply: "offsets 51011, 51012"
+                      at: 504ms
+                      note: "Each event is now in the topic twice. The mailer dedupes by `order_id`, which is what at least once delivery asks of every consumer."
+                    - id: ack
+                      from: relay
+                      to: pg
+                      label: mark published and COMMIT
+                      command: "UPDATE outbox SET published_at = now() WHERE id = ANY($1); COMMIT"
+                      reply: "UPDATE 2 · COMMIT"
+                      at: 509ms
+                      state: [ { key: "outbox#88124", value: published }, { key: "outbox#88125", value: published } ]
           ops:
             - id: poll-outbox
               kind: sql
