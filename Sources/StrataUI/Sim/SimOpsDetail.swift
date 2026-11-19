@@ -217,7 +217,10 @@ struct SimOpDetail: View {
 
     @ViewBuilder
     private var query: some View {
-        if let query = op.query.map(SimOpsCode.trimmed) {
+        if let query = op.query.map(SimOpsCode.trimmed), let formatted = SimOpsQueryCache.formatted(query) {
+            SimOpsQueryBlock(title: op.kind == .search ? "Query" : "SQL", source: query, formatted: formatted,
+                             ref: entry.ref, sim: sim, overlays: model.overlays, still: still)
+        } else if let query = op.query.map(SimOpsCode.trimmed) {
             SimOpsCodeBlock(title: op.kind == .search ? "Query" : "SQL",
                             text: op.kind == .sql ? SimOpsCode.sql(query) : SimOpsCode.message(query).text,
                             raw: query, copyTitle: "Copy query", overlays: model.overlays, still: still)
