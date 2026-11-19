@@ -8,7 +8,7 @@ enum Validate {
             let suggestion = closestKey(to: pack, in: Array(available)).map { "; did you mean '\($0)'?" } ?? ""
             root["glossaries"].items()[index].diagnose("unknown glossary pack '\(pack)'\(suggestion)")
         }
-        level(&manifest.root, at: root, terms: TermIndex(manifest: manifest))
+        level(&manifest.root, at: root, terms: TermIndex(manifest: manifest), layout: manifest.layout)
     }
 
     private static func duplicates<T: Identifiable>(_ items: [T], at field: Field) where T.ID == String {
@@ -23,7 +23,7 @@ enum Validate {
         }
     }
 
-    private static func level(_ level: inout Level, at field: Field, terms: TermIndex) {
+    private static func level(_ level: inout Level, at field: Field, terms: TermIndex, layout: LayoutMode) {
         duplicates(level.nodes, at: field["nodes"])
         duplicates(level.groups, at: field["groups"])
         duplicates(level.flows, at: field["flows"])
@@ -48,12 +48,12 @@ enum Validate {
             duplicates(node.actions, at: location["actions"])
             duplicates(node.ops, at: location["ops"])
             if var inside = node.inside {
-                Self.level(&inside, at: location["inside"], terms: terms)
+                Self.level(&inside, at: location["inside"], terms: terms, layout: layout)
                 level.nodes[index].inside = inside
             }
             for (opIndex, opLocation) in location["ops"].items(named: true).enumerated() {
                 guard var inside = node.ops[opIndex].inside else { continue }
-                Self.level(&inside, at: opLocation["inside"], terms: terms)
+                Self.level(&inside, at: opLocation["inside"], terms: terms, layout: layout)
                 level.nodes[index].ops[opIndex].inside = inside
             }
         }
@@ -63,7 +63,7 @@ enum Validate {
         for (scenario, location) in zip(level.scenarios, field["scenarios"].items(named: true)) {
             validator.scenario(scenario, at: location)
         }
-        Layout.place(&level)
+        LayoutValidation.place(&level, at: field, mode: layout)
     }
 }
 

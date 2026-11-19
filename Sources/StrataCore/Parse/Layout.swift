@@ -1,7 +1,80 @@
 import Foundation
 
-enum Layout {
-    static func place(_ level: inout Level) {
+/// Stage geometry shared by the layout engine, the edge router and the stage. A node at grid point
+/// `at` draws as a card whose top-left corner is `at × (column, row) + origin`, in stage points.
+public enum LayoutMetrics {
+    public static let cardWidth: Double = 168
+    public static let cardHeight: Double = 64
+    /// Stage points per grid column and row. Auto layout writes fractional grid points, so the
+    /// spacing between its columns varies with the labels that sit between them.
+    public static let column: Double = 260
+    public static let row: Double = 150
+    public static let origin: Double = 36
+    /// Group regions: room around members, and the band at the top that holds the label.
+    public static let groupSide: Double = 16
+    public static let groupTop: Double = 29
+    public static let groupBottom: Double = 16
+
+    public static func card(at point: GridPoint) -> CGRect {
+        CGRect(x: point.x * column + origin, y: point.y * row + origin, width: cardWidth, height: cardHeight)
+    }
+
+    /// An estimate of the width of an edge pill (10 pt mono) holding `text`, so the core can make
+    /// room for labels without font metrics.
+    public static func pillWidth(_ text: String) -> Double {
+        Double(text.count) * 6.3 + 14
+    }
+}
+
+/// Places every node of a level (docs/manifest.md, Top level: `layout`).
+///
+/// - `auto`: a layered (Sugiyama) layout. Flow runs left to right: layers by longest path, crossings
+///   reduced by barycenter sweeps and transposition, coordinates aligned with Brandes–Köpf and then
+///   projected so groups stay contiguous and never overlap. `at` is a hint: nodes that share a hint
+///   column prefer one layer, and hint rows order a layer.
+/// - `manual`: `at` is exact; nodes without one are fitted around the placed ones.
+public enum DiagramLayout {
+    /// A hint auto layout could not follow, reported by validation as a warning.
+    struct Issue {
+        let node: String
+        let message: String
+    }
+
+    @discardableResult
+    static func place(_ level: inout Level, mode: LayoutMode) -> [Issue] {
+        switch mode {
+        case .manual:
+            ManualLayout.fill(&level)
+            return []
+        case .auto:
+            let result = AutoLayout.run(level)
+            for index in level.nodes.indices {
+                if let point = result.positions[level.nodes[index].id] { level.nodes[index].at = point }
+            }
+            for index in level.edges.indices {
+                level.edges[index].via = result.via[level.edges[index].id] ?? []
+            }
+            return result.issues
+        }
+    }
+
+    /// The level laid out automatically, using its current positions as hints: "Tidy layout" on the stage.
+    public static func tidy(_ level: Level) -> Level {
+        var copy = level
+        place(&copy, mode: .auto)
+        return copy
+    }
+
+    /// Lays out a level automatically and returns the positions without changing it.
+    public static func positions(for level: Level) -> [String: GridPoint] {
+        AutoLayout.run(level).positions
+    }
+}
+
+/// The original fill for levels where some nodes have no position: unplaced nodes go into columns
+/// by longest path and rows by barycenter, around the nodes that are placed.
+enum ManualLayout {
+    static func fill(_ level: inout Level) {
         guard level.nodes.contains(where: { $0.at == nil }) else { return }
         let diagram = level.nodes.filter { $0.kind.role != .annotation }
         let nodeByID = Dictionary(diagram.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

@@ -242,6 +242,9 @@ public struct Edge: Sendable, Identifiable, Hashable {
     public var loss: Double?
     public var implicit = false          // created by the loader for a flow hop with no declared edge
     public var line: Int?
+    /// Set by auto layout for an edge spanning several columns: where it passes each column in
+    /// between (grid units, centre of the track), in from → to order. The stage routes along it.
+    public var via: [GridPoint] = []
     public var id: String { "\(from)->\(to)" }
     public init(from: String, to: String) { self.from = from; self.to = to }
 }

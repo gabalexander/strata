@@ -6,7 +6,7 @@ enum Decode {
 
     static func manifest(_ root: Field, source: ManifestSource, inline: Bool = false) -> Manifest? {
         let keys: Set<String> = ["strata", "id", "title", "kind", "category", "summary", "tags", "repo",
-                                 "glossaries", "terms", "notes", "links"]
+                                 "glossaries", "terms", "notes", "links", "layout"]
         guard root.mapping(keys.union(levelKeys).union(inline ? embedKeys : [])) else { return nil }
         let version = root["strata"]
         if let number = version.integer(required: !inline, in: Int.min...Int.max), number != 1 {
@@ -35,6 +35,7 @@ enum Decode {
         manifest.terms = root["terms"].items(named: true).compactMap(term)
         manifest.notes = root["notes"].text()
         manifest.links = root["links"].items().compactMap(link)
+        manifest.layout = root["layout"].choice(LayoutMode.self) ?? .auto
         return manifest
     }
 
