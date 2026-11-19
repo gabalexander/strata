@@ -339,7 +339,16 @@ private struct SimWorkspace: View {
 
     private func key(_ event: NSEvent) -> Bool {
         guard !model.paletteOpen, !model.switcherOpen else { return false }
-        if model.overlays.menu == nil, model.overlays.card == nil, SimHowState.of(sim).key(event) { return true }
+        // Topmost first: in-window menus and cards, the enum detail over the stage, the how player over
+        // the stage column, then the stage's overlays (pressure, the op detail, data), the selection, the level.
+        // The enum detail has its own Escape monitor too; whichever runs first closes it, never what lies under it.
+        let overlaysClear = model.overlays.menu == nil && model.overlays.card == nil
+        let enums = SimEnumState.of(model)
+        if overlaysClear, event.keyCode == 53, !event.hasCommandModifiers, enums.detail?.manifest == sim.manifest.id {
+            if !event.isARepeat { enums.close() }
+            return true
+        }
+        if overlaysClear, SimHowState.of(sim).key(event) { return true }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.keyCode == 53 {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }
