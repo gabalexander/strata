@@ -16,14 +16,12 @@ let simEnumTint = Theme.token(2)
 final class SimEnumIndex {
     let manifest: Manifest
     let level: Level
-    let path: [String]
     private var occurrences: [String: [EnumOccurrence]] = [:]
     private var usages: [String: EnumUsage] = [:]
 
     private init(sim: Simulation) {
         manifest = sim.manifest
         level = sim.level
-        path = sim.path
     }
 
     private static let stores = NSMapTable<Simulation, SimEnumIndex>.weakToStrongObjects()
