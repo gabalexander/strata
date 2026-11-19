@@ -47,65 +47,57 @@ struct StageLayout {
         let rect: CGRect
     }
 
+    /// One drawn edge (EdgeRouter): smooth segments from the source's side to an arrow tip on the
+    /// target's border, sampled by arc length so tokens move at an even pace.
     struct Route {
         let edge: StrataCore.Edge
-        let start: CGPoint
-        let control1: CGPoint
-        let control2: CGPoint
-        let end: CGPoint
         let path: Path
         let arrow: Path
         let samples: [CGPoint]
+        private let lengths: [CGFloat]
+        let labelPoint: CGPoint
         let labelWidth: CGFloat
 
-        init(edge: StrataCore.Edge, from: CGRect, to: CGRect, lane: CGFloat) {
+        init(edge: StrataCore.Edge, geometry: EdgeRoute) {
             self.edge = edge
-            if edge.from == edge.to {
-                start = CGPoint(x: from.maxX, y: from.midY - 8)
-                end = CGPoint(x: to.midX + 32, y: to.minY - 4)
-                control1 = start + CGPoint(x: 76 + lane, y: 0)
-                control2 = end - CGPoint(x: 0, y: 75 + lane)
-                labelWidth = 72
-            } else {
-                let dx = to.midX - from.midX
-                let dy = to.midY - from.midY
-                let horizontal = abs(dx) > from.width + 26 || abs(dy) < from.height + 16
-                let direction: CGFloat = (horizontal ? dx : dy) >= 0 ? 1 : -1
-                let out = horizontal ? CGPoint(x: direction, y: 0) : CGPoint(x: 0, y: direction)
-                let sideways = horizontal ? CGPoint(x: 0, y: 1) : CGPoint(x: 1, y: 0)
-                let reach = horizontal ? from.width / 2 : from.height / 2
-                let gap = max(8, abs(horizontal ? dx : dy) - reach * 2)
-                let splay = horizontal ? min(15, max(-15, dy * 0.12)) : min(20, max(-20, dx * 0.12))
-                start = from.center + out * reach + sideways * (lane + splay)
-                end = to.center - out * (reach + 4) + sideways * (lane - splay * 0.35)
-                let bend = min(260, max(16, gap * 0.55))
-                control1 = start + out * bend
-                control2 = end - out * bend
-                labelWidth = min(98, max(38, (horizontal ? gap : abs(dx) + 42) - 9))
-            }
-            let start = self.start, end = self.end
-            let control1 = self.control1, control2 = self.control2
             path = Path { p in
-                p.move(to: start)
-                p.addCurve(to: end, control1: control1, control2: control2)
+                p.move(to: geometry.start)
+                for segment in geometry.segments {
+                    switch segment {
+                    case .line(let to): p.addLine(to: to)
+                    case .curve(let to, let c1, let c2): p.addCurve(to: to, control1: c1, control2: c2)
+                    }
+                }
             }
-            let tangent = (end - control2).normalized
-            let normal = CGPoint(x: -tangent.y, y: tangent.x)
-            let base = end - tangent * 6
+            let tip = geometry.tip, direction = geometry.direction.normalized
+            let normal = CGPoint(x: -direction.y, y: direction.x)
+            let base = tip - direction * 6.5
             arrow = Path { p in
-                p.move(to: base + normal * 3); p.addLine(to: end); p.addLine(to: base - normal * 3)
+                p.move(to: base + normal * 3.2); p.addLine(to: tip); p.addLine(to: base - normal * 3.2)
             }
-            samples = (0...24).map { Self.bezier(Double($0) / 24, start, control1, control2, end) }
+            samples = geometry.polyline(curveSteps: 14)
+            var lengths: [CGFloat] = [0]
+            for (a, b) in zip(samples, samples.dropFirst()) { lengths.append(lengths.last! + (b - a).length) }
+            self.lengths = lengths
+            labelWidth = geometry.label == nil ? 72 : geometry.labelWidth
+            labelPoint = geometry.label ?? Self.point(0.5, samples, lengths)
         }
 
-        var midpoint: CGPoint { samples[12] }
+        /// Where state pills (cut, breaker open) sit: the label's spot.
+        var midpoint: CGPoint { labelPoint }
 
-        var labelPoint: CGPoint {
-            abs(start.y - end.y) < 5 ? midpoint + CGPoint(x: 0, y: -12) : midpoint
-        }
+        func point(at progress: Double) -> CGPoint { Self.point(progress, samples, lengths) }
 
-        func point(at progress: Double) -> CGPoint {
-            Self.bezier(progress, start, control1, control2, end)
+        private static func point(_ progress: Double, _ samples: [CGPoint], _ lengths: [CGFloat]) -> CGPoint {
+            guard let total = lengths.last, total > 0, samples.count > 1 else { return samples.first ?? .zero }
+            let target = total * min(1, max(0, CGFloat(progress)))
+            var lo = 0, hi = lengths.count - 1
+            while hi - lo > 1 {
+                let mid = (lo + hi) / 2
+                if lengths[mid] < target { lo = mid } else { hi = mid }
+            }
+            let span = max(0.0001, lengths[hi] - lengths[lo])
+            return samples[lo] + (samples[hi] - samples[lo]) * ((target - lengths[lo]) / span)
         }
 
         func distance(to point: CGPoint) -> CGFloat {
@@ -116,11 +108,6 @@ struct StageLayout {
                 return min(nearest, (point - (a + span * t)).length)
             }
         }
-
-        private static func bezier(_ t: CGFloat, _ a: CGPoint, _ b: CGPoint, _ c: CGPoint, _ d: CGPoint) -> CGPoint {
-            let s = 1 - t
-            return a * (s * s * s) + b * (3 * s * s * t) + c * (3 * s * t * t) + d * (t * t * t)
-        }
     }
 
     let cards: [Card]
@@ -129,11 +116,15 @@ struct StageLayout {
     let routes: [Route]
     let routesByID: [String: Route]
     let bounds: CGRect
+    private let obstacles: [EdgeRouter.Card]
+    private let labels: [EdgeRouter.Region]
 
-    init(level: Level) {
+    /// The level as laid out (`at` on every node). `rects` overrides card positions, for the frames
+    /// of a "Tidy layout" animation.
+    init(level: Level, rects: [String: CGRect]? = nil) {
         let cards = level.nodes.enumerated().map { i, node in
             let at = node.at ?? GridPoint(Double(i % 5), Double(i / 5))
-            return Card(node: node, rect: CGRect(x: at.x * 220 + 36, y: at.y * 130 + 36, width: 168, height: 64))
+            return Card(node: node, rect: rects?[node.id] ?? LayoutMetrics.card(at: at))
         }
         self.cards = cards
         let byID = Dictionary(cards.map { ($0.node.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -148,25 +139,20 @@ struct StageLayout {
                 bounds = bounds.union(region(child, visited: visited.union([group.id])))
             }
             guard !bounds.isNull else { return .null }
-            return CGRect(x: bounds.minX - 16, y: bounds.minY - 29, width: bounds.width + 32, height: bounds.height + 45)
+            let side = LayoutMetrics.groupSide, top = LayoutMetrics.groupTop, bottom = LayoutMetrics.groupBottom
+            return CGRect(x: bounds.minX - side, y: bounds.minY - top, width: bounds.width + side * 2, height: bounds.height + top + bottom)
         }
         regions = level.groups.compactMap {
             let rect = region($0, visited: [])
             return rect.isNull ? nil : Region(group: $0, rect: rect)
         }.sorted { $0.rect.width * $0.rect.height > $1.rect.width * $1.rect.height }
 
-        let parallel = Dictionary(grouping: level.edges) { [$0.from, $0.to].sorted() }
-        var laneIndices: [[String]: Int] = [:]
-        routes = level.edges.compactMap { edge in
-            guard let from = byID[edge.from]?.rect, let to = byID[edge.to]?.rect else { return nil }
-            let pair = [edge.from, edge.to].sorted()
-            let count = parallel[pair]?.count ?? 1
-            let index = laneIndices[pair, default: 0]
-            laneIndices[pair] = index + 1
-            let spread = min(20, 52 / CGFloat(max(1, count - 1)))
-            let lane = (CGFloat(index) - CGFloat(count - 1) / 2) * spread
-            return Route(edge: edge, from: from, to: to, lane: lane)
-        }
+        obstacles = cards.map { EdgeRouter.Card(id: $0.node.id, rect: $0.rect) }
+        labels = regions.map { EdgeRouter.Region(rect: $0.rect, label: $0.group.label) }
+        let requests = level.edges.map { Self.request($0) }
+        let geometry = Dictionary(EdgeRouter.routes(cards: obstacles, regions: labels, edges: requests).map { ($0.edge, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        routes = level.edges.compactMap { edge in geometry[edge.id].map { Route(edge: edge, geometry: $0) } }
         routesByID = Dictionary(routes.map { ($0.edge.id, $0) }, uniquingKeysWith: { first, _ in first })
         var extent = cards.reduce(CGRect.null) { $0.union($1.rect) }
         extent = regions.reduce(extent) { $0.union($1.rect) }
@@ -174,10 +160,15 @@ struct StageLayout {
         bounds = extent.isNull ? CGRect(x: 0, y: 0, width: 168, height: 64) : extent
     }
 
+    private static func request(_ edge: StrataCore.Edge) -> EdgeRouter.Request {
+        EdgeRouter.Request(id: edge.id, from: edge.from, to: edge.to, label: edge.label ?? edge.protocol,
+                           via: edge.via.map { $0.y * LayoutMetrics.row + LayoutMetrics.origin })
+    }
+
     func connect(_ id: String) -> Route? {
-        guard let edge = StrataCore.Edge.diagramEdge(id), let from = cardsByID[edge.from]?.rect,
-              let to = cardsByID[edge.to]?.rect else { return nil }
-        return Route(edge: edge, from: from, to: to, lane: 0)
+        guard let edge = StrataCore.Edge.diagramEdge(id), cardsByID[edge.from] != nil, cardsByID[edge.to] != nil,
+              let geometry = EdgeRouter.routes(cards: obstacles, regions: labels, edges: [Self.request(edge)]).first else { return nil }
+        return Route(edge: edge, geometry: geometry)
     }
 
     func hit(_ point: CGPoint, camera: StageCamera, tokens: [TokenView],
@@ -210,10 +201,6 @@ struct StageLayout {
         }
         return best
     }
-}
-
-private extension CGRect {
-    var center: CGPoint { CGPoint(x: midX, y: midY) }
 }
 
 extension CGPoint {

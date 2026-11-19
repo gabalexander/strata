@@ -2,13 +2,22 @@ import SwiftUI
 import StrataCore
 
 @MainActor
+@Observable
 final class StageRenderer {
-    let layout: StageLayout
+    /// Where everything is: the level as laid out, or as "Tidy layout" last arranged it.
+    private(set) var layout: StageLayout
+    /// A "Tidy layout" move is playing, so the stage keeps drawing frames while paused.
+    private(set) var animating = false
+    @ObservationIgnored private var level: Level
+    @ObservationIgnored private var tidied = false
+    @ObservationIgnored private var transition: (from: [String: CGRect], start: Date)?
+    @ObservationIgnored private var frameLayout: (time: Date, layout: StageLayout)?
     private let flowColors = (1...6).map(Theme.token)
-    private var textCache: [TextKey: GraphicsContext.ResolvedText] = [:]
-    private var imageCache: [String: GraphicsContext.ResolvedImage] = [:]
-    private var runtimeRoutes: [String: StageLayout.Route] = [:]
-    private var gridCache: (camera: StageCamera, size: CGSize, path: Path)?
+    @ObservationIgnored private var textCache: [TextKey: GraphicsContext.ResolvedText] = [:]
+    @ObservationIgnored private var imageCache: [String: GraphicsContext.ResolvedImage] = [:]
+    @ObservationIgnored private var runtimeRoutes: [String: StageLayout.Route] = [:]
+    @ObservationIgnored private var gridCache: (camera: StageCamera, size: CGSize, path: Path)?
+    static let tidyDuration = 0.55
 
     enum Lettering: Hashable {
         case label, node, compactNode, badge, live, mutedLive, failure, hint
@@ -21,7 +30,57 @@ final class StageRenderer {
         let width: CGFloat?
     }
 
-    init(level: Level) { layout = StageLayout(level: level) }
+    init(level: Level) {
+        self.level = level
+        layout = StageLayout(level: level)
+    }
+
+    /// Re-runs auto layout for this level (positions as hints) and moves the cards there. Returns
+    /// false when nothing moves.
+    @discardableResult
+    func tidy(animated: Bool) -> Bool {
+        // Once tidied, the layout stays put: running it again on its own output could only shuffle it.
+        guard !tidied else { return false }
+        tidied = true
+        let arranged = DiagramLayout.tidy(level)
+        let next = StageLayout(level: arranged)
+        let from = Dictionary(layout.cards.map { ($0.node.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
+        guard next.cards.contains(where: { card in from[card.node.id].map { !$0.equalTo(card.rect) } ?? true }) else { return false }
+        level = arranged
+        runtimeRoutes = [:]
+        frameLayout = nil
+        layout = next
+        guard animated else { return true }
+        let start = Date()
+        transition = (from, start)
+        animating = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(Self.tidyDuration * 1000) + 40))
+            guard let self, self.transition?.start == start else { return }
+            self.transition = nil
+            self.frameLayout = nil
+            self.animating = false
+        }
+        return true
+    }
+
+    /// The layout to draw now: mid-move while "Tidy layout" plays, otherwise the layout.
+    private func drawnLayout(at time: Date) -> StageLayout {
+        guard let transition else { return layout }
+        let progress = min(1, max(0, time.timeIntervalSince(transition.start) / Self.tidyDuration))
+        guard progress < 1 else { return layout }
+        if let frameLayout, frameLayout.time == time { return frameLayout.layout }
+        let t = progress < 0.5 ? 4 * progress * progress * progress : 1 - pow(-2 * progress + 2, 3) / 2
+        var rects: [String: CGRect] = [:]
+        for card in layout.cards {
+            let a = transition.from[card.node.id] ?? card.rect, b = card.rect
+            rects[card.node.id] = CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
+                                         width: b.width, height: b.height)
+        }
+        let moving = StageLayout(level: level, rects: rects)
+        frameLayout = (time, moving)
+        return moving
+    }
 
     func hit(_ point: CGPoint, camera: StageCamera, frame: SimFrame, includeTokens: Bool) -> StageSelection? {
         updateRoutes(frame)
@@ -41,6 +100,7 @@ final class StageRenderer {
               highlight: StageHighlight? = nil) {
         source.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.bg))
         drawGrid(in: source, size: size, camera: camera)
+        let layout = drawnLayout(at: Date())
         var context = source
         context.translateBy(x: camera.offset.x, y: camera.offset.y)
         context.scaleBy(x: camera.zoom, y: camera.zoom)
@@ -467,5 +527,13 @@ extension Node {
         case .note: Theme.warn
         default: Theme.info
         }
+    }
+}
+
+/// Offscreen snapshots: a level after "Tidy layout".
+@_spi(Snapshots) @MainActor
+public enum SimStageSnapshot {
+    public static func tidy(_ sim: Simulation) {
+        SimSessions.renderer(for: sim).tidy(animated: false)
     }
 }

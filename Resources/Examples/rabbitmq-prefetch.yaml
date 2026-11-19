@@ -93,7 +93,7 @@ nodes:
     kind: queue
     label: Dead letters
     group: broker
-    at: [1.35, 2.35]
+    at: [2.8, 2.4]
     capacity: 1000
     term: rabbitmq/dlx
     doc: |

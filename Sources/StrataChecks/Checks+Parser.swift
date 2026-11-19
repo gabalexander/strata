@@ -103,6 +103,7 @@ private func expectClean(_ result: (Manifest?, [Diagnostic])) -> Manifest? {
         CheckCase(name: "parser YAML quotes, multiline flow, comments and URL fragments") {
             let manifest = expectClean(load(#"""
                 # A comment before the level.
+                layout: manual
                 nodes:
                   - id: a
                     kind: postgres
@@ -329,13 +330,16 @@ private func expectClean(_ result: (Manifest?, [Diagnostic])) -> Manifest? {
             let positions = a.root.nodes.compactMap(\.at)
             check(positions.count == a.root.nodes.count && Set(positions).count == a.root.nodes.count, "positions are missing or collide")
             check(a.root.nodes.map(\.at) == b.root.nodes.map(\.at), "layout is not deterministic")
-            check(a.root.node("web")?.at?.x == 0 && a.root.node("mailer")?.at?.x == 4, "checkout depth should be 0 to 4")
+            let columns = ["web", "api", "orders", "events", "mailer"].compactMap { a.root.node($0)?.at?.x }
+            check(columns.count == 5 && zip(columns, columns.dropFirst()).allSatisfy { $0 < $1 } && columns.first == 0,
+                  "checkout should run web, api, orders, events, mailer left to right: \(columns)")
             for edge in a.root.edges {
                 check((a.root.node(edge.from)?.at?.x ?? 10) < (a.root.node(edge.to)?.at?.x ?? 0), "backwards hop: \(edge.id)")
             }
         },
         CheckCase(name: "parser layout fits around fixed nodes and puts notes below") {
             let (manifest, diagnostics) = load("""
+                layout: manual
                 nodes:
                   - {id: src, kind: client, at: [0, 2]}
                   - {id: a, kind: service, at: [1, 2]}

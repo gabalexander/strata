@@ -8,13 +8,15 @@ struct SimActions {
     let sim: Simulation
     let fit: () -> Void
     let dive: (Node) -> Void
+    /// Re-runs auto layout for this level and fits the view ("Tidy layout"); nil where it isn't offered.
+    var tidy: (() -> Void)?
 
     func palette(selection: StageSelection? = nil) -> [MenuItem] {
         var items = [
             play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() },
             command("Step simulation", icon: "forward.frame", shortcut: ".") { sim.pauseAndStep() },
             fitItem,
-        ] + sim.level.scenarios.map(scenarioItem)
+        ] + (tidyItem.map { [$0] } ?? []) + sim.level.scenarios.map(scenarioItem)
             + sim.level.flows.filter { !$0.isConsumer }.map(sendItem)
             + sim.level.nodes.filter(\.canDeepDive).map { node in
                 command("Deep dive into \(node.label)", icon: "square.3.layers.3d") { dive(node) }
@@ -80,7 +82,8 @@ struct SimActions {
             guard let flow = sim.level.flow(id) else { return [] }
             return [.header(flow.label)] + (flow.isConsumer ? [play] : [sendItem(flow), play])
         case nil:
-            var items = [fitItem, play, command("Reset", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() }]
+            var items = [fitItem] + (tidyItem.map { [$0] } ?? [])
+                + [play, command("Reset", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() }]
             let sources = sim.level.flows.filter { !$0.isConsumer }
             if !sources.isEmpty { items.append(.submenu("Send", icon: "paperplane", sources.map(sendItem))) }
             if !sim.level.scenarios.isEmpty {
@@ -182,6 +185,12 @@ struct SimActions {
     }
 
     private var fitItem: MenuItem { command("Fit view", icon: "arrow.up.left.and.arrow.down.right", shortcut: "⌘0", action: fit) }
+
+    private var tidyItem: MenuItem? {
+        tidy.map { command("Tidy layout", icon: SimActions.tidyIcon, shortcut: "⌥⌘L", action: $0) }
+    }
+
+    static let tidyIcon = "wand.and.rays"
 
     private func sendItem(_ flow: Flow) -> MenuItem {
         command("Send \(flow.label)", icon: "paperplane") { sim.send(flow.id) }
