@@ -55,7 +55,7 @@ enum Decode {
         let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops",
                                   "schema", "entities"]
         let behaviour = Set(ParameterType.node.keys).subtracting(["up", "slow"])
-        guard field.mapping(keys.union(behaviour)) else { return nil }
+        guard field.mapping(keys.union(behaviour).union(["binary"])) else { return nil }
         let id = field["id"].id(required: true)
         let kind = field["kind"].scalar(required: true) { raw in
             let name = raw.lowercased()
@@ -74,6 +74,7 @@ enum Decode {
         node.doc = field["doc"].text()
         node.term = field["term"].termID()
         node.code = field["code"].textList(orOne: true)
+        node.binary = field["binary"].text(nonempty: true)
         node.links = field["links"].items().compactMap(link)
         node.params = params(field)
         if field["inside"].present { node.inside = decodeLevel(field["inside"]) }

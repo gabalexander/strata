@@ -49,6 +49,7 @@ extension LevelValidation {
             field.diagnose("a consume op names its buffer in target or topic", .warning)
         }
         if let reference = op.calls { calls(reference, from: op, at: field["calls"]) }
+        query(of: op, at: field)
     }
 
     private func targetFit(_ op: Operation, _ target: Node, at field: Field) {

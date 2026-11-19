@@ -208,6 +208,8 @@ public struct Node: Sendable, Identifiable {
     public var doc: String?
     public var term: String?
     public var code: [String] = []
+    /// The executable this node runs as, such as `cmd/worker` in a Go repo with several binaries.
+    public var binary: String?
     public var links: [Link] = []
     public var params = NodeParams()
     public var inside: Level?
