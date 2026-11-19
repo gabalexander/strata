@@ -17,13 +17,18 @@ final class StageViewport {
         StageCamera(fitting: layout.bounds, in: size, inset: compact ? 14 : 32)
     }
 
-    /// Fits the diagram when that keeps it readable; otherwise opens at a readable zoom on the left
-    /// (where flows start), centred vertically.
+    /// Fits the diagram when that keeps it readable; otherwise opens at a readable zoom where flows start:
+    /// on the left, centred vertically, or at the top, centred across, for a level that runs top to bottom.
     func opening(_ layout: StageLayout, in size: CGSize, compact: Bool) -> StageCamera {
         let fit = fitted(layout, in: size, compact: compact)
         guard !compact, !fitAll, fit.zoom < Self.readableZoom, size.width > 0 else { return fit }
         let zoom = Self.readableZoom, bounds = layout.bounds
         var camera = StageCamera(zoom: zoom)
+        if layout.direction == .down {
+            let left = bounds.width * zoom <= size.width - 64 ? size.width / 2 - bounds.midX * zoom : 32 - bounds.minX * zoom
+            camera.offset = CGPoint(x: left, y: 32 - bounds.minY * zoom)
+            return camera
+        }
         let top = bounds.height * zoom <= size.height - 64 ? size.height / 2 - bounds.midY * zoom : 32 - bounds.minY * zoom
         camera.offset = CGPoint(x: 32 - bounds.minX * zoom, y: top)
         return camera

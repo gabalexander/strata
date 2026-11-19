@@ -45,6 +45,8 @@ struct StageLayout {
     struct Region {
         let group: StrataCore.Group
         let rect: CGRect
+        /// Where the label sits (EdgeRouter.labelRect, or slid clear of edges top to bottom).
+        var label: CGRect = .null
     }
 
     /// One drawn edge (EdgeRouter): smooth segments from the source's side to an arrow tip on the
@@ -116,12 +118,16 @@ struct StageLayout {
     let routes: [Route]
     let routesByID: [String: Route]
     let bounds: CGRect
+    /// Which way the cards run, so edges leave and enter on the matching sides.
+    let direction: FlowDirection
     private let obstacles: [EdgeRouter.Card]
     private let labels: [EdgeRouter.Region]
 
     /// The level as laid out (`at` on every node). `rects` overrides card positions, for the frames
-    /// of a "Tidy layout" animation.
-    init(level: Level, rects: [String: CGRect]? = nil) {
+    /// of a "Tidy layout" animation. `direction` is the way the positions run, the level's own by default.
+    init(level: Level, rects: [String: CGRect]? = nil, direction: FlowDirection? = nil) {
+        let direction = direction ?? level.direction ?? .right
+        self.direction = direction
         let cards = level.nodes.enumerated().map { i, node in
             let at = node.at ?? GridPoint(Double(i % 5), Double(i / 5))
             // A taller card (one with component chips, StageLayout.cardSize) stays centred on its row, so its edges stay level.
@@ -143,16 +149,18 @@ struct StageLayout {
             let side = LayoutMetrics.groupSide, top = LayoutMetrics.groupTop, bottom = LayoutMetrics.groupBottom
             return CGRect(x: bounds.minX - side, y: bounds.minY - top, width: bounds.width + side * 2, height: bounds.height + top + bottom)
         }
-        regions = level.groups.compactMap {
+        var regions = level.groups.compactMap {
             let rect = region($0, visited: [])
             return rect.isNull ? nil : Region(group: $0, rect: rect)
         }.sorted { $0.rect.width * $0.rect.height > $1.rect.width * $1.rect.height }
 
         obstacles = cards.map { EdgeRouter.Card(id: $0.node.id, rect: $0.rect) }
         labels = regions.map { EdgeRouter.Region(rect: $0.rect, label: $0.group.label) }
-        let requests = level.edges.map { Self.request($0) }
-        let geometry = Dictionary(EdgeRouter.routes(cards: obstacles, regions: labels, edges: requests).map { ($0.edge, $0) },
-                                  uniquingKeysWith: { first, _ in first })
+        let requests = level.edges.map { Self.request($0, direction: direction) }
+        let routing = EdgeRouter.routing(cards: obstacles, regions: labels, edges: requests, direction: direction)
+        for (index, label) in routing.labels.enumerated() { regions[index].label = label }
+        self.regions = regions
+        let geometry = Dictionary(routing.routes.map { ($0.edge, $0) }, uniquingKeysWith: { first, _ in first })
         routes = level.edges.compactMap { edge in geometry[edge.id].map { Route(edge: edge, geometry: $0) } }
         routesByID = Dictionary(routes.map { ($0.edge.id, $0) }, uniquingKeysWith: { first, _ in first })
         var extent = cards.reduce(CGRect.null) { $0.union($1.rect) }
@@ -161,14 +169,17 @@ struct StageLayout {
         bounds = extent.isNull ? CGRect(x: 0, y: 0, width: 168, height: 64) : extent
     }
 
-    private static func request(_ edge: StrataCore.Edge) -> EdgeRouter.Request {
+    /// Auto layout's tracks: across each column an edge passes (stage y), or each row top to bottom (stage x).
+    private static func request(_ edge: StrataCore.Edge, direction: FlowDirection) -> EdgeRouter.Request {
         EdgeRouter.Request(id: edge.id, from: edge.from, to: edge.to, label: edge.label ?? edge.protocol,
-                           via: edge.via.map { $0.y * LayoutMetrics.row + LayoutMetrics.origin })
+                           via: edge.via.map { direction == .down ? $0.x * LayoutMetrics.column + LayoutMetrics.origin
+                                                                  : $0.y * LayoutMetrics.row + LayoutMetrics.origin })
     }
 
     func connect(_ id: String) -> Route? {
         guard let edge = StrataCore.Edge.diagramEdge(id), cardsByID[edge.from] != nil, cardsByID[edge.to] != nil,
-              let geometry = EdgeRouter.routes(cards: obstacles, regions: labels, edges: [Self.request(edge)]).first else { return nil }
+              let geometry = EdgeRouter.routes(cards: obstacles, regions: labels, edges: [Self.request(edge, direction: direction)],
+                                               direction: direction).first else { return nil }
         return Route(edge: edge, geometry: geometry)
     }
 

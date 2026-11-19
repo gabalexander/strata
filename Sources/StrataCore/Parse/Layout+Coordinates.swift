@@ -1,12 +1,30 @@
 import Foundation
 
+/// Sizes and gaps in the layout frame, where layers follow each other along x and a layer's vertices
+/// stack along y. Left to right that is the stage's frame; top to bottom it is the stage transposed, so
+/// a card is as deep as it is tall and as broad as it is wide, and the gaps differ to match.
+struct LayoutFrame {
+    let down: Bool
+    init(_ direction: FlowDirection) { down = direction == .down }
+
+    /// A card's extent across its layer: its height (64, or 80 with chips) in a column, its width in a row.
+    func breadth(_ height: Double) -> Double { down ? LayoutMetrics.cardWidth : height }
+    /// Room between neighbouring cards of a layer.
+    var cardGap: Double { down ? 56 : LayoutMetrics.row - LayoutMetrics.cardHeight }
+    /// The least distance between the centres of two cards in a layer.
+    var pitch: Double { down ? LayoutMetrics.cardWidth + cardGap : LayoutMetrics.row }
+    /// A group region's padding across a layer, before its members (above in a column, left in a row)
+    /// and after them.
+    var padBefore: Double { down ? LayoutMetrics.groupSide : LayoutMetrics.groupTop }
+    var padAfter: Double { down ? LayoutMetrics.groupSide : LayoutMetrics.groupBottom }
+}
+
 /// Coordinates: Brandes–Köpf places every layer's vertices so each lines up with a median neighbour
 /// (straight main flows, straight long edges); a separation solver then moves them as little as
 /// possible so group regions keep their padding and never cover a non-member; channels between
 /// layers widen for the labels that sit in them; notes go to a free corner.
 extension LayeredGraph {
-    private static let rowGap = LayoutMetrics.row - LayoutMetrics.cardHeight
-    private static let boxMargin: Double = 22
+    static let boxMargin: Double = 22
     private static let minimumChannel: Double = 100
     private static let maximumChannel: Double = 236
 
@@ -14,20 +32,24 @@ extension LayeredGraph {
         let order = layers.map { $0.filter { !vertices[$0].isFiller } }
         // Brandes–Köpf's balanced placement, or one of its four alignments when that keeps more of
         // the main flow straight once groups are accounted for.
-        let candidates = brandesKoepf(order).map(project)
+        let candidates = brandesKoepf(order).map(pinSides).map(project)
         let scores = candidates.map(straightness)
         let y = candidates[scores.indices.max { (scores[$0], -$0) < (scores[$1], -$1) }!]
-        let x = layerOffsets(y)
+        let x = frame.down ? rowOffsets(y) : layerOffsets(y)
 
         // Grid points name a plain card's corner; a taller card (component chips) is drawn centred on it.
+        // Top to bottom, the frame is transposed back: a layer's offset is a row's top.
         var rects: [String: CGRect] = [:]
         var drawn: [String: CGRect] = [:]
         for (v, vertex) in vertices.enumerated() {
             guard let node = vertex.node else { continue }
-            let rect = CGRect(x: x[vertex.layer], y: y[v] - LayoutMetrics.cardHeight / 2,
-                              width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight)
+            let rect = frame.down
+                ? CGRect(x: y[v] - LayoutMetrics.cardWidth / 2, y: x[vertex.layer],
+                         width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight)
+                : CGRect(x: x[vertex.layer], y: y[v] - LayoutMetrics.cardHeight / 2,
+                         width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight)
             rects[ids[node]] = rect
-            drawn[ids[node]] = rect.insetBy(dx: 0, dy: -(vertex.height - LayoutMetrics.cardHeight) / 2)
+            drawn[ids[node]] = rect.insetBy(dx: 0, dy: -(heights[node] - LayoutMetrics.cardHeight) / 2)
         }
         let regions = groupRegions(drawn)
         let all = rects.merging(noteRects(cards: drawn, regions: regions)) { a, _ in a }
@@ -35,8 +57,9 @@ extension LayeredGraph {
         var via: [String: [GridPoint]] = [:]
         for (index, link) in links.enumerated() where chains[index].count > 2 {
             let points = chains[index].dropFirst().dropLast().map { v in
-                GridPoint(Self.unit((x[vertices[v].layer] - minX) / LayoutMetrics.column),
-                          Self.unit((y[v] - minY) / LayoutMetrics.row))
+                frame.down
+                    ? GridPoint(Self.unit((y[v] - minX) / LayoutMetrics.column), Self.unit((x[vertices[v].layer] - minY) / LayoutMetrics.row))
+                    : GridPoint(Self.unit((x[vertices[v].layer] - minX) / LayoutMetrics.column), Self.unit((y[v] - minY) / LayoutMetrics.row))
             }
             via[link.id] = link.reversed ? points.reversed() : points
         }
@@ -66,11 +89,12 @@ extension LayeredGraph {
         while shared < pa.count && shared < pb.count && pa[shared] == pb[shared] { shared += 1 }
         let exits = pa.count - shared, enters = pb.count - shared
         let da = vertices[a].isDummy, db = vertices[b].isDummy
-        var gap = da && db ? 18 : da || db ? 26 : Self.rowGap
+        var gap = da && db ? 18 : da || db ? 26 : frame.cardGap
         if exits + enters > 0 {
-            gap = max(gap, Double(exits) * LayoutMetrics.groupBottom + Double(enters) * LayoutMetrics.groupTop + Self.boxMargin)
+            gap = max(gap, Double(exits) * frame.padAfter + Double(enters) * frame.padBefore + Self.boxMargin)
         }
-        return vertices[a].height / 2 + gap + vertices[b].height / 2
+        gap = max(gap, sideGap(a, b))
+        return vertices[a].breadth / 2 + gap + vertices[b].breadth / 2
     }
 
     /// Separations across layers that keep groups in bands: wherever a group's block meets something
@@ -96,8 +120,8 @@ extension LayeredGraph {
                 let upper = side(a, upperGroup, shared), lower = side(b, lowerGroup, shared)
                 for u in upper.vertices {
                     for l in lower.vertices where seen.insert([u, l]).inserted {
-                        let gap = vertices[u].height / 2 + Double(upper.depth(u)) * LayoutMetrics.groupBottom + Self.boxMargin
-                            + Double(lower.depth(l)) * LayoutMetrics.groupTop + vertices[l].height / 2
+                        let gap = vertices[u].breadth / 2 + Double(upper.depth(u)) * frame.padAfter + Self.boxMargin
+                            + Double(lower.depth(l)) * frame.padBefore + vertices[l].breadth / 2
                         result.append((u, l, gap))
                     }
                 }
@@ -131,13 +155,13 @@ extension LayeredGraph {
         // Tall, stepped placements read worse than compact ones with a bend.
         let cards = vertices.indices.filter { vertices[$0].node != nil }
         let height = (cards.map { y[$0] }.max() ?? 0) - (cards.map { y[$0] }.min() ?? 0)
-        score -= 0.6 * height / LayoutMetrics.row
+        score -= 0.6 * height / frame.pitch
         // A node fanning out to (or in from) three or more reads best centred on its fan.
         for v in cards {
             for fan in [succs[v], preds[v]] where fan.count >= 3 {
                 let ys = fan.map { y[$0] }.sorted()
                 let middle = ys.count % 2 == 1 ? ys[ys.count / 2] : (ys[ys.count / 2 - 1] + ys[ys.count / 2]) / 2
-                score -= 2.5 * abs(y[v] - middle) / LayoutMetrics.row
+                score -= 2.5 * abs(y[v] - middle) / frame.pitch
             }
         }
         return score
@@ -185,7 +209,7 @@ extension LayeredGraph {
         let members = order.flatMap { $0 }
         guard !members.isEmpty else { return [Array(repeating: 0, count: count)] }
         func extent(_ xs: [Double]) -> (Double, Double) {
-            (members.map { xs[$0] - vertices[$0].height / 2 }.min()!, members.map { xs[$0] + vertices[$0].height / 2 }.max()!)
+            (members.map { xs[$0] - vertices[$0].breadth / 2 }.min()!, members.map { xs[$0] + vertices[$0].breadth / 2 }.max()!)
         }
         let narrowest = results.indices.min { a, b in
             let (a0, a1) = extent(results[a]), (b0, b1) = extent(results[b])
@@ -301,8 +325,8 @@ extension LayeredGraph {
         var upper: [Int: Double] = [:], lower: [Int: Double] = [:]
         for (v, vertex) in vertices.enumerated() where !vertex.isFiller {
             for group in path(of: v) {
-                upper[group] = min(upper[group] ?? .infinity, aligned[v] - vertex.height / 2 - LayoutMetrics.groupTop)
-                lower[group] = max(lower[group] ?? -.infinity, aligned[v] + vertex.height / 2 + LayoutMetrics.groupBottom)
+                upper[group] = min(upper[group] ?? .infinity, aligned[v] - vertex.breadth / 2 - frame.padBefore)
+                lower[group] = max(lower[group] ?? -.infinity, aligned[v] + vertex.breadth / 2 + frame.padAfter)
             }
         }
         for group in groups {
@@ -322,25 +346,25 @@ extension LayeredGraph {
                 case (nil, nil):
                     solver.separate(a, b, by: separation(a, b))
                 case (let u?, nil):
-                    solver.separate(u, b, by: vertices[b].height / 2 + Self.boxMargin)
+                    solver.separate(u, b, by: vertices[b].breadth / 2 + Self.boxMargin)
                 case (nil, let l?):
-                    solver.separate(a, l, by: vertices[a].height / 2 + Self.boxMargin)
+                    solver.separate(a, l, by: vertices[a].breadth / 2 + Self.boxMargin)
                 case (let u?, let l?):
                     solver.separate(u, l, by: Self.boxMargin)
                 }
             }
             let cards = layer.filter { vertices[$0].node != nil }
-            for (a, b) in zip(cards, cards.dropFirst()) { solver.separate(a, b, by: LayoutMetrics.row) }
+            for (a, b) in zip(cards, cards.dropFirst()) { solver.separate(a, b, by: frame.pitch) }
         }
         for (v, vertex) in vertices.enumerated() where !vertex.isFiller {
             guard let group = vertex.group else { continue }
-            solver.separate(top[group]!, v, by: vertex.height / 2 + LayoutMetrics.groupTop)
-            solver.separate(v, bottom[group]!, by: vertex.height / 2 + LayoutMetrics.groupBottom)
+            solver.separate(top[group]!, v, by: vertex.breadth / 2 + frame.padBefore)
+            solver.separate(v, bottom[group]!, by: vertex.breadth / 2 + frame.padAfter)
         }
         for group in groups {
             guard let parent = groupParent[group], groups.contains(parent) else { continue }
-            solver.separate(top[parent]!, top[group]!, by: LayoutMetrics.groupTop)
-            solver.separate(bottom[group]!, bottom[parent]!, by: LayoutMetrics.groupBottom)
+            solver.separate(top[parent]!, top[group]!, by: frame.padBefore)
+            solver.separate(bottom[group]!, bottom[parent]!, by: frame.padAfter)
         }
         return Array(solver.solve().prefix(count))
     }

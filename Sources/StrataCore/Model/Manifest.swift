@@ -64,6 +64,9 @@ public struct Level: Sendable {
     public var controls: [Control] = []
     public var scenarios: [Scenario] = []
     public var narration: String?
+    /// Which way auto layout runs this level (docs/manifest.md, Layout). Parsing fills it in: a level
+    /// without `direction:` takes its enclosing level's, and the root defaults to `right`.
+    public var direction: FlowDirection?
     public init() {}
 
     public func node(_ id: String) -> Node? { nodes.first { $0.id == id } }
@@ -204,6 +207,9 @@ public struct Node: Sendable, Identifiable {
     public var tech: String?
     public var icon: String?
     public var at: GridPoint?
+    /// The `at` the manifest wrote, kept when auto layout replaces `at`, so the level can be laid out again
+    /// (in another direction) from the author's hints.
+    public var hint: GridPoint?
     public var group: String?
     public var doc: String?
     public var term: String?
@@ -613,6 +619,10 @@ public struct SLO: Sendable, Hashable {
 // MARK: - Layout
 
 public enum LayoutMode: String, Sendable, CaseIterable { case auto, manual }
+
+/// Which way flow runs: `right` puts layers in columns from left to right, `down` puts them in rows
+/// from top to bottom.
+public enum FlowDirection: String, Sendable, CaseIterable, Codable { case right, down }
 
 // MARK: - How it works (mechanisms as playable sequences)
 

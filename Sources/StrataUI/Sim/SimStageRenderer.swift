@@ -4,11 +4,17 @@ import StrataCore
 @MainActor
 @Observable
 final class StageRenderer {
-    /// Where everything is: the level as laid out, or as "Tidy layout" last arranged it.
+    /// Where everything is: the level as laid out, or as "Tidy layout" or the vertical/horizontal switch
+    /// last arranged it.
     private(set) var layout: StageLayout
     /// A "Tidy layout" move is playing, so the stage keeps drawing frames while paused.
     private(set) var animating = false
     @ObservationIgnored private var level: Level
+    /// The level as the manifest placed it: what Tidy layout and the switch lay out again.
+    @ObservationIgnored private let source: Level
+    /// The way the cards run now, and the way the switch asks for (Tidy layout follows it).
+    @ObservationIgnored private var placed: FlowDirection
+    @ObservationIgnored private var wanted: FlowDirection
     @ObservationIgnored private var tidied = false
     @ObservationIgnored private var transition: (from: [String: CGRect], start: Date)?
     @ObservationIgnored private var frameLayout: (time: Date, layout: StageLayout)?
@@ -37,6 +43,9 @@ final class StageRenderer {
 
     init(level: Level) {
         self.level = level
+        source = level
+        placed = level.direction ?? .right
+        wanted = placed
         layout = StageLayout(level: level)
     }
 
@@ -47,15 +56,34 @@ final class StageRenderer {
         // Once tidied, the layout stays put: running it again on its own output could only shuffle it.
         guard !tidied else { return false }
         tidied = true
-        let arranged = DiagramLayout.tidy(level)
-        let next = StageLayout(level: arranged)
-        let from = Dictionary(layout.cards.map { ($0.node.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
-        guard next.cards.contains(where: { card in from[card.node.id].map { !$0.equalTo(card.rect) } ?? true }) else { return false }
+        return move(to: DiagramLayout.tidy(source, direction: wanted), direction: wanted, animated: animated)
+    }
+
+    /// Runs the level `direction`, the stage's vertical/horizontal switch. An auto level is laid out again
+    /// from the manifest's hints; a manual level keeps its places until Tidy layout, which then runs that
+    /// way (or runs again, once tidied). Returns false when no card moves.
+    @discardableResult
+    func direct(_ direction: FlowDirection, auto: Bool, animated: Bool) -> Bool {
+        wanted = direction
+        guard direction != placed else { return false }
+        if auto { return move(to: DiagramLayout.arranged(source, direction: direction), direction: direction, animated: animated) }
+        guard tidied else { return false }
+        return move(to: DiagramLayout.tidy(source, direction: direction), direction: direction, animated: animated)
+    }
+
+    /// Moves the cards to `arranged`, gliding over `tidyDuration` when animated.
+    private func move(to arranged: Level, direction: FlowDirection, animated: Bool) -> Bool {
+        let next = StageLayout(level: arranged, direction: direction)
+        // From where the cards are drawn now, so a second move during the first glides on from there.
+        let from = Dictionary(drawnLayout(at: Date()).cards.map { ($0.node.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
+        let moves = next.cards.contains { card in from[card.node.id].map { !$0.equalTo(card.rect) } ?? true }
+        guard moves || direction != placed else { return false }
         level = arranged
+        placed = direction
         runtimeRoutes = [:]
         frameLayout = nil
         layout = next
-        guard animated else { return true }
+        guard moves, animated else { return moves }
         let start = Date()
         transition = (from, start)
         animating = true
@@ -82,7 +110,7 @@ final class StageRenderer {
             rects[card.node.id] = CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
                                          width: b.width, height: b.height)
         }
-        let moving = StageLayout(level: level, rects: rects)
+        let moving = StageLayout(level: level, rects: rects, direction: placed)
         frameLayout = (time, moving)
         return moving
     }
@@ -209,7 +237,7 @@ final class StageRenderer {
         let dashed = region.group.kind == .vpc || region.group.kind == .region
         context.stroke(shape, with: .color(Theme.border), style: StrokeStyle(lineWidth: 1, dash: dashed ? [5, 5] : []))
         context.draw(text(region.group.label, .label, width: r.width - 28, in: context),
-                     at: CGPoint(x: r.minX + 14, y: r.minY + 15), anchor: .leading)
+                     at: CGPoint(x: region.label.minX + 6, y: region.label.minY + 12), anchor: .leading)
     }
 
     private func drawEdge(_ route: StageLayout.Route, state: EdgeState, selected: Bool, hovered: Bool,
@@ -539,10 +567,14 @@ extension Node {
     }
 }
 
-/// Offscreen snapshots: a level after "Tidy layout".
+/// Offscreen snapshots: a level after "Tidy layout", or run another way.
 @_spi(Snapshots) @MainActor
 public enum SimStageSnapshot {
     public static func tidy(_ sim: Simulation) {
         SimSessions.renderer(for: sim).tidy(animated: false)
+    }
+
+    public static func direct(_ sim: Simulation, _ direction: FlowDirection) {
+        SimSessions.renderer(for: sim).direct(direction, auto: sim.manifest.layout == .auto, animated: false)
     }
 }

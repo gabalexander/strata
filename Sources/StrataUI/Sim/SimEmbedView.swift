@@ -173,7 +173,12 @@ private struct SimEmbedWorkspace: View {
         self.handoff = handoff
         self.visible = visible
         self.still = still
-        _renderer = State(initialValue: StageRenderer(level: sim.level))
+        let renderer = StageRenderer(level: sim.level)
+        // The map's vertical/horizontal switch (AppModel.layoutDirections) holds here too.
+        if let direction = model.layoutDirections[sim.manifest.id] {
+            renderer.direct(direction, auto: sim.manifest.layout == .auto, animated: false)
+        }
+        _renderer = State(initialValue: renderer)
         terms = SimSessions.terms(for: sim)
     }
 

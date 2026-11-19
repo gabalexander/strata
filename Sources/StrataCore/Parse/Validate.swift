@@ -8,7 +8,7 @@ enum Validate {
             let suggestion = closestKey(to: pack, in: Array(available)).map { "; did you mean '\($0)'?" } ?? ""
             root["glossaries"].items()[index].diagnose("unknown glossary pack '\(pack)'\(suggestion)")
         }
-        level(&manifest.root, at: root, terms: TermIndex(manifest: manifest), layout: manifest.layout)
+        level(&manifest.root, at: root, terms: TermIndex(manifest: manifest), layout: manifest.layout, direction: .right)
         EnumValidation.check(manifest, at: root)
     }
 
@@ -24,7 +24,11 @@ enum Validate {
         }
     }
 
-    private static func level(_ level: inout Level, at field: Field, terms: TermIndex, layout: LayoutMode) {
+    private static func level(_ level: inout Level, at field: Field, terms: TermIndex, layout: LayoutMode,
+                              direction inherited: FlowDirection) {
+        // A deep dive runs the way its parent runs unless it sets its own direction.
+        let direction = level.direction ?? inherited
+        level.direction = direction
         duplicates(level.nodes, at: field["nodes"])
         duplicates(level.groups, at: field["groups"])
         duplicates(level.flows, at: field["flows"])
@@ -49,12 +53,12 @@ enum Validate {
             duplicates(node.actions, at: location["actions"])
             duplicates(node.ops, at: location["ops"])
             if var inside = node.inside {
-                Self.level(&inside, at: location["inside"], terms: terms, layout: layout)
+                Self.level(&inside, at: location["inside"], terms: terms, layout: layout, direction: direction)
                 level.nodes[index].inside = inside
             }
             for (opIndex, opLocation) in location["ops"].items(named: true).enumerated() {
                 guard var inside = node.ops[opIndex].inside else { continue }
-                Self.level(&inside, at: opLocation["inside"], terms: terms, layout: layout)
+                Self.level(&inside, at: opLocation["inside"], terms: terms, layout: layout, direction: direction)
                 level.nodes[index].ops[opIndex].inside = inside
             }
         }

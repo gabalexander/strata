@@ -31,7 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = AppModel(library: library, vault: vault, config: config)
         self.model = model
-        model.replace(RouteState.load())
+        let state = RouteState.load()
+        model.replace(state?.route ?? .home)
+        model.layoutDirections = state?.layoutDirections ?? [:]
         observeRoute()
 
         let window = StrataWindow(model: model)
@@ -69,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         saveTask?.cancel()
-        if let model { save(model.route) }
+        if let model { save(model.route, model.layoutDirections) }
         hotkey.unregister()
         NSAppleEventManager.shared().removeEventHandler(forEventClass: AEEventClass(kInternetEventClass),
                                                         andEventID: AEEventID(kAEGetURL))
@@ -114,29 +116,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showWindow()
     }
 
+    /// Saves state.json when the route or the vertical/horizontal switch changes.
     private func observeRoute() {
         guard let model else { return }
         withObservationTracking {
             _ = model.route
+            _ = model.layoutDirections
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, let model = self.model else { return }
                 self.observeRoute()
-                self.scheduleSave(model.route)
+                self.scheduleSave(model.route, model.layoutDirections)
             }
         }
     }
 
-    private func scheduleSave(_ route: Route) {
+    private func scheduleSave(_ route: Route, _ directions: [String: FlowDirection]) {
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-            self?.save(route)
+            self?.save(route, directions)
         }
     }
 
-    private func save(_ route: Route) {
-        do { try RouteState(route).save() }
+    private func save(_ route: Route, _ directions: [String: FlowDirection]) {
+        do { try RouteState(route, directions: directions).save() }
         catch { NSLog("Strata: could not save state: %@", error.localizedDescription) }
     }
 }
