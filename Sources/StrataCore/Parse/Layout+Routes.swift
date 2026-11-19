@@ -175,7 +175,13 @@ public enum EdgeRouter {
                 if abs(offset) <= half { return end.approach }
                 return ends.count == 1 ? middle : middle + (offset > 0 ? half : -half)
             }
-            let placed = spread(wanted, within: middle - half, middle + half, spacing: portSpacing)
+            // Closer ports are fine when that keeps an edge between aligned cards straight.
+            var placed = spread(wanted, within: middle - half, middle + half, spacing: portSpacing)
+            let aligned = ends.indices.filter { abs(ends[$0].approach - middle) <= half }
+            if aligned.contains(where: { abs(placed[$0] - wanted[$0]) > 0.5 }) {
+                let tighter = spread(wanted, within: middle - half, middle + half, spacing: portSpacing * 0.7)
+                if aligned.allSatisfy({ abs(tighter[$0] - wanted[$0]) <= 0.5 }) { placed = tighter }
+            }
             for (i, end) in ends.enumerated() {
                 let offset = placed[i] - middle
                 let point: CGPoint = switch side {
@@ -364,27 +370,32 @@ public enum EdgeRouter {
         guard !wanted.isEmpty else { return [] }
         let room = max(0, hi - lo)
         let spacing = wanted.count > 1 ? min(preferred, room / CGFloat(wanted.count - 1)) : 0
-        var ys = wanted
-        // Push apart around the mean of each cluster, then keep inside the gap.
-        for _ in 0..<wanted.count {
-            var moved = false
-            var i = 0
-            while i < ys.count - 1 {
-                var j = i
-                while j + 1 < ys.count && ys[j + 1] - ys[j] < spacing - 0.01 { j += 1 }
-                if j > i {
-                    let mean = ys[i...j].reduce(0, +) / CGFloat(j - i + 1)
-                    let center = wanted[i...j].reduce(0, +) / CGFloat(j - i + 1)
-                    let start = min(mean, center) - spacing * CGFloat(j - i) / 2
-                    for k in i...j { ys[k] = start + spacing * CGFloat(k - i) }
-                    moved = true
-                }
-                i = j + 1
+        // Runs that sit too close merge into evenly spaced blocks centred where they wanted to be.
+        var blocks: [(start: Int, count: Int, center: CGFloat)] = []
+        for (i, y) in wanted.enumerated() {
+            blocks.append((i, 1, min(max(y, lo), max(lo, hi))))
+            while blocks.count > 1 {
+                let b = blocks[blocks.count - 1], a = blocks[blocks.count - 2]
+                let aLast = a.center + spacing * CGFloat(a.count - 1) / 2
+                let bFirst = b.center - spacing * CGFloat(b.count - 1) / 2
+                guard bFirst - aLast < spacing - 0.01 else { break }
+                let count = a.count + b.count
+                let center = (a.center * CGFloat(a.count) + b.center * CGFloat(b.count)) / CGFloat(count)
+                blocks.removeLast(2)
+                blocks.append((a.start, count, center))
             }
-            if !moved { break }
         }
-        if let first = ys.first, first < lo { ys = ys.map { $0 + (lo - first) } }
-        if let last = ys.last, last > hi, room > 0 { ys = ys.map { $0 - (last - hi) } }
+        var ys = wanted
+        for block in blocks {
+            for k in 0..<block.count {
+                ys[block.start + k] = block.center - spacing * CGFloat(block.count - 1) / 2 + spacing * CGFloat(k)
+            }
+        }
+        // Then inside lo...hi: push down from the top, then up from the bottom.
+        ys[0] = max(ys[0], lo)
+        for i in ys.indices.dropFirst() { ys[i] = max(ys[i], ys[i - 1] + spacing) }
+        ys[ys.count - 1] = min(ys[ys.count - 1], max(lo, hi))
+        for i in ys.indices.dropLast().reversed() { ys[i] = min(ys[i], ys[i + 1] - spacing) }
         return ys.map { min(max($0, lo), max(lo, hi)) }
     }
 

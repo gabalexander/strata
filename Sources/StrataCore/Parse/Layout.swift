@@ -64,11 +64,6 @@ public enum DiagramLayout {
         place(&copy, mode: .auto)
         return copy
     }
-
-    /// Lays out a level automatically and returns the positions without changing it.
-    public static func positions(for level: Level) -> [String: GridPoint] {
-        AutoLayout.run(level).positions
-    }
 }
 
 /// The original fill for levels where some nodes have no position: unplaced nodes go into columns
