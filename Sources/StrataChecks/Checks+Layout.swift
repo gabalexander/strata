@@ -399,8 +399,9 @@ private func generatedManifest(nodes count: Int, seed: UInt64) -> String {
         }
     }
     edges.append("  - { from: n\(count - 1), to: n\(count / 2), label: back }")
+    // Even seeds nest Data inside Core.
     let groups = ["groups:", "  - { id: g0, label: Edge }", "  - { id: g1, label: Core, kind: cluster }",
-                  "  - { id: g2, label: Data, kind: vpc }"]
+                  "  - { id: g2, label: Data, kind: vpc\(seed % 2 == 0 ? ", parent: g1" : "") }"]
     return (groups + ["nodes:"] + nodes + ["edges:"] + edges).joined(separator: "\n")
 }
 
