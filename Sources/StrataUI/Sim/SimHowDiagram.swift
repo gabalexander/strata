@@ -176,7 +176,9 @@ private struct SimHowParticipant: View {
                 Text(participant.label).font(Theme.ui(12, .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                 if let node {
                     HStack(spacing: 3) {
-                        Text(node.label).lineLimit(1)
+                        // The node it stands for; its kind when the names match.
+                        Text(node.label.lowercased() == participant.label.lowercased() ? node.tech ?? node.kind.rawValue : node.label)
+                            .lineLimit(1)
                         Image(systemName: "arrow.up.forward").font(Theme.ui(7, .bold))
                     }
                     .font(Theme.mono(9.5)).foregroundStyle(hovered ? Theme.accent : Theme.faint)
@@ -421,22 +423,27 @@ struct SimHowCanvasPainter {
         faded.draw(label, at: CGPoint(x: textLeft, y: labelY), anchor: anchorRight ? .bottomTrailing : .bottomLeading)
         guard step.command != nil || step.reply != nil else { return }
         let chipY = selfStep ? y + 5 : y + 6
+        // A chip too wide for the space right of its arrow slides left into the empty part of its row.
+        let leftmost = (layout.axis ?? 0) + 14
+        let wide = anchorRight ? room : size.width - 12 - leftmost
         if layout.wrapped.contains(index), let command = step.command, let reply = step.reply {
             // Too long for one line: the command, then the reply under it, so the reply is never cut off.
-            let first = fitted("cmd-\(index)", command, room: room - 12, in: context) { commandText($0, step: step) }
-            let second = fitted("reply-\(index)", "\u{0}" + reply, room: room - 12, in: context) { commandText($0, step: step) }
-            chipBox(first, top: chipY, left: textLeft, right: anchorRight, room: room, emphasis: emphasis, in: faded)
-            chipBox(second, top: chipY + SimHowLayout.secondLine, left: textLeft, right: anchorRight, room: room, emphasis: emphasis, in: faded)
+            let first = fitted("cmd-\(index)", command, room: wide - 12, in: context) { commandText($0, step: step) }
+            let second = fitted("reply-\(index)", "\u{0}" + reply, room: wide - 12, in: context) { commandText($0, step: step) }
+            chipBox(first, top: chipY, left: textLeft, right: anchorRight, leftmost: leftmost, width: size.width, emphasis: emphasis, in: faded)
+            chipBox(second, top: chipY + SimHowLayout.secondLine, left: textLeft, right: anchorRight, leftmost: leftmost,
+                    width: size.width, emphasis: emphasis, in: faded)
         } else {
-            let chip = fitted("chip-\(index)", chipText(step), room: room - 12, in: context) { commandText($0, step: step) }
-            chipBox(chip, top: chipY, left: textLeft, right: anchorRight, room: room, emphasis: emphasis, in: faded)
+            let chip = fitted("chip-\(index)", chipText(step), room: wide - 12, in: context) { commandText($0, step: step) }
+            chipBox(chip, top: chipY, left: textLeft, right: anchorRight, leftmost: leftmost, width: size.width, emphasis: emphasis, in: faded)
         }
     }
 
-    private func chipBox(_ chip: GraphicsContext.ResolvedText, top: CGFloat, left: CGFloat, right: Bool, room: CGFloat,
-                         emphasis: SimHowRowEmphasis, in context: GraphicsContext) {
-        let measured = chip.measure(in: CGSize(width: max(10, room), height: 20))
-        let box = CGRect(x: right ? left - measured.width - 12 : left - 6, y: top, width: measured.width + 12, height: 18)
+    private func chipBox(_ chip: GraphicsContext.ResolvedText, top: CGFloat, left: CGFloat, right: Bool, leftmost: CGFloat,
+                         width: CGFloat, emphasis: SimHowRowEmphasis, in context: GraphicsContext) {
+        let measured = chip.measure(in: CGSize(width: max(10, width), height: 20))
+        let x = right ? left - measured.width - 12 : max(leftmost, min(left - 6, width - 12 - measured.width - 12))
+        let box = CGRect(x: x, y: top, width: measured.width + 12, height: 18)
         context.fill(Path(roundedRect: box, cornerRadius: 5), with: .color(Theme.raised))
         context.stroke(Path(roundedRect: box, cornerRadius: 5), with: .color(emphasis == .active ? Theme.accent.opacity(0.4) : Theme.border), lineWidth: 1)
         context.draw(chip, at: CGPoint(x: box.minX + 6, y: box.midY), anchor: .leading)

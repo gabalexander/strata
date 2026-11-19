@@ -241,7 +241,7 @@ struct SimHowStatePanel: View {
             if state.keys.isEmpty && gone.isEmpty {
                 Text("No state yet.").font(Theme.ui(12)).foregroundStyle(Theme.faint).padding(14)
             }
-            VStack(alignment: .leading, spacing: 4) {
+            let rows = VStack(alignment: .leading, spacing: 4) {
                 ForEach(state.keys, id: \.key) { key in
                     let change = frame?.change(of: key.key)
                     SimHowStateRow(key: key.key, value: key.value, ttl: key.ttl, remaining: key.remaining,
@@ -254,7 +254,12 @@ struct SimHowStatePanel: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
-            Spacer(minLength: 0)
+            if still {
+                rows
+                Spacer(minLength: 0)
+            } else {
+                ScrollView { rows }.scrollBounceBehavior(.basedOnSize)
+            }
             if state.keys.contains(where: { $0.ttl != nil }) || !gone.isEmpty {
                 legend.padding(.horizontal, 14).padding(.bottom, 10)
             }
