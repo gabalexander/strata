@@ -19,6 +19,9 @@ import StrataCore
         enumScene("enums-sql-detail", height: 880, selected: "orders") { sim, _ in
             SimOpsSnapshot.open(sim, node: "orders", op: "capture-payment", from: "orders")
         },
+        enumScene("enums-payload", height: 880, selected: "orders") { sim, _ in
+            SimOpsSnapshot.open(sim, node: "orders", op: "get-order", from: "orders")
+        },
         enumScene("enums-detail", height: 880, selected: "db") { sim, model in
             SimEnumSnapshot.open(sim, model: model, enumID: "order-status", value: "20")
         },

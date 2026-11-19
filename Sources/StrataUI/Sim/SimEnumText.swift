@@ -73,10 +73,7 @@ private struct SimEnumHover: ViewModifier {
                             if let tap { tap() } else { scope.open(enumID, value: literal) }
                         }
                         .onAppear {
-                            let index = scope.index, state = scope.state
-                            state.offerPreview(literal) {
-                                state.show(index: index, enumID: enumID, literal: literal, anchor: proxy.frame(in: .global))
-                            }
+                            scope.state.offerPreview(scope.index, enumID: enumID, literal: literal) { proxy.frame(in: .global) }
                         }
                 }
             }
@@ -132,11 +129,9 @@ struct SimEnumCodeText: View {
                         return .handled
                     })
                     .onAppear {
-                        let state = scope.state, index = scope.index
                         for (offset, hit) in found.enumerated() {
-                            state.offerPreview(hit.literal) { [layout] in
-                                state.show(index: index, enumID: hit.enumID, literal: hit.literal,
-                                           anchor: layout.anchor(for: offset) ?? layout.frame)
+                            scope.state.offerPreview(scope.index, enumID: hit.enumID, literal: hit.literal) { [layout] in
+                                layout.anchor(for: offset) ?? layout.frame
                             }
                         }
                     }

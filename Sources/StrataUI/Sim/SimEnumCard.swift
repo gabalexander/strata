@@ -11,10 +11,21 @@ struct SimEnumCardLayer: View {
 
     var body: some View {
         let state = SimEnumState.of(model)
-        if let card = state.card, model.overlays.menu == nil, model.overlays.card == nil, !model.paletteOpen {
-            SimEnumCardPlacement(card: card, size: size)
-                .allowsHitTesting(false)
-                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in state.hideCard() }
+        ZStack(alignment: .topLeading) {
+            if let card = state.card, model.overlays.menu == nil, model.overlays.card == nil, !model.paletteOpen {
+                SimEnumCardPlacement(card: card, size: size)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in state.hideCard() }
+        .background {
+            // Values in selectable code are drawn by AppKit: watch clicks on them here, without taking them.
+            WindowEvents(matching: [.leftMouseDown, .leftMouseUp]) { event, _ in
+                state.mouse(event.type, at: event.contentLocation, model: model)
+                return event
+            }
+            .accessibilityHidden(true)
         }
     }
 }

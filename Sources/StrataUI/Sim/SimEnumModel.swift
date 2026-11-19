@@ -139,9 +139,12 @@ final class SimEnumState {
     private(set) var detail: Detail?
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored private var hovered: String?
+    /// The value under the pointer, for a click on selectable code (which AppKit draws, links and all).
+    @ObservationIgnored private var target: (key: String, index: SimEnumIndex, enumID: String, literal: String, anchor: () -> CGRect)?
+    @ObservationIgnored private var pressedAt: CGPoint?
     /// Snapshots only: show the card on the first anchor that holds this literal, once it is laid out.
     @ObservationIgnored var previewLiteral: String?
-    @ObservationIgnored var previewAnchors: [(literal: String, show: () -> Void)] = []
+    @ObservationIgnored var previewAnchors: [(index: SimEnumIndex, enumID: String, literal: String, anchor: () -> CGRect)] = []
 
     private static let stores = NSMapTable<AppModel, SimEnumState>.weakToStrongObjects()
 
@@ -159,6 +162,7 @@ final class SimEnumState {
         guard hovered != key else { return }
         pending?.cancel()
         hovered = key
+        target = (key, index, enumID, literal, anchor)
         if card != nil { card = nil }
         pending = Task { @MainActor [weak self] in
             try? await Task.sleep(for: SimEnumState.hoverDelay)
@@ -172,6 +176,7 @@ final class SimEnumState {
         guard hovered == key else { return }
         pending?.cancel()
         hovered = nil
+        target = nil
         card = nil
     }
 
@@ -184,12 +189,26 @@ final class SimEnumState {
     func hideCard() {
         pending?.cancel()
         hovered = nil
+        target = nil
         card = nil
+    }
+
+    /// A mouse down or up in the window (content coordinates). A click that starts and ends on a value
+    /// in selectable code opens its enum; a drag that selects text doesn't.
+    func mouse(_ type: NSEvent.EventType, at point: CGPoint?, model: AppModel) {
+        guard let point else { return }
+        if type == .leftMouseDown { pressedAt = point; return }
+        defer { pressedAt = nil }
+        guard let target, target.key.hasPrefix("code."), let pressedAt, hypot(point.x - pressedAt.x, point.y - pressedAt.y) < 4 else { return }
+        let rect = target.anchor().insetBy(dx: -2, dy: -3)
+        guard rect.contains(point), rect.contains(pressedAt) else { return }
+        open(target.index, enumID: target.enumID, value: target.literal, model: model)
     }
 
     /// Opens the enum's detail over the stage with `value` (a code or a name) highlighted.
     func open(_ index: SimEnumIndex, enumID: String, value: String?, model: AppModel) {
-        hideCard()
+        pending?.cancel()
+        card = nil
         model.overlays.dismissMenu()
         let code = value.flatMap { index.def(enumID)?.resolve($0)?.value } ?? value
         detail = Detail(manifest: index.manifest.id, enumID: enumID, value: code)
@@ -204,14 +223,14 @@ final class SimEnumState {
     func close() { detail = nil }
 
     /// Snapshots: anchors offer themselves while a preview is pending; the first match shows its card.
-    func offerPreview(_ literal: String, show: @escaping () -> Void) {
+    func offerPreview(_ index: SimEnumIndex, enumID: String, literal: String, anchor: @escaping () -> CGRect) {
         guard previewLiteral == literal else { return }
-        previewAnchors.append((literal, show))
+        previewAnchors.append((index, enumID, literal, anchor))
     }
 
     func showPreview() {
         guard let first = previewAnchors.first else { return }
-        first.show()
+        show(index: first.index, enumID: first.enumID, literal: first.literal, anchor: first.anchor())
         previewLiteral = nil
         previewAnchors.removeAll()
     }
@@ -376,4 +395,12 @@ public enum SimEnumSnapshot {
     }
 
     public static func showPreview(_ model: AppModel) { SimEnumState.of(model).showPreview() }
+
+    /// Where the first anchor that holds the previewed literal is, in window coordinates (top-left origin).
+    public static func previewRect(_ model: AppModel) -> CGRect? { SimEnumState.of(model).previewAnchors.first?.anchor() }
+
+    /// Whether an enum's detail is open, and on which value.
+    public static func openDetail(_ model: AppModel) -> (enumID: String, value: String?)? {
+        SimEnumState.of(model).detail.map { ($0.enumID, $0.value) }
+    }
 }
