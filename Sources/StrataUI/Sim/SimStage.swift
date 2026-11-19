@@ -187,7 +187,7 @@ struct SimStage: View {
                 if let menu, !still {
                     canvas.onRightClick { point, global in
                         clearHover()
-                        let target = hit(point, camera)
+                        let target = renderer.selectable(hit(point, camera))
                         onSelect(target)
                         model.overlays.showMenu(menu(target), at: global)
                     }
@@ -265,6 +265,7 @@ struct SimStage: View {
             : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim))
         renderer.hoveredChip = SimComponentsHover.of(sim).chip
         renderer.drifted = SimDriftState.of(model).badges(for: sim)
+        renderer.links.reduceMotion = reduceMotion
         return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,
@@ -292,10 +293,11 @@ struct SimStage: View {
             onComponent(chip.node, chip.component)
             return StagePress(pans: false, empty: false, camera: camera)
         }
-        let target = hit(point, camera)
+        let raw = hit(point, camera)
+        let target = renderer.selectable(raw)
         if let target {
             onSelect(target)
-            if clicks == 2, case .node(let id) = target { onDive(id) }
+            if clicks == 2, case .node(let id) = raw { onDive(id) }
             if case .node(let id) = target, SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout) {
                 SimHowState.of(sim).revealFormula(of: id, over: SimDataState.of(sim).scroll)
             }

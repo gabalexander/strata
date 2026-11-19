@@ -131,6 +131,7 @@ private struct SimWorkspace: View {
         let renderer = SimSessions.renderer(for: sim)
         // The vertical/horizontal switch covers every level of the map, so a level opened since runs that way too.
         renderer.direct(SimWorkspace.direction(of: sim, in: model), auto: sim.manifest.layout == .auto, animated: false)
+        renderer.setLinks(SimWorkspace.links(of: sim, in: model), auto: sim.manifest.layout == .auto, animated: false)
         _renderer = State(initialValue: renderer)
         _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
         // Ask stays the open tab across the levels of a map (a link that dives keeps the answer in view).
@@ -142,12 +143,26 @@ private struct SimWorkspace: View {
         var actions = SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive)
         actions.tidy = tidyAction
         actions.flip = flip
+        actions.links = setLinks
         return actions
     }
 
     /// Which way the map runs on the stage: the switch's choice for it, else the level's own direction.
     static func direction(of sim: Simulation, in model: AppModel) -> FlowDirection {
         model.layoutDirections[sim.manifest.id] ?? sim.level.direction ?? .right
+    }
+
+    /// The map's Links options (SimStageLinks.swift): the toolbar's Links control, else the defaults.
+    static func links(of sim: Simulation, in model: AppModel) -> StageLinkOptions {
+        model.linkOptions[sim.manifest.id] ?? StageLinkOptions()
+    }
+
+    /// The Links control: every level of the map draws its links this way from now on (remembered across
+    /// launches, all but "Show all links").
+    private func setLinks(_ options: StageLinkOptions) {
+        model.overlays.dismissMenu()
+        model.linkOptions[sim.manifest.id] = options
+        renderer.setLinks(options, auto: sim.manifest.layout == .auto, animated: !reduceMotion)
     }
 
     /// The vertical/horizontal switch: every level of the map runs the other way from now on (remembered
@@ -201,7 +216,7 @@ private struct SimWorkspace: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
-                               tidy: tidyAction, flip: flip, still: snapshot != nil)
+                               tidy: tidyAction, flip: flip, links: { actions.linkItems(header: true) }, still: snapshot != nil)
                         .equatable()
                         .frame(width: columnWidth, height: 44)
                     Rectangle().fill(Theme.border).frame(height: 1)
@@ -422,6 +437,12 @@ private struct SimWorkspace: View {
         if flags == [.command, .option], key == "i" { model.inspectorVisible.toggle(); return true }
         if flags == [.command, .option], key == "l" || event.keyCode == 37 { tidy(); return true }
         if flags == [.command, .option], key == "v" || event.keyCode == 9 { flip(); return true }
+        if flags == [.command, .option], key == "a" || event.keyCode == 0 {
+            var options = Self.links(of: sim, in: model)
+            options.showAll.toggle()
+            setLinks(options)
+            return true
+        }
         guard flags == .command || flags == [.command, .shift] && key == "+" else { return false }
         switch key {
         case "r": sim.reset()
@@ -447,6 +468,8 @@ private struct SimToolbar: View, Equatable {
     var tidy: (() -> Void)?
     /// The vertical/horizontal switch.
     var flip: (() -> Void)?
+    /// The Links control's menu items.
+    var links: (() -> [MenuItem])?
     var still = false
 
     /// A selection change re-renders the workspace; the toolbar shows none of it. Its closures act on
@@ -480,6 +503,9 @@ private struct SimToolbar: View, Equatable {
                     let down = SimWorkspace.direction(of: sim, in: model) == .down
                     SimButton(title: down ? "Lay out left to right" : "Lay out top to bottom", icon: SimActions.flipIcon,
                               iconOnly: true, active: down, action: flip)
+                }
+                if let links {
+                    SimLinksButton(options: SimWorkspace.links(of: sim, in: model), overlays: model.overlays, items: links)
                 }
                 if !model.dockVisible {
                     SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true) {

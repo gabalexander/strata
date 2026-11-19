@@ -65,7 +65,7 @@ Everything lives under `~/.strata/` (`STRATA_HOME` overrides it):
 - `sims/`: user and agent manifests, live-reloaded;
 - `vault/`: markdown notes;
 - `config.yaml`;
-- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch).
+- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch and Links options).
 - `ask/`: Ask history, one JSON Lines file per map (`<id>.jsonl`), and `settings.json` (the in-app
   switch and the maps whose privacy notice was seen). The directory is 0700.
 - `drift/<id>.json`: the last drift check of each map, with the repo HEAD it saw and a fingerprint of the

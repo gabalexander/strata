@@ -92,8 +92,10 @@ public enum EdgeRouter {
         /// Where auto layout reserved this edge's track in each column it passes (stage y), if it did; in
         /// each row it passes (stage x) for a top-to-bottom level.
         public let via: [CGFloat]
-        public init(id: String, from: String, to: String, label: String?, via: [CGFloat] = []) {
-            self.id = id; self.from = from; self.to = to; self.label = label; self.via = via
+        /// Its label is placed after the others: it shows only now and then (an edge folded into a bundle).
+        public var later = false
+        public init(id: String, from: String, to: String, label: String?, via: [CGFloat] = [], later: Bool = false) {
+            self.id = id; self.from = from; self.to = to; self.label = label; self.via = via; self.later = later
         }
     }
 
@@ -154,14 +156,17 @@ public enum EdgeRouter {
             for index in regions.indices { labelRects[index] = clearLabel(labelRects[index], in: regions[index].rect, lines: lines) }
         }
 
-        // 5. Labels, once every line is known: off cards, off other labels, and off other lines when possible.
+        // 5. Labels, once every line is known: off cards, off other labels, and off other lines when possible. The
+        // labels that show all the time go first.
         var placed: [CGRect] = []
         let obstacles = cards.map(\.rect)
-        for index in routes.indices {
-            guard let request = edges.first(where: { $0.id == routes[index].edge }), let text = request.label, !text.isEmpty else { continue }
+        let byID = Dictionary(edges.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let order = routes.indices.filter { byID[routes[$0].edge]?.later != true } + routes.indices.filter { byID[routes[$0].edge]?.later == true }
+        for index in order {
+            guard let request = byID[routes[index].edge], let text = request.label, !text.isEmpty else { continue }
             let others = lines.indices.filter { $0 != index }.map { lines[$0] }
             placeLabel(&routes[index], width: min(maxLabel, CGFloat(LayoutMetrics.pillWidth(text))), plan: plans[index],
-                       obstacles: obstacles, labels: labelRects, lines: others, placed: &placed)
+                       obstacles: obstacles, labels: labelRects, lines: others, placed: &placed, optional: request.later)
         }
         return Routing(routes: routes, labels: labelRects)
     }
@@ -503,8 +508,9 @@ public enum EdgeRouter {
 
     /// Picks the spot along the route for the label: no card, no other label, nearest the preferred
     /// spot (the middle of the longest straight run, or of the middle bend), and as little truncation as possible.
+    /// An `optional` label that finds no spot clear of cards and other labels gets none.
     static func placeLabel(_ route: inout EdgeRoute, width: CGFloat, plan: Plan, obstacles: [CGRect], labels: [CGRect],
-                           lines: [[CGPoint]], placed: inout [CGRect]) {
+                           lines: [[CGPoint]], placed: inout [CGRect], optional: Bool = false) {
         let boxes = lines.map { line in line.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) } }
         if case .loop = plan { placed.append(CGRect(x: route.label!.x - 36, y: route.label!.y - 8, width: 72, height: 16)); return }
         let points = route.polyline(curveSteps: 24)
@@ -578,7 +584,7 @@ public enum EdgeRouter {
             for (line, box) in zip(lines, boxes) where box.intersects(pill) && LayoutQuality.polyline(line, crosses: pill) { score += 45 }
             if best.map({ score < $0.score }) ?? true { best = (score, candidate.center, candidate.width) }
         }
-        guard let best else { return }
+        guard let best, !optional || best.score < 900 else { return }
         route.label = best.center
         route.labelWidth = max(best.width, 24)
         placed.append(CGRect(x: best.center.x - route.labelWidth / 2, y: best.center.y - 8, width: route.labelWidth, height: 16))

@@ -12,13 +12,16 @@ struct SimActions {
     var tidy: (() -> Void)?
     /// The vertical/horizontal switch for the whole map; nil where it isn't offered.
     var flip: (() -> Void)?
+    /// Stores and applies the map's Links options; nil where they aren't offered.
+    var links: ((StageLinkOptions) -> Void)?
 
     func palette(selection: StageSelection? = nil) -> [MenuItem] {
         var items = [
             play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() },
             command("Step simulation", icon: "forward.frame", shortcut: ".") { sim.pauseAndStep() },
             fitItem,
-        ] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? []) + sim.level.scenarios.map(scenarioItem)
+        ] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? []) + linkItems(header: false)
+            + sim.level.scenarios.map(scenarioItem)
             + sim.level.flows.filter { !$0.isConsumer }.map(sendItem)
             + sim.level.nodes.filter(\.canDeepDive).map { node in
                 command("Deep dive into \(node.label)", icon: "square.3.layers.3d") { dive(node) }
@@ -206,6 +209,12 @@ struct SimActions {
     }
 
     static let flipIcon = "arrow.down.square"
+
+    /// The Links control's switches for this map (SimLinksMenus), for the toolbar's menu and ⌘K.
+    func linkItems(header: Bool) -> [MenuItem] {
+        guard let links else { return [] }
+        return SimLinksMenus.items(model.linkOptions[sim.manifest.id] ?? StageLinkOptions(), set: links, header: header)
+    }
 
     private func sendItem(_ flow: Flow) -> MenuItem {
         command("Send \(flow.label)", icon: "paperplane") { sim.send(flow.id) }

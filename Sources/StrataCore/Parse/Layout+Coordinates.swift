@@ -149,7 +149,7 @@ extension LayeredGraph {
         var score = 0.0
         for (index, link) in links.enumerated() {
             let chain = chains[index]
-            guard zip(chain, chain.dropFirst()).allSatisfy({ abs(y[$0] - y[$1]) < 0.5 }) else { continue }
+            guard !chain.isEmpty, zip(chain, chain.dropFirst()).allSatisfy({ abs(y[$0] - y[$1]) < 0.5 }) else { continue }
             score += 1 + 0.25 * Double(min(4, reach[link.head]))
         }
         // The spine runs straight in every candidate it can; one bent by groups reads worst.
@@ -418,7 +418,8 @@ extension LayeredGraph {
         for l in layers.indices.dropLast() {
             var channel = Self.minimumChannel
             for (index, link) in links.enumerated() {
-                let chain = chains[index]
+                // A bundle's member has no lane, but its pill shows when it leaves the bundle (in focus).
+                let chain = folded.contains(index) && layer[link.tail] + 1 == layer[link.head] ? [link.tail, link.head] : chains[index]
                 for (a, b) in zip(chain, chain.dropFirst()) where vertices[a].layer == l {
                     channel = max(channel, 78 + min(70, abs(y[a] - y[b]) * 0.09))
                     if chain.count == 2 && link.label > 0 { channel = max(channel, link.label + 30) }

@@ -14,9 +14,11 @@ enum AutoLayout {
         var issues: [DiagramLayout.Issue]
     }
 
-    /// `hints` is the direction the level's positions were written for.
-    static func run(_ level: Level, direction: FlowDirection = .right, hints: FlowDirection = .right) -> Result {
-        var graph = LayeredGraph(level: level, direction: direction, hints: hints)
+    /// `hints` is the direction the level's positions were written for. With `bundled`, edges the stage draws
+    /// as one link (EdgeBundling) take one lane between them instead of one each.
+    static func run(_ level: Level, direction: FlowDirection = .right, hints: FlowDirection = .right, bundled: Bool = false) -> Result {
+        var graph = LayeredGraph(level: level, direction: direction, hints: hints,
+                                 bundles: bundled ? EdgeBundling.bundles(in: level) : [])
         guard !graph.ids.isEmpty else {
             return Result(positions: graph.placeNotes(cards: [:], regions: []), issues: [])
         }
@@ -97,13 +99,17 @@ struct LayeredGraph {
     /// Top to bottom only (Layout+Down.swift): a side node sits in its caller's row, next to it.
     var sideOf: [Int: Int] = [:]
     var flat: Set<Int> = []        // links between a side node and its caller, inside one layer
+    /// Edges the stage draws as one link (EdgeBundling), as link indices per bundle, and the members that
+    /// lay out without a lane of their own: all but the one from the deepest caller, which stands for them.
+    var bundled: [[Int]] = []
+    var folded: Set<Int> = []
     /// The main path drawn straight (Layout+Spine.swift): its nodes, its vertices layer by layer, and the
     /// spine nodes a group took in for layout.
     var spineNodes: [Int] = []
     var spine: [Int] = []
     var adoptedGroups: [Int: Int] = [:]
 
-    init(level: Level, direction: FlowDirection = .right, hints hintDirection: FlowDirection = .right) {
+    init(level: Level, direction: FlowDirection = .right, hints hintDirection: FlowDirection = .right, bundles: [EdgeBundle] = []) {
         self.level = level
         self.direction = direction
         self.hintDirection = hintDirection
@@ -143,6 +149,8 @@ struct LayeredGraph {
             let text = edge.label ?? edge.protocol ?? ""
             links.append(Link(from: from, to: to, id: edge.id, label: text.isEmpty ? 0 : LayoutMetrics.pillWidth(text)))
         }
+        let linkIndex = Dictionary(links.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        bundled = bundles.map { $0.edges.compactMap { linkIndex[$0] } }.filter { $0.count > 1 }
 
         // Hint columns: hinted x positions that lie close together share a column.
         let xs = hints.compactMap { $0?.x }.sorted()
@@ -395,6 +403,11 @@ struct LayeredGraph {
         preds = Array(repeating: [], count: vertices.count)
         succs = preds
         chains = []
+        folded = []
+        for members in bundled {
+            let lead = members.max { (layer[links[$0].tail], -$0) < (layer[links[$1].tail], -$1) }!
+            folded.formUnion(members.filter { $0 != lead && !links[$0].reversed })
+        }
         // The layers each group's region covers (its members' layers, nested groups included).
         var cover: [Int: ClosedRange<Int>] = [:]
         for node in ids.indices {
@@ -416,6 +429,8 @@ struct LayeredGraph {
             return common
         }
         for (index, link) in links.enumerated() {
+            // A bundle's member keeps out of ordering and alignment: the bundle's lead lays out for it.
+            guard !folded.contains(index) else { chains.append([]); continue }
             let tail = link.tail, head = link.head
             var chain = [tail]
             if layer[tail] + 1 < layer[head] {
