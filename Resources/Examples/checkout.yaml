@@ -332,8 +332,15 @@ nodes:
         locks: row
         query: |
           -- name: CapturePayment :exec
-          UPDATE payments SET status = 'captured' WHERE id = $1 AND status = 'authorized';
-          UPDATE orders SET status = 20 WHERE id = $2 AND status = 10;
+          UPDATE payments
+          SET status = 'captured'
+          WHERE id = $1
+            AND status = 'authorized';
+
+          UPDATE orders
+          SET status = 20
+          WHERE id = $2
+            AND status = 10;
         code: services/orders/db/queries/payments.sql:8
         doc: Marks the payment captured and the order paid in one transaction.
       - id: decline-payment
@@ -346,8 +353,15 @@ nodes:
         locks: row
         query: |
           -- name: DeclinePayment :exec
-          UPDATE payments SET status = 'failed' WHERE id = $1 AND status = 'authorized';
-          UPDATE orders SET status = 90 WHERE id = $2 AND status = 10;
+          UPDATE payments
+          SET status = 'failed'
+          WHERE id = $1
+            AND status = 'authorized';
+
+          UPDATE orders
+          SET status = 90
+          WHERE id = $2
+            AND status = 10;
         code: services/orders/db/queries/payments.sql:21
         doc: The provider declined the capture, so the order is cancelled.
       - id: refund-payment
@@ -360,8 +374,15 @@ nodes:
         locks: row
         query: |
           -- name: RefundPayment :exec
-          UPDATE payments SET status = 'refunded' WHERE id = $1 AND status = 'captured';
-          UPDATE orders SET status = 90 WHERE id = $2 AND status IN (10, 20);
+          UPDATE payments
+          SET status = 'refunded'
+          WHERE id = $1
+            AND status = 'captured';
+
+          UPDATE orders
+          SET status = 90
+          WHERE id = $2
+            AND status IN (10, 20);
         code: services/orders/db/queries/payments.sql:34
         doc: A refund cancels the order unless it has already shipped.
         risks: [a refund after shipping leaves the order shipped; returns are handled outside this map]
@@ -421,8 +442,8 @@ nodes:
               locks: row
               query: |
                 -- in one pgx.Tx
-                INSERT INTO orders (id, user_id, total_cents, idempotency_key)
-                VALUES ($1, $2, $3, $4);
+                INSERT INTO orders (id, user_id, status, total_cents, idempotency_key)
+                VALUES ($1, $2, 10, $3, $4);
 
                 INSERT INTO order_items (order_id, sku, qty, price_cents)
                 SELECT $1, unnest($5::text[]), unnest($6::int[]), unnest($7::int[]);
