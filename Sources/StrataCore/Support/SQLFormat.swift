@@ -94,28 +94,39 @@ public enum SQLFormat {
         return nil
     }
 
-    /// Statements that name nothing to read or write: no `FROM`, `INTO`, `UPDATE` or `SET`, and not a
-    /// statement that needs none (`SELECT 1`, `SELECT pg_advisory_lock($1)`, `TRUNCATE`, `BEGIN`, …).
-    /// Usually a description or a fragment instead of the query. Empty when every statement is whole.
-    public static func statementsWithoutTarget(_ source: String) -> [String] {
+    /// Statements that aren't whole: a SELECT without FROM that computes nothing, an UPDATE without SET,
+    /// an INSERT without INTO, a DELETE without FROM, or a description in words ("update the order
+    /// status"). `SELECT 1`, `SELECT pg_advisory_lock($1)`, `TRUNCATE t` and `BEGIN` are whole. Empty
+    /// when every statement is.
+    public static func incompleteStatements(_ source: String) -> [String] {
         split(tokens(source)).compactMap { statement in
             let significant = statement.filter { !$0.isComment && $0.kind != .semicolon }
             guard let first = significant.first else { return nil }
-            let words = Set(significant.map(\.upper))
-            if !words.isDisjoint(with: ["FROM", "INTO", "UPDATE", "SET", "USING"]) { return nil }
+            let words = Set(significant.filter { $0.kind == .word }.map(\.upper))
             let verb = first.kind == .open && significant.count > 1 ? significant[1].upper : first.upper
-            if verb == "SELECT" || verb == "VALUES" {
-                // A SELECT without FROM is whole when it computes something: a literal, a parameter, a call.
-                let computes = significant.enumerated().contains { i, token in
-                    [.number, .string, .parameter].contains(token.kind)
-                        || token.kind == .word && i + 1 < significant.count && significant[i + 1].kind == .open
-                            && !statementVerbs.contains(token.upper)
-                }
-                if computes { return nil }
-            } else if targetFreeVerbs.contains(verb) {
-                return nil
+            // A SELECT without FROM is whole when it computes something: a literal, a parameter, a call.
+            let computes = significant.enumerated().contains { i, token in
+                [.number, .string, .parameter].contains(token.kind)
+                    || token.kind == .word && i + 1 < significant.count && significant[i + 1].kind == .open
+                        && !statementVerbs.contains(token.upper)
             }
-            return rawText(statement)
+            let whole: Bool
+            if words.contains("THE") {
+                whole = false
+            } else {
+                switch verb {
+                case "SELECT", "VALUES": whole = words.contains("FROM") || computes
+                case "WITH": whole = !words.isDisjoint(with: ["FROM", "INTO", "SET"]) || computes
+                case "INSERT", "REPLACE", "UPSERT": whole = words.contains("INTO") || words.contains("VALUES")
+                case "UPDATE": whole = words.contains("SET")
+                case "DELETE": whole = words.contains("FROM")
+                case "MERGE": whole = words.contains("INTO") || words.contains("USING")
+                case "FETCH", "MOVE": whole = words.contains("FROM") || words.contains("IN")
+                case "START": whole = words.contains("TRANSACTION")
+                default: whole = targetFreeVerbs.contains(verb)
+                }
+            }
+            return whole ? nil : rawText(statement)
         }
     }
 
@@ -344,8 +355,9 @@ public enum SQLFormat {
         "COMMENT", "USE",
     ]
 
-    /// Verbs whose statements name no table with FROM, INTO, UPDATE or SET and are still whole.
-    private static let targetFreeVerbs: Set<String> = statementVerbs.subtracting(["SELECT", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE"])
+    /// Verbs whose statements are whole without FROM, INTO or SET.
+    private static let targetFreeVerbs: Set<String> = statementVerbs.subtracting(
+        ["SELECT", "VALUES", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "FETCH", "MOVE", "START"])
 }
 
 // MARK: - Layout

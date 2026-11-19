@@ -19,9 +19,9 @@ extension LevelValidation {
             return
         }
         guard op.kind == .sql else { return }
-        if let partial = SQLFormat.statementsWithoutTarget(query).first {
+        if let partial = SQLFormat.incompleteStatements(query).first {
             let shown = partial.count > 48 ? String(partial.prefix(47)) + "…" : partial
-            location.diagnose("'\(shown)' reads no table and writes none (no FROM, INTO, UPDATE or SET); \(Self.copyHint)", .warning)
+            location.diagnose("'\(shown)' is not a whole statement (no FROM, INTO or SET where one belongs); \(Self.copyHint)", .warning)
         }
     }
 }

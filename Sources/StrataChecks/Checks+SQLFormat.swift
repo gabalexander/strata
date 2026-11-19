@@ -203,14 +203,18 @@ private let corpus = [
                          "SELECT arr[1:2] FROM t", "SELECT todo FROM tasks"]
             for query in whole { check(SQLFormat.placeholder(in: query) == nil, "a false placeholder in \(query)") }
         },
-        CheckCase(name: "sql format finds statements that name no table") {
-            check(SQLFormat.statementsWithoutTarget("SELECT id, name") == ["SELECT id, name"], "select without from")
-            check(SQLFormat.statementsWithoutTarget("get the user by id").count == 1, "prose")
-            check(SQLFormat.statementsWithoutTarget("BEGIN; SELECT id; COMMIT;") == ["SELECT id;"], "one statement of a transaction")
+        CheckCase(name: "sql format finds statements that are not whole") {
+            check(SQLFormat.incompleteStatements("SELECT id, name") == ["SELECT id, name"], "select without from")
+            check(SQLFormat.incompleteStatements("BEGIN; SELECT id; COMMIT;") == ["SELECT id;"], "one statement of a transaction")
+            let partial = ["get the user by id", "update the order status", "set the status to paid", "fetch user by email",
+                           "UPDATE orders", "DELETE orders WHERE id = $1", "INSERT orders", "SELECT *", "start campaign"]
+            for query in partial { check(SQLFormat.incompleteStatements(query).count == 1, "missed \(query)") }
             let whole = ["SELECT 1", "SELECT now()", "SELECT pg_try_advisory_lock(hashtext($1))", "SELECT $1::int", "BEGIN",
-                         "TRUNCATE outbox", "LOCK TABLE t IN EXCLUSIVE MODE", "NOTIFY jobs", "VALUES (1, 2)"] + corpus
+                         "TRUNCATE outbox", "LOCK TABLE t IN EXCLUSIVE MODE", "NOTIFY jobs", "VALUES (1, 2)", "UPDATE t SET a = 1",
+                         "DELETE FROM t", "INSERT INTO t DEFAULT VALUES", "SET LOCAL statement_timeout = '5s'", "START TRANSACTION",
+                         "FETCH 10 FROM cur"] + corpus
             for query in whole {
-                check(SQLFormat.statementsWithoutTarget(query).isEmpty, "flagged a whole query: \(query) → \(SQLFormat.statementsWithoutTarget(query))")
+                check(SQLFormat.incompleteStatements(query).isEmpty, "flagged a whole query: \(query) → \(SQLFormat.incompleteStatements(query))")
             }
         },
         sqlFinding("an elided query", "{id: a, kind: sql, label: A, target: db, query: \"SELECT ...\"}", path: "nodes.api.ops.a.query",
@@ -218,7 +222,9 @@ private let corpus = [
         sqlFinding("a placeholder query", "{id: a, kind: sql, label: A, target: db, query: \"<query>\"}", path: "nodes.api.ops.a.query",
                    "looks elided ('<query>')"),
         sqlFinding("a described query", "{id: a, kind: sql, label: A, target: db, query: \"load the order with its items\"}",
-                   path: "nodes.api.ops.a.query", "reads no table and writes none (no FROM, INTO, UPDATE or SET)"),
+                   path: "nodes.api.ops.a.query", "is not a whole statement (no FROM, INTO or SET where one belongs)"),
+        sqlFinding("an UPDATE described in words", "{id: a, kind: sql, label: A, target: db, query: \"update the order status\"}",
+                   path: "nodes.api.ops.a.query", "'update the order status' is not a whole statement"),
         sqlFinding("a sql op without a query", "{id: a, kind: sql, label: A, target: db}", path: "nodes.api.ops.a",
                    "this sql op has no query yet; copy the full query verbatim"),
         sqlFinding("an elided search query", "{id: a, kind: search, label: A, target: db, query: \"SELECT … FROM docs\"}",
