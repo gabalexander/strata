@@ -29,6 +29,7 @@ import StrataCore
             SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", branch: "leave", step: 9)
         },
         howStateScene(),
+        howKeysScene(size: size),
         howHoverScene(size: size),
         howScene("how-formula-section", size: CGSize(width: 1400, height: 1500), selected: "scheduler"),
         howScene("how-overview", size: size, manifest: "checkout", path: ["orders"], selected: nil),
@@ -69,6 +70,35 @@ import StrataCore
         let sim = Simulation(manifest: manifest)
         SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", branch: "crash", step: 8, progress: 0.7)
         return SimHowSnapshot.statePanel(sim)
+    }
+}
+
+/// The real window: the player opened from the start, then → three times through the stage's key
+/// handling, which lands on step 3 (the shard ranking).
+@MainActor private func howKeysScene(size: CGSize) -> Scene {
+    Scene(name: "how-player-keys", size: size, hosted: true) {
+        let manifest = howManifest("valkey-roster")
+        let model = howModel(manifest)
+        model.open(.sim(manifest.id, path: []))
+        model.sidebarVisible = false
+        let sim = Simulation(manifest: manifest)
+        sim.playing = false
+        model.sessions[AppModel.sessionKey(manifest.id, [])] = sim
+        SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", step: 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { howPress([124, 124, 124]) }
+        return AnyView(RootView(model: model, fixtureEntries: model.library.entries, fixtureNotes: [:]))
+    }
+}
+
+@MainActor private func howPress(_ keys: [UInt16]) {
+    guard let window = NSApp.windows.last else { return }
+    for key in keys {
+        let arrow = String(UnicodeScalar(key == 124 ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)!)
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
+                                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                           context: nil, characters: arrow, charactersIgnoringModifiers: arrow,
+                                           isARepeat: false, keyCode: key) else { continue }
+        NSApp.sendEvent(event)
     }
 }
 

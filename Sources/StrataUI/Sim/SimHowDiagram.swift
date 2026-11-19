@@ -300,7 +300,7 @@ struct SimHowCanvasPainter {
         var seen: Set<Double> = []
         for (index, time) in layout.times.enumerated() where seen.insert(time).inserted {
             let y = layout.rows[index]
-            guard abs(y - now) > 13 else { continue }   // the clock pill shows this time
+            guard abs(y - now) > 22 else { continue }   // the clock pill shows this time
             var tick = Path()
             tick.move(to: CGPoint(x: axis - 4, y: y))
             tick.addLine(to: CGPoint(x: axis, y: y))
