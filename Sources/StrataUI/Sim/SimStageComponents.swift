@@ -23,12 +23,13 @@ extension StageLayout {
     static let chipRowTop: CGFloat = 42
     static let chipHeight: CGFloat = 13
 
-    /// 168 × 64, and 16 pt taller for a card with a row of component chips.
+    /// 168 × 64, and 16 pt taller for a card with a row of component chips. LayoutMetrics holds the sizes,
+    /// so auto layout, validation and the edge router make room for the taller cards too.
     static func cardSize(for node: Node) -> CGSize {
-        CGSize(width: 168, height: hasChips(node) ? 80 : 64)
+        CGSize(width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight(for: node))
     }
 
-    static func hasChips(_ node: Node) -> Bool { node.kind != .note && !node.components.isEmpty }
+    static func hasChips(_ node: Node) -> Bool { node.hasComponentChips }
 }
 
 extension StageRenderer {

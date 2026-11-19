@@ -15,8 +15,24 @@ public enum LayoutMetrics {
     public static let groupTop: Double = 29
     public static let groupBottom: Double = 16
 
+    /// A card that lists its processes as chips (`Node.hasComponentChips`) is this much taller.
+    public static let chipCardHeight: Double = 80
+
     public static func card(at point: GridPoint) -> CGRect {
         CGRect(x: point.x * column + origin, y: point.y * row + origin, width: cardWidth, height: cardHeight)
+    }
+
+    /// The height of `node`'s card: 64, or 80 with a row of component chips.
+    public static func cardHeight(for node: Node) -> Double {
+        node.hasComponentChips ? chipCardHeight : cardHeight
+    }
+
+    /// The card of `node` at grid point `point`, as the stage draws it. A taller card stays centred on
+    /// the row of a plain one, so the edges and ports around it stay level.
+    public static func card(for node: Node, at point: GridPoint) -> CGRect {
+        let height = cardHeight(for: node)
+        return CGRect(x: point.x * column + origin, y: point.y * row + origin - (height - cardHeight) / 2,
+                      width: cardWidth, height: height)
     }
 
     /// An estimate of the width of an edge pill (10 pt mono) holding `text`, so the core can make

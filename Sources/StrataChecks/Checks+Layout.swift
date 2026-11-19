@@ -176,6 +176,23 @@ import StrataCore
             let others = cardRects(noted.root).filter { $0.id != "memo" }.map(\.rect)
             check(!others.contains { $0.insetBy(dx: -10, dy: -10).intersects(note) }, "the note crowds a card")
         },
+        CheckCase(name: "layout makes room for taller cards with component chips") {
+            let text = fanManifest(4).replacingOccurrences(of: "  - { id: s1, kind: service }", with: """
+                  - id: s1
+                    kind: service
+                    inside: {nodes: [{id: api, kind: service}, {id: worker, kind: worker}]}
+                """)
+            guard let manifest = parsed(text), let chips = manifest.root.node("s1"), let at = chips.at else {
+                check(false, "chips fixture"); return
+            }
+            check(chips.hasComponentChips && LayoutMetrics.cardHeight(for: chips) == LayoutMetrics.chipCardHeight, "s1 lists its processes")
+            let card = LayoutMetrics.card(for: chips, at: at)
+            check(card.height == LayoutMetrics.chipCardHeight && card.midY == LayoutMetrics.card(at: at).midY, "a chip card stays centred on its row")
+            let column = cardRects(manifest.root).filter { $0.id.hasPrefix("s") && $0.id != "src" }.map(\.rect).sorted { $0.minY < $1.minY }
+            let gaps = zip(column, column.dropFirst()).map { $1.minY - $0.maxY }
+            let plain = LayoutMetrics.row - LayoutMetrics.cardHeight
+            check(column.count == 4 && gaps.allSatisfy { $0 >= plain - 0.5 }, "gaps around the chip card: \(gaps)")
+        },
     ]
 }
 
@@ -243,8 +260,9 @@ private func levels(_ level: Level, path: String) -> [(String, Level)] {
 
 // MARK: - Geometry
 
+/// Cards as the stage draws them: 80 pt tall, centred on the row, for a node with component chips.
 private func cardRects(_ level: Level) -> [(id: String, rect: CGRect)] {
-    level.nodes.compactMap { node in node.at.map { (node.id, LayoutMetrics.card(at: $0)) } }
+    level.nodes.compactMap { node in node.at.map { (node.id, LayoutMetrics.card(for: node, at: $0)) } }
 }
 
 private func groupMembers(_ group: String, in level: Level) -> Set<String> {

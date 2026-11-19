@@ -50,6 +50,7 @@ struct LayeredGraph {
     var ids: [String] = []
     var kinds: [NodeKind] = []
     var hints: [GridPoint?] = []
+    var heights: [Double] = []     // card heights (taller with component chips)
     var hintColumn: [Int?] = []
     var nodeGroup: [Int?] = []
     var groupIDs: [String] = []
@@ -76,6 +77,7 @@ struct LayeredGraph {
             ids.append(node.id)
             kinds.append(node.kind)
             hints.append(node.at)
+            heights.append(LayoutMetrics.cardHeight(for: node))
         }
 
         var groupIndex: [String: Int] = [:]
@@ -343,7 +345,7 @@ struct LayeredGraph {
     /// Real vertices, a chain of dummies for every edge spanning more than one layer, and fillers that
     /// hold a group's place in the layers it crosses without a member.
     mutating func buildVertices() {
-        vertices = ids.indices.map { Vertex(node: $0, layer: layer[$0], group: nodeGroup[$0], height: LayoutMetrics.cardHeight) }
+        vertices = ids.indices.map { Vertex(node: $0, layer: layer[$0], group: nodeGroup[$0], height: heights[$0]) }
         preds = Array(repeating: [], count: vertices.count)
         succs = preds
         chains = []

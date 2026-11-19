@@ -9,4 +9,8 @@ extension Node {
     public var components: [Node] {
         inside?.nodes.filter { Self.componentKinds.contains($0.kind) } ?? []
     }
+
+    /// Whether this node's card lists its processes as a row of chips, which makes it taller
+    /// (`LayoutMetrics.cardHeight(for:)`).
+    public var hasComponentChips: Bool { kind != .note && !components.isEmpty }
 }

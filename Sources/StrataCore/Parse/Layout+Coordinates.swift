@@ -19,14 +19,18 @@ extension LayeredGraph {
         let y = candidates[scores.indices.max { (scores[$0], -$0) < (scores[$1], -$1) }!]
         let x = layerOffsets(y)
 
+        // Grid points name a plain card's corner; a taller card (component chips) is drawn centred on it.
         var rects: [String: CGRect] = [:]
+        var drawn: [String: CGRect] = [:]
         for (v, vertex) in vertices.enumerated() {
             guard let node = vertex.node else { continue }
-            rects[ids[node]] = CGRect(x: x[vertex.layer], y: y[v] - LayoutMetrics.cardHeight / 2,
-                                      width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight)
+            let rect = CGRect(x: x[vertex.layer], y: y[v] - LayoutMetrics.cardHeight / 2,
+                              width: LayoutMetrics.cardWidth, height: LayoutMetrics.cardHeight)
+            rects[ids[node]] = rect
+            drawn[ids[node]] = rect.insetBy(dx: 0, dy: -(vertex.height - LayoutMetrics.cardHeight) / 2)
         }
-        let regions = groupRegions(rects)
-        let all = rects.merging(noteRects(cards: rects, regions: regions)) { a, _ in a }
+        let regions = groupRegions(drawn)
+        let all = rects.merging(noteRects(cards: drawn, regions: regions)) { a, _ in a }
         let minX = all.values.map(\.minX).min() ?? 0, minY = all.values.map(\.minY).min() ?? 0
         var via: [String: [GridPoint]] = [:]
         for (index, link) in links.enumerated() where chains[index].count > 2 {

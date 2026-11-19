@@ -56,7 +56,7 @@ enum LayoutValidation {
 public enum LayoutQuality {
     static func cards(_ level: Level) -> [String: CGRect] {
         var rects: [String: CGRect] = [:]
-        for node in level.nodes { if let at = node.at, rects[node.id] == nil { rects[node.id] = LayoutMetrics.card(at: at) } }
+        for node in level.nodes { if let at = node.at, rects[node.id] == nil { rects[node.id] = LayoutMetrics.card(for: node, at: at) } }
         return rects
     }
 
@@ -66,7 +66,7 @@ public enum LayoutQuality {
         var result: [(String, String)] = []
         for (i, a) in placed.enumerated() {
             for b in placed[(i + 1)...] where a.at != b.at {
-                if LayoutMetrics.card(at: a.at!).insetBy(dx: 1, dy: 1).intersects(LayoutMetrics.card(at: b.at!)) {
+                if LayoutMetrics.card(for: a, at: a.at!).insetBy(dx: 1, dy: 1).intersects(LayoutMetrics.card(for: b, at: b.at!)) {
                     result.append((a.id, b.id))
                 }
             }
