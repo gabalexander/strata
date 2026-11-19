@@ -227,6 +227,7 @@ private struct SimWorkspace: View {
             updateNotes()
             appear()
             takeFocus()
+            if snapshot == nil { SimDriftState.of(model).ensure(sim.manifest) }
         }
         .onChange(of: model.vault.revision) { _, _ in updateNotes() }
         .onChange(of: SimFocus.of(model).request) { _, _ in takeFocus() }

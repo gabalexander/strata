@@ -22,6 +22,10 @@ Usage: strata <command>
   how <file|id> [--mechanism id] [--branch id]
                                           Print a mechanism step by step: time, who
                                           talks to whom, command and reply, state after
+  drift <file|id> [--repo PATH] [--kind code,sql,binaries,messaging,enums] [--json] [--quiet]
+                                          Compare a map with its repo: code references,
+                                          queries, binaries, topics and keys, enums.
+                                          Exit 0 clean, 1 drifted, 2 can't check
   schema                                  Print the manifest reference
   paths                                   Print local data paths
   --help                                  Show this help
@@ -80,6 +84,8 @@ private func run(_ arguments: [String]) throws -> Int32 {
         let args = try Arguments(remaining, options: ["--mechanism", "--branch"])
         try args.require(1, usage: "strata how <file|id> [--mechanism <id>] [--branch <id>]")
         return try printHow(args)
+    case "drift":
+        return driftCommand(remaining)
     case "schema":
         try Arguments(remaining).require(0, usage: "strata schema")
         guard let url = StrataResources.url("Docs/manifest.md") else { throw CLIError("manifest reference is missing") }
@@ -91,6 +97,7 @@ private func run(_ arguments: [String]) throws -> Int32 {
         print("sims\t\(StrataPaths.sims.path)")
         print("vault\t\(config.vaultURL.path)")
         print("config\t\(StrataPaths.config.path)")
+        print("drift\t\(DriftCache.directory.path)")
     default:
         throw CLIError("unknown command '\(command)'; run strata --help")
     }

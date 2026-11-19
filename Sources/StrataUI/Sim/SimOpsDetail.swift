@@ -59,6 +59,8 @@ struct SimOpDetail: View {
                 }
                 if !op.risks.isEmpty { risks }
                 if !op.facts.isEmpty { SimSection(title: "Facts") { SimOpsTable(rows: op.facts.map { ($0.key, $0.value) }) } }
+                SimDriftOpSection(model: model, sim: sim, level: entry.inherited ? Array(sim.path.dropLast()) : sim.path,
+                                  node: entry.node.id, op: op.id)
                 if !op.code.isEmpty {
                     SimSection(title: "Code") {
                         ForEach(op.code, id: \.self) { path in

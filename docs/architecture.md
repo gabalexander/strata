@@ -15,7 +15,7 @@ It is Swift 6.3 with SwiftUI and AppKit, built with SwiftPM and the Command Line
 | `StrataCore` | model, YAML parser, validation, layout, engine, library, vault, glossary. No UI imports | Foundation |
 | `StrataUI` | every view, the theme, overlays, the app model | StrataCore |
 | `StrataApp` | the executable: AppKit delegate, hidden windows, hotkey, menu bar, URL scheme | Core, UI |
-| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `schema`, `paths` | Core |
+| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `drift`, `schema`, `paths` | Core |
 | `StrataSnapshot` | renders scenes with fixture data to PNG, no screen permission needed | Core, UI |
 | `StrataChecks` | assertions, since XCTest is unavailable without Xcode | Core |
 
@@ -28,6 +28,9 @@ Sources/StrataCore/
   Model/Enums.swift           enum lookups, lifecycle order, usage, search; EnumOccurrences finds values in text
   Model/Mechanisms.swift      replays a how-it-works mechanism (state after each step) for the validator, CLI and player
   Model/Components.swift      the processes a node's deep dive runs, listed as chips on its card
+  Drift/                      compares a map with its repo (docs/manifest.md, Drift): DriftRepo indexes the
+                              repo (one lexer pass per Go file), DriftMap collects the map's facts, then
+                              DriftCode, DriftSQL, DriftBinaries, DriftMessaging, DriftEnums; DriftCache
   Engine/EngineTypes.swift    CONTRACT: what the engine hands the UI (SimFrame, NodeState, ...)
   Engine/Simulation.swift     engine (public API is the contract)
   Parse/                      YAML subset, manifest decoding + validation, commands, auto-layout, config
@@ -57,7 +60,9 @@ Everything lives under `~/.strata/` (`STRATA_HOME` overrides it):
 - `sims/`: user and agent manifests, live-reloaded;
 - `vault/`: markdown notes;
 - `config.yaml`;
-- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch).
+- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch);
+- `drift/<id>.json`: the last drift check of each map, with the repo HEAD it saw and a fingerprint of the
+  map file. `strata drift` writes it after a full check of a library map, and so does the app.
 
 Nothing about a work project goes into this repo.
 
@@ -85,6 +90,14 @@ Hidden mode:
   - the second click of a double-click dives into the node;
   - a drag from empty space pans, and a click on empty space clears the selection on mouse up;
   - the click that activates the window counts too.
+
+## Drift checks
+
+`Drift.check` is read-only, deterministic and synchronous. The app runs it with `Task.detached` at utility
+priority (SimDriftState) and never on the main thread. Opening a map reads its cache and compares the HEAD
+in `.git` (read from the files, no git process) and the map file's fingerprint. When either changed, the map
+is checked again. A repo that isn't on this Mac is noted once in the inspector, and nothing else runs.
+`STRATA_DRIFT_TIMING=1` prints the time of each pass to stderr.
 
 ## Ownership while agents build in parallel
 

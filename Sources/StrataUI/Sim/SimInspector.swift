@@ -68,6 +68,7 @@ struct SimInspector: View {
                     ForEach(sim.level.flows) { flow in flowCard(flow, selectable: true) }
                 }
             }
+            SimDriftOverview(model: model, sim: sim, select: select)
             SimSection(title: "Diagram legend") {
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
                           alignment: .leading, spacing: 9) {
@@ -130,6 +131,7 @@ struct SimInspector: View {
             }
             SimEnumInspectorRow(model: model, sim: sim, node: node)
             SimDataSections(model: model, sim: sim, terms: terms, node: node, selection: selection, select: select, pulse: pulse, still: still)
+            SimDriftNodeSection(model: model, sim: sim, node: node, select: select)
             SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, pulse: pulse, still: still)
             if node.kind != .note {
                 SimSection(title: "Live metrics") { live { nodeMetrics(node, nodeState(node)) } }

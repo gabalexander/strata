@@ -87,7 +87,7 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `category` | | library section: `messaging`, `network`, `data`, `distributed`, `patterns`, `platform`, `runtime`, `ai`, or any word (company maps often use the company or team name) |
 | `summary` | | one or two sentences for the library card |
 | `tags` | | list of strings |
-| `repo` | | absolute path (or `~/…`) of the code this describes; node `code:` paths are relative to it |
+| `repo` | | absolute path (or `~/…`) of the code this describes; node `code:` paths are relative to it, and `strata drift` compares the map with it ([Drift](#drift)) |
 | `glossaries` | | built-in glossary packs to import: `rabbitmq`, `kafka`, `http`, `grpc`, `postgres`, `postgres-internals`, `clickhouse`, `redis`, `elasticsearch`, `go`, `linux`, `tcp-udp`, `connections`, `cdn-dns`, `kubernetes`, `raft`, `replication`, `consistency`, `resilience`, `scaling`, `queueing`, `cpu-memory`, `llm` |
 | `terms` | | local glossary, see [Terms](#terms) |
 | `enums` | | value dictionaries such as status codes, see [Enums](#enums) |
@@ -664,6 +664,40 @@ enums:
 `strata enums <file|id> [--find <text>]` prints each enum's values and transitions
 (`3100 draft → 3200 scheduled (schedule, by campaigns/schedule)`), the columns linked to it and the
 ops that use it.
+
+## Drift
+
+Maps rot as the code moves on. `strata drift <file|id>` compares a map with the code at its `repo:` (or
+`--repo PATH`) and lists what no longer matches, so you can trust the map or have your agent refresh
+exactly the stale parts. It only reads the repo. It skips `vendor/`, `node_modules/`, `.git/` and other
+hidden dirs, build output, `testdata/`, generated code (`Code generated … DO NOT EDIT`) and files over 1 MB.
+
+| Kind | Compares | Reports |
+|---|---|---|
+| `code` | every `code:` (nodes, ops, mechanisms, steps, formulas, entities, enums). Where the context names a symbol (a sqlc `-- name:`, a symbol written after the path, a `` `Acquire()` `` in the doc), the line must still be at it | a missing file (error, with where it went: a file of the same name, or where its symbols are defined now); a line past the end; a line that moved off its symbol |
+| `sql` | each op's `query`: by sqlc `-- name:` in `.sql` files, otherwise by normalised text in the op's `code:` file, then in any `.sql` file or SQL string in Go (`"…" + "…"` joined) | a changed query (with a diff), a renamed one, a missing one; repo queries no op has, by file (sqlc ones are warnings, raw strings notes) |
+| `binaries` | `binary:` against Go `main` packages, Procfile entries and Dockerfile commands. `binary: "tool start worker"` checks the tool and each subcommand (cobra `Use:`, kingpin `Command`, urfave `Name:`, an `os.Args` switch) | a binary or subcommand that is gone; `cmd/*` mains and Procfile entries no node runs; subcommands declared next to mapped ones |
+| `messaging` | `topic`, `group` and `key` of publish and consume ops, and cache `key` patterns, against names in Go: broker calls (`QueueDeclare`, `ExchangeDeclare`, `QueueBind`, `Consume`, `Publish…`, NATS `Subscribe`, `Topic:` fields), constants named like queues or topics, Valkey and Redis key strings (`app:lock:%s` matches `app:lock:{name}`) | names the repo has that the map doesn't mention; names the map has that no string in the repo contains |
+| `enums` | each `enums:` entry against the definition with its values: a Go const block (explicit or `iota`), typed consts, a Postgres `CREATE TYPE … AS ENUM` (and `ADD VALUE`), a `CHECK (col IN (…))`. Its `code:` picks the block | values added in the code, values gone, and values renamed (when the map's names follow the code's) |
+
+- **SQL is normalised.** Comments, whitespace and keyword case don't count. `?`, `$1`, `:name`, `@name` and
+  `sqlc.arg(x)` are the same placeholder, and `BEGIN`/`COMMIT` are dropped. An example value where the code
+  has a placeholder still matches (`id IN (101, 102)` for `sqlc.slice(ids)`), but a literal that differs
+  from the code's is a change.
+- **Severity.** An error means the map points at something that is gone. A warning means something
+  changed, or the repo has something the map should show. A note is a heuristic worth a look.
+- **Freshness** is the share of checked map facts with no error or warning. Notes and repo items that
+  aren't on the map don't lower it.
+- **Output.** Findings are grouped by kind, and the same finding on several nodes prints once.
+  - `--json` gives each finding its map location (level path, node, op, mechanism, step, manifest line),
+    repo location, message, fix and diff: the input for a refresh.
+  - `--kind code,sql` checks only those kinds, and `--quiet` prints one line.
+  - Exit 0 when nothing drifted (notes alone don't count), 1 with errors or warnings, 2 when it can't
+    check (no `repo:`, a repo that isn't on this machine, an unknown manifest).
+- **In the app.** The last result per map is kept in `~/.strata/drift/<id>.json`, with the repo HEAD and a
+  fingerprint of the map file. Opening a map checks again in the background when either changed;
+  ⌘K "Check drift against the repo" runs a check now. Stale nodes get a small mark, and the inspector
+  lists the findings.
 
 ## Edges
 

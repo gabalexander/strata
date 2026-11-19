@@ -29,6 +29,8 @@ final class StageRenderer {
     @ObservationIgnored var hoveredChip: StageChip.Ref?
     /// In a deep dive, how many of the owner's ops map to each node (`InheritedOps`): its ops badge counts them.
     @ObservationIgnored var inheritedOps: [String: Int] = [:]
+    /// Nodes with drift findings on them or inside them (SimDriftState): each card gets a small mark.
+    @ObservationIgnored var drifted: [String: Int] = [:]
     static let tidyDuration = 0.55
 
     enum Lettering: Hashable {
@@ -353,7 +355,8 @@ final class StageRenderer {
         let glyph = CGRect(x: r.minX + 10, y: r.minY + 9, width: 28, height: 28)
         content.fill(Path(roundedRect: glyph, cornerRadius: Theme.radiusSmall), with: .color(tint.opacity(0.14)))
         symbol(node.icon ?? node.kind.symbol, at: CGPoint(x: glyph.midX, y: glyph.midY), size: 15, tint: tint, in: content)
-        let markerCount = CGFloat((note ? 1 : 0) + (state.health == .slow ? 1 : 0))
+        let drift = drifted[node.id, default: 0] > 0
+        let markerCount = CGFloat((note ? 1 : 0) + (state.health == .slow ? 1 : 0) + (drift ? 1 : 0))
         let x = r.minX + 46
         let titleWidth = r.maxX - 10 - x - markerCount * 15 - SimFormulaStage.reserved(node)
         content.draw(text(node.label, .node, width: titleWidth, in: content),
@@ -367,7 +370,9 @@ final class StageRenderer {
         }
         if note {
             symbol("note.text", at: CGPoint(x: statusX, y: r.minY + 16), size: 10, tint: Theme.muted, in: content)
+            statusX -= 15
         }
+        if drift { drawDriftMarker(at: CGPoint(x: statusX, y: r.minY + 16), in: content) }
 
         if node.kind == .note {
             if let doc = node.doc {

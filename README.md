@@ -92,6 +92,10 @@ The skill tells the agent how to survey a repo and write the manifest, and how t
 `strata validate` and `strata simulate` before it opens it in the app. The app reloads manifests
 live while you watch.
 
+When the code moves on, `strata drift <id>` lists what the map no longer matches: moved files, changed
+queries, new binaries, topics and status codes. The app marks the stale nodes. Ask the agent to refresh the
+map and it fixes exactly those parts.
+
 By hand:
 
 ```sh
@@ -99,6 +103,7 @@ strata new checkout --kind architecture   # starter manifest in ~/.strata/sims/c
 strata validate checkout                  # errors and warnings with line numbers and suggestions
 strata simulate checkout --seconds 30     # headless metrics per flow and node
 strata open checkout                      # show it in the app
+strata drift checkout                     # what no longer matches the code at its repo:
 strata schema                             # the full format reference
 ```
 
