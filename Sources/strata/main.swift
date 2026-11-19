@@ -22,6 +22,10 @@ Usage: strata <command>
   how <file|id> [--mechanism id] [--branch id]
                                           Print a mechanism step by step: time, who
                                           talks to whom, command and reply, state after
+  ask <file|id> "question" [--path a/b] [--node id] [--model m] [--budget bytes] [--digest]
+                                          Ask Claude about a map through your own Claude
+                                          Code CLI (read-only); --digest prints what would
+                                          be sent and sends nothing
   schema                                  Print the manifest reference
   paths                                   Print local data paths
   --help                                  Show this help
@@ -80,6 +84,9 @@ private func run(_ arguments: [String]) throws -> Int32 {
         let args = try Arguments(remaining, options: ["--mechanism", "--branch"])
         try args.require(1, usage: "strata how <file|id> [--mechanism <id>] [--branch <id>]")
         return try printHow(args)
+    case "ask":
+        let args = try Arguments(remaining, flags: ["--digest"], options: ["--path", "--node", "--model", "--budget"])
+        return try ask(args)
     case "schema":
         try Arguments(remaining).require(0, usage: "strata schema")
         guard let url = StrataResources.url("Docs/manifest.md") else { throw CLIError("manifest reference is missing") }

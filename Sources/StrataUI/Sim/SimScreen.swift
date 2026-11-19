@@ -133,7 +133,9 @@ private struct SimWorkspace: View {
         renderer.direct(SimWorkspace.direction(of: sim, in: model), auto: sim.manifest.layout == .auto, animated: false)
         _renderer = State(initialValue: renderer)
         _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
-        _tab = State(initialValue: snapshot?.dockTab ?? .controls)
+        // Ask stays the open tab across the levels of a map (a link that dives keeps the answer in view).
+        let askOpen = SimAskState.of(model, manifest: sim.manifest.id).tabOpen && !SimAskState.offInConfig(model)
+        _tab = State(initialValue: snapshot?.dockTab ?? (askOpen ? .ask : .controls))
     }
 
     private var actions: SimActions {
@@ -189,7 +191,9 @@ private struct SimWorkspace: View {
             let size = proxy.size
             let inspectorWidth = model.inspectorVisible ? min(Theme.inspectorWidth, max(175, size.width * 0.34)) : 0
             let columnWidth = max(0, size.width - (model.inspectorVisible ? inspectorWidth + 1 : 0))
-            let dockHeight = model.dockVisible ? min(222, max(133, size.height * 0.33)) : 0
+            // The Ask tab gets more room for its answer.
+            let dockHeight = !model.dockVisible ? 0 : tab == .ask ? min(440, max(222, size.height * 0.46))
+                : min(222, max(133, size.height * 0.33))
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
@@ -223,6 +227,7 @@ private struct SimWorkspace: View {
         .foregroundStyle(Theme.text)
         .background(Theme.bg)
         .background { SimPaletteCommands(actions: actions, selection: selection) }
+        .background { SimAskHooks(model: model, sim: sim, tab: $tab) }
         .onAppear {
             updateNotes()
             appear()

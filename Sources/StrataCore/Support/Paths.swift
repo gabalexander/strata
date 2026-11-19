@@ -11,6 +11,7 @@ public enum StrataPaths {
     public static var vault: URL { home.appendingPathComponent("vault") }
     public static var config: URL { home.appendingPathComponent("config.yaml") }
     public static var state: URL { home.appendingPathComponent("state.json") }   // window/UI state the app restores
+    public static var ask: URL { home.appendingPathComponent("ask") }             // Ask history per map, and its settings
 
     public static func expand(_ path: String) -> String { (path as NSString).expandingTildeInPath }
 }
