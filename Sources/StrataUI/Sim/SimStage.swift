@@ -8,16 +8,35 @@ import StrataCore
 final class StageViewport {
     var camera: StageCamera?
     var size = CGSize.zero
+    /// "Fit view" asked for the whole diagram, however small that makes it.
+    private var fitAll = false
+    /// The smallest zoom a level opens at: cards stay legible, and a large map opens on its sources.
+    static let readableZoom: CGFloat = 0.62
 
     func fitted(_ layout: StageLayout, in size: CGSize, compact: Bool) -> StageCamera {
         StageCamera(fitting: layout.bounds, in: size, inset: compact ? 14 : 32)
     }
 
-    func current(_ layout: StageLayout, in size: CGSize, compact: Bool) -> StageCamera {
-        camera ?? fitted(layout, in: size, compact: compact)
+    /// Fits the diagram when that keeps it readable; otherwise opens at a readable zoom on the left
+    /// (where flows start), centred vertically.
+    func opening(_ layout: StageLayout, in size: CGSize, compact: Bool) -> StageCamera {
+        let fit = fitted(layout, in: size, compact: compact)
+        guard !compact, !fitAll, fit.zoom < Self.readableZoom, size.width > 0 else { return fit }
+        let zoom = Self.readableZoom, bounds = layout.bounds
+        var camera = StageCamera(zoom: zoom)
+        let top = bounds.height * zoom <= size.height - 64 ? size.height / 2 - bounds.midY * zoom : 32 - bounds.minY * zoom
+        camera.offset = CGPoint(x: 32 - bounds.minX * zoom, y: top)
+        return camera
     }
 
-    func fit() { camera = nil }
+    func current(_ layout: StageLayout, in size: CGSize, compact: Bool) -> StageCamera {
+        camera ?? opening(layout, in: size, compact: compact)
+    }
+
+    func fit() {
+        camera = nil
+        fitAll = true
+    }
 
     func zoom(_ factor: CGFloat, at point: CGPoint? = nil, layout: StageLayout, compact: Bool) {
         var next = current(layout, in: size, compact: compact)
@@ -198,7 +217,7 @@ struct SimStage: View {
             paint(camera)
         } else {
             let _ = sim.playing ? 0 : sim.revision
-            TimelineView(.animation(paused: !visible || !sim.playing)) { tick in
+            TimelineView(.animation(paused: !visible || !sim.playing && !renderer.animating)) { tick in
                 paint(camera)
                     .onChange(of: tick.date) { _, date in clock.advance(to: date, in: sim, pulse: pulse) }
             }

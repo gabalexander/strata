@@ -134,7 +134,19 @@ private struct SimWorkspace: View {
     }
 
     private var actions: SimActions {
-        SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive)
+        var actions = SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive)
+        actions.tidy = tidy
+        return actions
+    }
+
+    /// "Tidy layout": auto layout for this level, cards gliding to their new places, then fit the view.
+    private func tidy() {
+        model.overlays.dismissMenu()
+        if renderer.tidy(animated: !reduceMotion) {
+            viewport.fit()
+        } else {
+            model.overlays.toast("Already tidy")
+        }
     }
 
     var body: some View {
@@ -149,7 +161,7 @@ private struct SimWorkspace: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
-                               still: snapshot != nil)
+                               tidy: tidy, still: snapshot != nil)
                         .equatable()
                         .frame(width: columnWidth, height: 44)
                     Rectangle().fill(Theme.border).frame(height: 1)
@@ -333,6 +345,7 @@ private struct SimWorkspace: View {
             }
         }
         if flags == [.command, .option], key == "i" { model.inspectorVisible.toggle(); return true }
+        if flags == [.command, .option], key == "l" || event.keyCode == 37 { tidy(); return true }
         guard flags == .command || flags == [.command, .shift] && key == "+" else { return false }
         switch key {
         case "r": sim.reset()
@@ -354,6 +367,7 @@ private struct SimToolbar: View, Equatable {
     let up: (Int) -> Void
     /// Set when this manifest is another manifest's `detail:` deep dive: that level's title and the way out.
     var parent: (title: String, out: () -> Void)?
+    var tidy: () -> Void = {}
     var still = false
 
     /// A selection change re-renders the workspace; the toolbar shows none of it. Its closures act on
@@ -379,6 +393,7 @@ private struct SimToolbar: View, Equatable {
             .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
             playback
             HStack(spacing: 4) {
+                SimButton(title: "Tidy layout", icon: SimActions.tidyIcon, iconOnly: true, action: tidy)
                 if !model.dockVisible {
                     SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true) {
                         model.dockVisible = true
