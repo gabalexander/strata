@@ -51,10 +51,10 @@ struct SimOpDetail: View {
                 toolbar
                 if let doc = op.doc { SimMarkdown(source: doc, model: model, terms: terms) }
                 live
-                kindBody.simEnumTables(op, on: entry.node.id, level: sim.level)
+                kindBody.simEnumTables(op, on: entry.node.id, level: entry.inherited ? index.inheritance?.ownerLevel ?? sim.level : sim.level)
                 if let formula = op.formula { SimFormulaSection(formula: formula, model: model, terms: terms, actions: actions) }
                 if !op.how.isEmpty {
-                    SimHowSection(mechanisms: op.how, node: entry.node.id, op: op.id, owner: op.label, model: model, sim: sim,
+                    SimHowSection(mechanisms: op.how, node: entry.ref.node, op: op.id, owner: op.label, model: model, sim: sim,
                                   terms: terms, actions: actions)
                 }
                 if !op.risks.isEmpty { risks }
@@ -136,9 +136,9 @@ struct SimOpDetail: View {
         return HStack(spacing: 4) {
             if op.direction == .inbound && op.kind != .consume {
                 Text(verb).foregroundStyle(Theme.muted)
-                SimOpsNodeLink(title: entry.node.label) { select(.node(entry.node.id)) }
+                SimOpsNodeLink(title: entry.node.label, action: selectOwner)
             } else {
-                SimOpsNodeLink(title: entry.node.label) { select(.node(entry.node.id)) }
+                SimOpsNodeLink(title: entry.node.label, action: selectOwner)
                 Text(verb).foregroundStyle(Theme.muted)
                 if let peer {
                     Image(systemName: op.kind == .consume ? "arrow.left" : "arrow.right")
@@ -151,6 +151,14 @@ struct SimOpDetail: View {
         }
         .font(Theme.ui(12))
         .lineLimit(1)
+    }
+
+    /// Selects the op's node; an inherited op's node is the one this level is inside, whose ops the
+    /// overview lists.
+    private func selectOwner() {
+        guard entry.inherited else { select(.node(entry.node.id)); return }
+        state.close()
+        select(nil)
     }
 
     private var toolbar: some View {
@@ -176,7 +184,7 @@ struct SimOpDetail: View {
 
     private var live: some View {
         SimLive(sim: sim, pulse: pulse) {
-            let metrics = sim.opMetrics(node: entry.node.id, op: entry.op.id)
+            let metrics = sim.opMetrics(node: entry.ref.node, op: entry.op.id)
             if metrics.referenced {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
@@ -185,7 +193,7 @@ struct SimOpDetail: View {
                         stat("p50", SimFormat.latency(metrics.p50))
                         stat("p99", SimFormat.latency(metrics.p99))
                     }
-                    SimSparkline(points: sim.opSeries(node: entry.node.id, op: entry.op.id, metric: "rate"), tint: Theme.good).frame(height: 22)
+                    SimSparkline(points: sim.opSeries(node: entry.ref.node, op: entry.op.id, metric: "rate"), tint: Theme.good).frame(height: 22)
                 }
                 .padding(9)
                 .card()
@@ -339,7 +347,7 @@ struct SimOpDetail: View {
                     ForEach(Array(entries.enumerated()), id: \.element.ref) { offset, link in
                         if offset > 0 { SimOpsHairline() }
                         // A link from another node already talks to this op's node: leave the peer out.
-                        SimOpRow(sim: sim, entry: link, owner: link.node.id != entry.node.id,
+                        SimOpRow(sim: sim, entry: link, owner: link.ref.node != entry.ref.node,
                                  summary: link.peer == entry.node.id ? SimOpsText.reverseSummary(link) : nil,
                                  pulse: pulse, still: still,
                                  open: { state.push($0) },

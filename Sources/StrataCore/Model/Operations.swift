@@ -17,11 +17,30 @@ public extension Level {
         return nil
     }
 
+    /// `resolveOp`, then the ops of `owner`, the node this deep-dive level is inside: a plain id that
+    /// neither the caller nor the target has, `owner-id/op` when no node of this level has that id, or
+    /// `../op`. An owner op resolves with the node `InheritedOps.ownerKey` ("..").
+    func resolveOp(_ reference: String, caller: String?, target: String?, owner: Node?) -> (node: String, op: Operation)? {
+        if let found = resolveOp(reference, caller: caller, target: target) { return found }
+        guard let owner else { return nil }
+        var id = reference
+        if let slash = reference.firstIndex(of: "/") {
+            let prefix = String(reference[..<slash])
+            guard prefix == InheritedOps.ownerKey || (prefix == owner.id && node(prefix) == nil) else { return nil }
+            id = String(reference[reference.index(after: slash)...])
+        }
+        return owner.ops.first { $0.id == id }.map { (InheritedOps.ownerKey, $0) }
+    }
+
     /// "node/op" → ids of the flows that name that op, on the flow or on any step, in flow order.
-    func opReferences() -> [String: [String]] {
+    func opReferences() -> [String: [String]] { opReferences(owner: nil) }
+
+    /// `opReferences()` on a deep-dive level whose steps may name the ops of `owner`, the node it is
+    /// inside (keyed "../op").
+    func opReferences(owner: Node?) -> [String: [String]] {
         var result: [String: [String]] = [:]
         func add(_ reference: String?, caller: String?, target: String?, flow: String) {
-            guard let reference, let resolved = resolveOp(reference, caller: caller, target: target) else { return }
+            guard let reference, let resolved = resolveOp(reference, caller: caller, target: target, owner: owner) else { return }
             let key = "\(resolved.node)/\(resolved.op.id)"
             if result[key]?.contains(flow) != true { result[key, default: []].append(flow) }
         }

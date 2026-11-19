@@ -94,6 +94,16 @@ import StrataCore
                       "sql op fields or fact order: \(String(describing: insert))")
                 check(listing("orders", "relay", "poll-outbox")?["flows"] as? [String] == ["relay-polls"] &&
                       listing("", "smtp", "send-mail")?["flows"] as? [String] == [], "deep dive op or unreferenced op")
+                // orders-svc's ops, mapped onto its deep dive (InheritedOps).
+                let dive = insert?["deepDive"] as? [String: Any]
+                check(dive?["peer"] as? String == "tx" && dive?["rule"] as? String == "kind" && dive?["flows"] as? [String] == [],
+                      "deep dive mapping in --json: \(String(describing: dive))")
+                let unmapped = listing("", "orders", "get-price")?["deepDive"] as? [String: Any]
+                check(unmapped != nil && unmapped?["peer"] == nil && listing("", "mailer", "on-order-placed")?["deepDive"] == nil,
+                      "an unmapped op keeps an empty mapping; a node without inside: has none")
+                check(text.output.contains("checkout › orders: ops of orders by the inner node each talks to, 8 of 12 mapped") &&
+                      rows.contains { $0.hasPrefix("place-order ") && $0.contains("handler") && $0.contains("code") },
+                      "deep dive mapping in the text output: \(text.output)")
 
                 let empty = root.appendingPathComponent("empty.yaml")
                 try Data("strata: 1\nid: empty\ntitle: Empty\nnodes: [{ id: a, kind: service }]\n".utf8).write(to: empty)

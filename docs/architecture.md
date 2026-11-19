@@ -23,6 +23,7 @@ It is Swift 6.3 with SwiftUI and AppKit, built with SwiftPM and the Command Line
 Sources/StrataCore/
   Model/Manifest.swift        CONTRACT: decoded manifest types
   Model/Operations.swift      op lookups shared by the parser, CLI and UI
+  Model/InheritedOps.swift    a deep dive's view of its owner's ops: each mapped to the inner node it talks to
   Model/Data.swift            table, join and entity lookups shared by the parser, CLI and UI
   Model/Enums.swift           enum lookups, lifecycle order, usage, search; EnumOccurrences finds values in text
   Model/Mechanisms.swift      replays a how-it-works mechanism (state after each step) for the validator, CLI and player

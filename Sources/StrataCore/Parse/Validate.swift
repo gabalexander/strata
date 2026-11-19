@@ -24,14 +24,15 @@ enum Validate {
         }
     }
 
-    private static func level(_ level: inout Level, at field: Field, terms: TermIndex, layout: LayoutMode) {
+    /// `owner`: the node whose `inside:` this level is; flow and step `op:` may name its ops.
+    private static func level(_ level: inout Level, at field: Field, terms: TermIndex, layout: LayoutMode, owner: Node? = nil) {
         duplicates(level.nodes, at: field["nodes"])
         duplicates(level.groups, at: field["groups"])
         duplicates(level.flows, at: field["flows"])
         duplicates(level.controls, at: field["controls"])
         duplicates(level.scenarios, at: field["scenarios"])
 
-        var validator = LevelValidation(level: level, terms: terms)
+        var validator = LevelValidation(level: level, terms: terms, owner: owner)
         for (edge, location) in zip(level.edges, field["edges"].items()) {
             validator.edge(edge, at: location)
         }
@@ -49,7 +50,7 @@ enum Validate {
             duplicates(node.actions, at: location["actions"])
             duplicates(node.ops, at: location["ops"])
             if var inside = node.inside {
-                Self.level(&inside, at: location["inside"], terms: terms, layout: layout)
+                Self.level(&inside, at: location["inside"], terms: terms, layout: layout, owner: node)
                 level.nodes[index].inside = inside
             }
             for (opIndex, opLocation) in location["ops"].items(named: true).enumerated() {
@@ -74,16 +75,19 @@ struct LevelValidation {
     let flows: [String: Flow]
     let groups: [String: String]
     let terms: TermIndex
+    /// The node this level is inside (a deep dive), whose ops steps may name.
+    let owner: Node?
     var edges: Set<String> = []
     var implicitEdges: [Edge] = []
     var positions: [GridPoint: String] = [:]
 
-    init(level: Level, terms: TermIndex) {
+    init(level: Level, terms: TermIndex, owner: Node? = nil) {
         self.level = level
         nodes = Dictionary(level.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         flows = Dictionary(level.flows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         groups = Dictionary(level.groups.map { ($0.id, $0.parent ?? "") }, uniquingKeysWith: { first, _ in first })
         self.terms = terms
+        self.owner = owner
     }
 
     @discardableResult

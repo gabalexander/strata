@@ -114,28 +114,53 @@ extension LevelValidation {
         return nil
     }
 
+    /// Whether the node part of `node/op` names the ops of the node this level is inside: `..`, or the
+    /// owner's id when no node of this level has it (`Level.resolveOp(_:caller:target:owner:)`).
+    private func namesOwner(_ node: String) -> Bool {
+        guard let owner else { return false }
+        return node == InheritedOps.ownerKey || (node == owner.id && nodes[node] == nil)
+    }
+
+    /// The op `id` of the node this level is inside, diagnosing an unknown one at `field`.
+    private func ownerLookup(_ id: String, at field: Field) -> Operation? {
+        guard let owner else { return nil }
+        if let op = owner.ops.first(where: { $0.id == id }) { return op }
+        let fix = closestKey(to: id, in: owner.ops.map(\.id)).map { "; did you mean '\($0)'?" } ?? ""
+        field.diagnose("unknown op '\(id)' on '\(owner.id)', the node this level is inside\(fix)")
+        return nil
+    }
+
     /// A flow's own `op:`: resolved on the node each run happens at (`by`, or `from`), or `node/op`.
+    /// In a deep dive, an id that node doesn't have may name an op of the node the level is inside.
     func flowOp(_ flow: Flow, runsAt origin: String?, at field: Field) {
         guard let reference = flow.op else { return }
-        let owner: String
+        let holder: String
         let op: Operation
         if reference.contains("/") {
             let parts = reference.split(separator: "/").map(String.init)
-            guard let found = lookup(parts[1], on: parts[0], at: field) else { return }
-            (owner, op) = (parts[0], found)
+            if namesOwner(parts[0]) {
+                guard let found = ownerLookup(parts[1], at: field) else { return }
+                (holder, op) = (InheritedOps.ownerKey, found)
+            } else {
+                guard let found = lookup(parts[1], on: parts[0], at: field) else { return }
+                (holder, op) = (parts[0], found)
+            }
+        } else if let owner, origin.flatMap({ nodes[$0] })?.ops.contains(where: { $0.id == reference }) != true,
+                  let found = owner.ops.first(where: { $0.id == reference }) {
+            (holder, op) = (InheritedOps.ownerKey, found)
         } else {
             guard let origin, let found = lookup(reference, on: origin, at: field) else { return }
-            (owner, op) = (origin, found)
+            (holder, op) = (origin, found)
         }
         let named = "'\(reference)' is \(Self.article(op.kind)) \(op.kind.rawValue) op"
         if let buffer = flow.on {
             if op.kind != .consume {
                 field.diagnose("\(named); a consumer flow performs a consume op", .warning)
-            } else if let consumed = op.target, consumed != buffer, nodes[consumed]?.kind != .port {
+            } else if holder != InheritedOps.ownerKey, let consumed = op.target, consumed != buffer, nodes[consumed]?.kind != .port {
                 field.diagnose("'\(op.id)' consumes from '\(consumed)' but this flow is on '\(buffer)'", .warning)
             }
-            if let by = flow.by, owner != by {
-                field.diagnose("'\(reference)' belongs to '\(owner)'; a consumer flow's op belongs to its consumer '\(by)'", .warning)
+            if let by = flow.by, holder != by, holder != InheritedOps.ownerKey {
+                field.diagnose("'\(reference)' belongs to '\(holder)'; a consumer flow's op belongs to its consumer '\(by)'", .warning)
             }
         } else if op.kind == .consume {
             field.diagnose("\(named); name it on a consumer flow (on + by)", .warning)
@@ -150,23 +175,32 @@ extension LevelValidation {
         case .call(let id, _, _), .publish(let id): target = id
         case .work, .parallel: target = nil
         }
+        // The node that holds the op: the caller, the target, another node, or ".." for the node this
+        // deep-dive level is inside.
         let owner: String
         let op: Operation
         if reference.contains("/") {
             let parts = reference.split(separator: "/").map(String.init)
-            guard let found = lookup(parts[1], on: parts[0], at: location) else { return }
-            owner = parts[0]
-            op = found
+            if namesOwner(parts[0]) {
+                guard let found = ownerLookup(parts[1], at: location) else { return }
+                owner = InheritedOps.ownerKey
+                op = found
+            } else {
+                guard let found = lookup(parts[1], on: parts[0], at: location) else { return }
+                owner = parts[0]
+                op = found
+            }
         } else {
             var candidates: [String] = []
             for id in [caller, target].compactMap({ $0 }) where nodes[id] != nil && !candidates.contains(id) {
                 candidates.append(id)
             }
-            guard !candidates.isEmpty else { return }
-            guard let resolved = level.resolveOp(reference, caller: caller, target: target) else {
-                let ids = candidates.flatMap { nodes[$0]?.ops.map(\.id) ?? [] }
+            guard !candidates.isEmpty || self.owner != nil else { return }
+            guard let resolved = level.resolveOp(reference, caller: caller, target: target, owner: self.owner) else {
+                let ids = candidates.flatMap { nodes[$0]?.ops.map(\.id) ?? [] } + (self.owner?.ops.map(\.id) ?? [])
                 let fix = closestKey(to: reference, in: ids).map { "; did you mean '\($0)'?" } ?? ""
-                location.diagnose("unknown op '\(reference)' on \(candidates.map { "'\($0)'" }.joined(separator: " or "))\(fix)")
+                let places = candidates.map { "'\($0)'" } + (self.owner.map { ["'\($0.id)', the node this level is inside"] } ?? [])
+                location.diagnose("unknown op '\(reference)' on \(places.joined(separator: " or "))\(fix)")
                 return
             }
             (owner, op) = resolved

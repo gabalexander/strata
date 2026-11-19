@@ -29,6 +29,14 @@ import StrataCore
             SimOpsSnapshot.pin(sim, node: "reporting", op: "backfill-status", at: "db")
         },
         opsScene("ops-inside", size: size, path: ["orders#insert-order"]),
+        // orders-svc's ops inside its deep dive (InheritedOps): the overview, the database and the
+        // process they map to, and one opened from the overview with its path lit.
+        opsScene("ops-deep-dive-overview", size: CGSize(width: 1400, height: 1240), path: ["orders"]),
+        opsScene("ops-deep-dive-database", size: size, path: ["orders"], selected: "tx"),
+        opsScene("ops-deep-dive-process", size: CGSize(width: 1400, height: 1100), path: ["orders"], selected: "handler"),
+        opsScene("ops-deep-dive-detail", size: size, path: ["orders"]) { sim in
+            SimOpsSnapshot.open(sim, node: InheritedOps.ownerKey, op: "insert-order", from: nil)
+        },
         opsMenuScene(size: size),
         opsPaletteScene(size: size),
     ]

@@ -5,7 +5,9 @@ import StrataCore
 /// Renders any manifest file: `STRATA_SNAP_MANIFEST=path.yaml [STRATA_SNAP_SCENARIO=id] [STRATA_SNAP_T=8]
 /// [STRATA_SNAP_SELECT=node] [STRATA_SNAP_OP=node/op] swift run StrataSnapshot build/snapshots manifest-`.
 /// For authors and agents checking how a manifest looks on the stage without launching the app.
-/// `STRATA_SNAP_OP` opens that operation's detail in the inspector (and selects its node).
+/// `STRATA_SNAP_OP` opens that operation's detail in the inspector (and selects its node). In a deep
+/// dive, `STRATA_SNAP_OP=../op` opens an op of the node it is inside, from the overview unless
+/// `STRATA_SNAP_SELECT` names a node. `STRATA_SNAP_H=1400` renders a taller frame (default 880).
 /// `STRATA_SNAP_DOCK=pressure` opens that dock tab (controls, try, pressure, log, glossary, about);
 /// `STRATA_SNAP_PRESSURE=bottlenecks` picks the Pressure section (now, bottlenecks, scale, stores,
 /// volumes, capacity) and `STRATA_SNAP_HEAT=1` turns on heat mode.
@@ -28,7 +30,8 @@ import StrataCore
     }
     let name = (["manifest-\(manifest.id)"] + levelPath + (env["STRATA_SNAP_TIDY"] == "1" ? ["tidy"] : []))
         .joined(separator: "-").replacingOccurrences(of: "#", with: "_")
-    return [Scene(name: name, size: CGSize(width: 1400, height: 880)) {
+    let height = Double(env["STRATA_SNAP_H"] ?? "").map { max(400, min(4000, $0)) } ?? 880
+    return [Scene(name: name, size: CGSize(width: 1400, height: height)) {
         let model = AppModel(library: Library(manifests: [manifest]),
                              vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
         if env["STRATA_SNAP_STAGE"] == "1" {
@@ -42,7 +45,7 @@ import StrataCore
         sim.playing = false
         model.sessions[AppModel.sessionKey(manifest.id, levelPath)] = sim
         let op = env["STRATA_SNAP_OP"]?.split(separator: "/").map(String.init)
-        let selected = env["STRATA_SNAP_SELECT"] ?? op?.first
+        let selected = env["STRATA_SNAP_SELECT"] ?? op?.first.flatMap { $0 == InheritedOps.ownerKey ? nil : $0 }
         if let op, op.count == 2 { SimOpsSnapshot.open(sim, node: op[0], op: op[1], from: selected) }
         let tabs: [String: SimDockTab] = ["controls": .controls, "try": .scenarios, "scenarios": .scenarios, "pressure": .pressure,
                                           "log": .log, "glossary": .glossary, "about": .about]

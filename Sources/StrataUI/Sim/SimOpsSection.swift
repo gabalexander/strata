@@ -4,6 +4,11 @@ import StrataCore
 /// The inspector's "Operations" section for a node. Services list their own ops grouped by kind, with
 /// the callers of each endpoint under it. Databases, caches and buffers show the reverse view: every
 /// op on the level that talks to them, by table, key pattern, or producer and consumer.
+///
+/// In a deep dive the ops of the node it is inside (`InheritedOps`) join in: a database, cache, buffer
+/// or port lists those mapped to it with the rest, and a process lists those it takes part in under
+/// "Operations of <owner>", by the node each talks to. With `inherited`, the section is the level
+/// overview's: all of the owner's ops, grouped by kind as on the owner's own level.
 @MainActor
 struct SimOpsSection: View {
     let model: AppModel
@@ -13,29 +18,100 @@ struct SimOpsSection: View {
     let selection: StageSelection?
     var pulse: SimPulse?
     var still = false
+    /// The overview of a deep dive: `node` is the owner, and the section lists its inherited ops.
+    var inherited = false
 
     private var state: SimOpsState { SimOpsState.of(sim) }
     private var index: SimOpsIndex { state.index }
 
     var body: some View {
+        if inherited { overview } else { nodeOps }
+    }
+
+    @ViewBuilder
+    private var nodeOps: some View {
         let own = index.ops(of: node.id)
-        let incoming = index.targeting(node.id)
-        if node.kind != .note, !own.isEmpty || !incoming.isEmpty {
+        let process = Node.componentKinds.contains(node.kind)
+        let incoming = index.targeting(node.id).filter { !(process && $0.inherited) }
+        let through = process ? index.inherited(through: node.id) : []
+        if node.kind != .note, !own.isEmpty || !incoming.isEmpty || !through.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Text("Operations").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
-                    Text(String(own.count + incoming.count)).font(Theme.mono(10)).foregroundStyle(Theme.faint)
-                    Spacer(minLength: 0)
+                if !own.isEmpty || !incoming.isEmpty {
+                    header("Operations", count: own.count + incoming.count)
+                    switch node.kind {
+                    case .database, .search: tables(incoming)
+                    case .cache: keys(incoming)
+                    case .queue, .topic: buffer(incoming)
+                    default: EmptyView()
+                    }
+                    ownGroups(own, incoming: [.database, .search, .cache, .queue, .topic].contains(node.kind) ? [] : incoming)
                 }
-                switch node.kind {
-                case .database, .search: tables(incoming)
-                case .cache: keys(incoming)
-                case .queue, .topic: buffer(incoming)
-                default: EmptyView()
+                if !through.isEmpty, let owner = index.inheritance?.owner {
+                    VStack(alignment: .leading, spacing: 3) {
+                        header("Operations of \(owner.label)", count: through.count)
+                        Text("Mapped to \(node.label) or to a node it calls.")
+                            .font(Theme.small).foregroundStyle(Theme.faint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, own.isEmpty && incoming.isEmpty ? 0 : 6)
+                    byPeer(through)
                 }
-                ownGroups(own, incoming: [.database, .search, .cache, .queue, .topic].contains(node.kind) ? [] : incoming)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The deep dive's overview: the owner's ops as its own level lists them, grouped by kind.
+    @ViewBuilder
+    private var overview: some View {
+        let entries = index.inherited
+        if !entries.isEmpty {
+            let mapped = entries.filter { $0.peer != nil }.count
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    header("Operations of \(node.label)", count: entries.count)
+                    Text(mapped == 0 ? "Kept on \(node.label) in the overview."
+                         : "Kept on \(node.label) in the overview; \(mapped) talk to a node here. Hover one to light its path.")
+                        .font(Theme.small).foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ownGroups(entries, incoming: [])
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func header(_ title: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted).lineLimit(1)
+            Text(String(count)).font(Theme.mono(10)).foregroundStyle(Theme.faint)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// A process's inherited ops, by the node each talks to: `orders db 6`, `prices 2`.
+    @ViewBuilder
+    private func byPeer(_ entries: [SimOpsIndex.Entry]) -> some View {
+        let here = entries.filter { $0.peer == node.id || $0.peer == nil }
+        let peers = entries.compactMap(\.peer).filter { $0 != node.id }
+            .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        if !here.isEmpty {
+            SimOpsGroupBox(title: "Runs here", count: here.count) {
+                ForEach(Array(here.enumerated()), id: \.element.ref) { offset, entry in
+                    if offset > 0 { SimOpsHairline() }
+                    row(entry)
+                }
+            }
+        }
+        ForEach(peers, id: \.self) { peer in
+            let rows = entries.filter { $0.peer == peer }
+            let target = sim.level.node(peer)
+            SimOpsGroupBox(title: target?.label ?? peer, symbol: target.map { $0.icon ?? $0.kind.symbol }, count: rows.count) {
+                ForEach(Array(rows.enumerated()), id: \.element.ref) { offset, entry in
+                    if offset > 0 { SimOpsHairline() }
+                    row(entry, summary: SimOpsText.summary(entry, in: sim.level, namingPeer: false))
+                }
+            }
         }
     }
 
@@ -87,7 +163,8 @@ struct SimOpsSection: View {
         let other = incoming.filter(\.op.tables.isEmpty)
         ForEach(names, id: \.self) { table in
             let rows = incoming.filter { $0.op.tables.contains(table) }
-            let writers = Set(rows.filter { [.write, .readWrite].contains(SimOpsText.access($0.op)) }.map(\.node.id))
+            // An inherited op's node holds this level's processes, so it never counts as another writer.
+            let writers = Set(rows.filter { !$0.inherited && [.write, .readWrite].contains(SimOpsText.access($0.op)) }.map(\.node.id))
             SimOpsGroupBox(title: table, symbol: "tablecells", mono: true, count: rows.count,
                            flag: writers.count > 1 ? "shared write · \(writers.count) services" : nil) {
                 ForEach(Array(rows.enumerated()), id: \.element.ref) { offset, entry in
@@ -144,9 +221,9 @@ struct SimOpsSection: View {
 
     /// `owner` rows belong to other nodes and talk to this one (the reverse view).
     /// `links` are sub-rows: the callers of an endpoint, or (`forward`) the consumer a publish feeds.
-    private func row(_ entry: SimOpsIndex.Entry, owner: Bool = false, preview: String? = nil,
+    private func row(_ entry: SimOpsIndex.Entry, owner: Bool = false, summary: String? = nil, preview: String? = nil,
                      links: [OpRef] = [], forward: Bool = false) -> some View {
-        SimOpRow(sim: sim, entry: entry, owner: owner, summary: owner ? SimOpsText.reverseSummary(entry) : nil,
+        SimOpRow(sim: sim, entry: entry, owner: owner, summary: summary ?? (owner ? SimOpsText.reverseSummary(entry) : nil),
                  preview: preview,
                  links: links.compactMap(index.entry), forward: forward, pinned: state.isPinned(entry.ref, at: selection), pulse: pulse,
                  still: still,

@@ -14,11 +14,14 @@ enum SimOpsMenus {
     }
 
     /// A node's "Operations ›" submenu: its own ops, or for a database, cache or buffer with none,
-    /// the ops on other nodes that talk to it.
+    /// the ops on other nodes that talk to it. In a deep dive, a process with none lists the owner's
+    /// ops it takes part in.
     static func node(_ node: Node, sim: Simulation, model: AppModel) -> MenuItem? {
         let index = SimOpsState.of(sim).index
         let own = index.ops(of: node.id)
-        let entries = own.isEmpty ? index.targeting(node.id) : own
+        let entries = !own.isEmpty ? own : Node.componentKinds.contains(node.kind)
+            ? index.targeting(node.id).filter { !$0.inherited } + index.inherited(through: node.id)
+            : index.targeting(node.id)
         guard !entries.isEmpty else { return nil }
         let anchor = StageSelection.node(node.id)
         let groups = OpGroup.allCases.map { group in (group, entries.filter { OpGroup.of($0.op) == group }) }
@@ -83,18 +86,22 @@ enum SimOpsPalette {
     static func entries(model: AppModel, manifest: Manifest?) -> [PaletteEntry] {
         guard case .sim(let id, let path) = model.route, let level = manifest?.level(at: path) else { return [] }
         let key = AppModel.sessionKey(id, path)
-        let index = model.sessions[key].map { SimOpsState.of($0).index } ?? SimOpsIndex(level: level)
+        let index = model.sessions[key].map { SimOpsState.of($0).index }
+            ?? SimOpsIndex(level: level, inherited: manifest?.inheritedOps(at: path))
         return index.all.map { entry in
             let op = entry.op
             let keywords = [entry.node.id, op.id, op.kind.rawValue, op.target, op.topic, op.method, op.path, op.key,
                             op.command].compactMap { $0 } + op.tables + op.tags
-            return PaletteEntry(id: "op/\(key)/\(entry.node.id)/\(op.id)", group: .operations,
+            // An inherited op opens on the node it talks to here, or on the level's overview.
+            let focus = entry.inherited ? entry.peer ?? InheritedOps.ownerKey : entry.node.id
+            return PaletteEntry(id: "op/\(key)/\(entry.ref.node)/\(op.id)", group: .operations,
                                 title: SimOpsText.title(entry), symbol: op.kind.symbol,
                                 subtitle: SimOpsText.summary(entry, in: level), keywords: keywords.joined(separator: " ")) {
                 if let sim = model.sessions[key] {
-                    SimOpsMenus.open(entry.ref, sim: sim, model: model, anchor: .node(entry.node.id))
+                    SimOpsMenus.open(entry.ref, sim: sim, model: model,
+                                     anchor: focus == InheritedOps.ownerKey ? nil : .node(focus))
                 }
-                SimFocus.of(model).reveal(entry.node.id, in: id, path: path, model: model)
+                SimFocus.of(model).reveal(focus, in: id, path: path, model: model)
             }
         }
     }

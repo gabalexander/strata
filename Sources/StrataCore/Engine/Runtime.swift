@@ -300,8 +300,12 @@ struct ProgramTopology {
     /// "node/op" → index into `ops`.
     var opIndex: [String: Int] = [:]
 
-    init(_ level: Level) {
+    /// The node this deep-dive level is inside: steps may name its ops (`InheritedOps`), counted as "../op".
+    let owner: Node?
+
+    init(_ level: Level, owner: Node? = nil) {
         self.level = level
+        self.owner = owner
         nodeIndex = Dictionary(level.nodes.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         flowIndex = Dictionary(level.flows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         for node in level.nodes where nodeIndex[node.id] != nil {
@@ -309,6 +313,10 @@ struct ProgramTopology {
                 opIndex["\(node.id)/\(op.id)"] = ops.count
                 ops.append((node.id, op.id, false))
             }
+        }
+        for op in owner?.ops ?? [] where opIndex["\(InheritedOps.ownerKey)/\(op.id)"] == nil {
+            opIndex["\(InheritedOps.ownerKey)/\(op.id)"] = ops.count
+            ops.append((InheritedOps.ownerKey, op.id, false))
         }
         var known = Set(level.edges.map(\.id))
         for flow in level.flows {
@@ -356,7 +364,7 @@ struct ProgramTopology {
     }
 
     private mutating func resolveOp(_ reference: String?, caller: String?, target: String?) -> Int? {
-        guard let reference, let resolved = level.resolveOp(reference, caller: caller, target: target),
+        guard let reference, let resolved = level.resolveOp(reference, caller: caller, target: target, owner: owner),
               let index = opIndex["\(resolved.node)/\(resolved.op.id)"] else { return nil }
         ops[index].referenced = true
         return index

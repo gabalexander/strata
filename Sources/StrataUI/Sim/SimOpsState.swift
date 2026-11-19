@@ -29,13 +29,15 @@ final class SimOpsState {
     @ObservationIgnored let index: SimOpsIndex
     @ObservationIgnored private var highlights: [OpRef: StageHighlight] = [:]
 
-    private init(level: Level) { index = SimOpsIndex(level: level) }
+    private init(sim: Simulation) {
+        index = SimOpsIndex(level: sim.level, inherited: sim.manifest.inheritedOps(at: sim.path))
+    }
 
     private static let stores = NSMapTable<Simulation, SimOpsState>.weakToStrongObjects()
 
     static func of(_ sim: Simulation) -> SimOpsState {
         if let store = stores.object(forKey: sim) { return store }
-        let store = SimOpsState(level: sim.level)
+        let store = SimOpsState(sim: sim)
         stores.setObject(store, forKey: sim)
         return store
     }

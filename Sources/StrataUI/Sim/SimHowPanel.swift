@@ -98,7 +98,7 @@ struct SimHowPanel: View {
                 HStack(spacing: 6) {
                     Text("How it works").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.accent)
                     Text("·").foregroundStyle(Theme.faint)
-                    Button { select(.node(player.ref.node)) } label: {
+                    Button { select(sim.level.node(player.ref.node) == nil ? nil : .node(player.ref.node)) } label: {
                         Text(ownerTitle).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     }
                     .buttonStyle(.plain)
@@ -123,9 +123,11 @@ struct SimHowPanel: View {
     }
 
     private var ownerTitle: String {
-        let node = sim.level.node(player.ref.node)?.label ?? player.ref.node
+        // `..`: an op of the node this deep dive is inside (InheritedOps).
+        let owner = player.ref.node == InheritedOps.ownerKey ? SimOpsState.of(sim).index.inheritance?.owner : sim.level.node(player.ref.node)
+        let node = owner?.label ?? player.ref.node
         guard let op = player.ref.op else { return node }
-        return "\(node) › " + (sim.level.node(player.ref.node)?.ops.first { $0.id == op }?.label ?? op)
+        return "\(node) › " + (owner?.ops.first { $0.id == op }?.label ?? op)
     }
 
     private var stats: some View {
