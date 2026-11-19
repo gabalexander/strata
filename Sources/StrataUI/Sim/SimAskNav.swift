@@ -81,14 +81,13 @@ struct SimAskHooks: View {
     let sim: Simulation
     @SwiftUI.Binding var tab: SimDockTab
 
-    static let shortcut = "⌘L"
+    static let shortcut = Shortcuts.ask.display
 
     var body: some View {
         let state = SimAskState.of(model, manifest: sim.manifest.id)
         WindowEvents(matching: .keyDown) { event, _ in
-            guard event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
-                  event.charactersIgnoringModifiers?.lowercased() == "l",
-                  !model.paletteOpen, !model.switcherOpen, !SimAskState.offInConfig(model) else { return event }
+            guard Shortcuts.ask.matches(event), !model.paletteOpen, !model.switcherOpen, !model.shortcutSheetOpen,
+                  !SimAskState.offInConfig(model) else { return event }
             open(state)
             return nil
         }
@@ -97,8 +96,12 @@ struct SimAskHooks: View {
         .onChange(of: tab, initial: true) { _, now in state.tabOpen = now == .ask }
     }
 
+    /// Ask lives in the dock: a journey playing in the dock's place, or the How it works player over
+    /// it, closes so the answer is in view.
     private func open(_ state: SimAskState) {
         model.overlays.dismissMenu()
+        SimJourneyState.of(model).close()
+        SimHowState.of(sim).close()
         tab = .ask
         model.dockVisible = true
         state.focusRequest += 1

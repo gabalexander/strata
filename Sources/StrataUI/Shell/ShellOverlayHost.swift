@@ -20,18 +20,20 @@ struct OverlayHost: View {
                         .id(menu.items.map(\.id))
                 }
                 toast
+                HintLayer(hints: overlays.hints, size: geometry.size)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             .onChange(of: geometry.size) { overlays.dismissMenu() }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
                 overlays.dismissMenu()
                 overlays.hideTerm()
+                overlays.hints.dismiss()
             }
             .background {
                 WindowEvents(matching: .keyDown) { event, _ in
                     guard !event.hasCommandModifiers, event.keyCode == 53,
                           overlays.menu == nil, overlays.card != nil,
-                          !model.paletteOpen, !model.switcherOpen else { return event }
+                          !model.paletteOpen, !model.switcherOpen, !model.shortcutSheetOpen else { return event }
                     if !event.isARepeat { overlays.closeTerm() }
                     return nil
                 }

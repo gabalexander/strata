@@ -190,7 +190,7 @@ private struct SimJourneyRowCard: View {
         .padding(.horizontal, 5).padding(.vertical, changed ? 3 : 1.5)
         .background(changed && !deleted ? Theme.accent.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(changed && !deleted ? Theme.accent.opacity(0.28) : .clear))
-        .textSelection(.enabled)
+        .strataSelectable("Copy value") { value ?? "NULL" }
     }
 
     private func valueText(_ value: String?, enumID: String?, changed: Bool) -> Text {

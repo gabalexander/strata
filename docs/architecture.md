@@ -41,11 +41,14 @@ Sources/StrataCore/
   Library/Library.swift       manifest library + live reload
   Terms/TermIndex.swift       glossary packs + auto-linking
   Vault/Vault.swift           notes on disk, links, backlinks, search
-  Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter), JourneyFill (binds into queries)
+  Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter), JourneyFill (binds into queries),
+                              Shortcuts (every shortcut, for the menu, handlers, ⌘K, hints and the sheet),
+                              HintPlacement (where a hover hint goes and when it shows)
   Ask/                        Ask the map: digest, prompt, links, claude discovery, runner, stream parser, history
 Sources/StrataUI/
   Theme/Theme.swift           CONTRACT: colours, type, radii, motion
   Overlay/Overlays.swift      CONTRACT: in-window menus, term cards, toasts, .onRightClick
+  Overlay/Hints.swift         hover hints (.strataHint), selectable text with an in-window Copy
   App/AppModel.swift          CONTRACT: routes, history, sessions, openCode
   Shell/                      RootView, sidebar, home, OverlayHost, command palette, switcher
   Sim/                        SimScreen, stage canvas, inspector, dock, SimEmbedView
@@ -65,7 +68,8 @@ Everything lives under `~/.strata/` (`STRATA_HOME` overrides it):
 - `sims/`: user and agent manifests, live-reloaded;
 - `vault/`: markdown notes;
 - `config.yaml`;
-- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch and Links options).
+- `state.json`: window and UI state (the open route, each map's vertical/horizontal switch and Links options, and
+  the once-only hints already seen).
 - `ask/`: Ask history, one JSON Lines file per map (`<id>.jsonl`), and `settings.json` (the in-app
   switch and the maps whose privacy notice was seen). The directory is 0700.
 - `drift/<id>.json`: the last drift check of each map, with the repo HEAD it saw and a fingerprint of the
@@ -120,7 +124,7 @@ Hidden mode:
 - **Out of screen shares.** When screen-share hiding is enabled, Strata sets `sharingType = .none` before AppKit orders any app-owned window on screen. Window sweeps also enforce this setting. macOS owns input method candidate windows, the character palette, and dictation UI, so their visibility is outside Strata's control.
 - **Out of the Dock and ⌘-Tab:** the app is an accessory (`LSUIElement`).
 - **Summoned:** a global hotkey (Carbon `RegisterEventHotKey`, no Accessibility permission; default ctrl+option+s) and a menu bar item open it.
-- **No system popups:** menus, popovers, tooltips and sheets are drawn inside the window by `OverlayHost`. Never use `.contextMenu`, `.popover`, `.help`, `.sheet`, `.alert` or `NSMenu`; a separate system window would show up in a screen share. The menu bar item's own menu is the one exception.
+- **No system popups:** menus, popovers, tooltips (hover hints, Overlay/Hints.swift), the shortcut sheet and sheets are drawn inside the window by `OverlayHost` and `RootView`. Never use `.contextMenu`, `.popover`, `.help`, `.sheet`, `.alert`, `.confirmationDialog`, a menu-style `Picker` or `NSMenu`; a separate system window would show up in a screen share. Selectable text (`.textSelection`) brings the system's text menu on right-click, so use `.strataSelectable` (or a right-click catcher) with it. The menu bar item's own menu is the one exception.
 
 ## Time and rendering
 

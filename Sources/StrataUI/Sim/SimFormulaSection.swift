@@ -35,7 +35,7 @@ struct SimFormulaSection: View {
             if !formula.code.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(formula.code, id: \.self) { path in
-                        SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                        SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                     }
                 }
             }

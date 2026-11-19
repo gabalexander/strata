@@ -18,6 +18,7 @@ MainActor.assumeIsolated {
     let all = parserChecks() + engineChecks() + vaultChecks() + cliChecks() + opsPathChecks() + dataChecks() + dataFixtureChecks()
         + analysisChecks() + layoutChecks() + verticalLayoutChecks() + howChecks() + enumChecks() + sqlFormatChecks()
         + deepDiveOpsChecks() + howTextChecks() + briefChecks() + askChecks() + driftChecks() + journeyChecks() + bundleChecks()
+        + uxChecks()
     var ran = 0
     for c in all where filter.map({ c.name.contains($0) }) ?? true {
         currentCase = c.name; ran += 1

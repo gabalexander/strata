@@ -112,7 +112,7 @@ struct SimDataTableView: View {
                 }
             }
             Spacer(minLength: 0)
-            SimButton(title: "Close table", icon: "xmark", iconOnly: true) { state.closeTable(node: ref.node) }
+            SimButton(title: "Close the table", icon: "xmark", iconOnly: true, shortcut: Shortcuts.escape) { state.closeTable(node: ref.node) }
         }
         .simOpsMenu(still: still) { model.overlays.showMenu(SimDataMenus.table(ref, sim: sim, model: model), at: $0) }
     }

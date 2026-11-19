@@ -94,7 +94,7 @@ struct CommandPalette: View {
                 .accessibilityHidden(true)
             StrataTextField(placeholder: prompt, text: $query, focused: $focused, overlays: catalog.model.overlays,
                             size: 16, placeholderColor: Theme.muted)
-            Button(action: dismiss) { StrataKeycap("esc") }
+            Button(action: dismiss) { StrataKeycap("Esc") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close palette")
         }

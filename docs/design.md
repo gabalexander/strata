@@ -46,7 +46,10 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
 ```
 
 - **Sidebar:** sections for Notes (the vault tree), Simulators (grouped by category) and Architecture maps.
-- **Inspector and dock:** both collapse (⌘⌥I, ⌘J).
+- **Inspector and dock:** both collapse (⌥⌘I, ⌘J). The dock's tabs show their icons alone when the labels
+  don't fit, each still named by its hint.
+- **Toolbar:** breadcrumbs, the clock and transport, then the layout group (Tidy layout, the vertical switch,
+  Links), a hairline, and the panel toggles (Show dock, the inspector). Every icon has a hint with its shortcut.
 - **Window:** full-size content, transparent titlebar, traffic lights over the sidebar.
 
 ## Stage
@@ -82,6 +85,10 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   - **Failure flash:** on `lastFailure` the border flashes red and fades over 0.5 s of sim time.
   - **Selected:** a 1.5 pt amber border plus a soft amber glow. **Hovered:** the border brightens.
   - **Personal note:** a small note glyph when the node has one.
+  - **Glyph hints:** the small glyphs (the ops badge, the deep-dive layers, the note, drift, slow and down marks,
+    the replica dots) each explain themselves with a hint above them (Hints, below), and while the pointer is on
+    one the card's own hover card stays away. The ƒ badge's formula card and the process chips' processes card
+    are their explanations.
   - **Drift:** a node the last drift check found stale (an error or warning on it, its ops, or inside its deep
     dive) gets a small sync glyph (`arrow.triangle.2.circlepath`, 10 pt, warn at 85%) beside the status
     glyphs top-right. There is no count and the card itself doesn't change colour: the details are in the inspector.
@@ -174,7 +181,8 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
 - **Nothing selected:** the level's brief and narration under "This level", brief first. In a deep dive, "Operations of
   orders-svc" comes next: the ops of the node the level is inside, grouped by kind as on that node's
   own level, with a faint line saying how many map to a node here. How it works, Flows and the
-  diagram legend follow.
+  diagram legend follow. The legend lists the tokens and the card glyphs this level actually shows
+  (operations, ƒ, processes, drift), each sample in a 26 pt slot so the labels line up.
 - **A node:** its header, brief (doc behind More), How it works, formula, actions, enums, data,
   Operations, live metrics, code, links, your note and parameters. The op detail leads with the op's
   brief the same way, a How it works card with its mechanism's brief, and a flow's card shows its brief
@@ -214,12 +222,14 @@ A mechanism (docs/manifest.md, How it works) plays in a panel over the stage col
 inset 14 pt, on `Theme.surface` with radius 12. From the top:
 
 - **Header:** the title (up to two lines), the owner, the stats (dropped first when narrow), code
-  buttons, `esc` and Close.
+  buttons, `Esc` and Close.
 - **Path:** the main sequence and one chip per branch, with where each leaves on one line when they
   fit, else without that on up to two lines; the branches past those wait behind a "+N more" chip
   whose in-window menu lists them (the chosen path always shows).
 - **Sequence diagram** on the left, the **state panel** or the **step detail** on the right.
-- **Transport:** restart, step back, play or pause, step forward, the scrubber, speed.
+- **Transport:** restart, step back, play or pause, step forward, the scrubber (never under 96 pt), speed, and
+  the `Space ← →` keycaps when the panel is 900 pt or wider (each button's hint has its key anyway). The
+  journey player's transport uses the same glyphs.
 - **Step strip:** the current step's label, who talks to whom and its note (a long note's first
   sentence, three lines at most), with a Step details button. It steps aside while the step detail is open.
 
@@ -249,7 +259,7 @@ header) pauses there and opens the step detail in place of the state panel, 40% 
 (320–460 pt). The row keeps an accent outline. The detail never cuts a command, reply or key short, scrolls
 when long, and its text is selectable; a long note leads with its first sentence and opens with More:
 
-- a bar with ‹ State, `step 6 of 16`, previous and next, and `esc`;
+- a bar with ‹ State, `step 6 of 16`, previous and next, and `Esc`;
 - `STEP 6 · at 10 ms · +4 ms`, the label, and the participants as chips that select their node;
 - the command: SQL formatted one clause per line with the Formatted | Raw toggle, copy and enum hovers
   (the op detail's query block); a Valkey command taken apart into verb, keys (each on its own line,
@@ -301,7 +311,7 @@ view: its panel takes the dock's place, about half the stage column (300–470 p
 steps aside. From the top:
 
 - **Header:** the route icon, `Journey · order · orders o-77ab`, the title, then restart, previous, play or pause,
-  next, `step 4 of 21`, `esc` and Close. The entity line drops first when narrow.
+  next, `step 4 of 21`, `Esc` (from 760 pt wide) and Close. The entity line drops first when narrow.
 - **Status timeline:** every status move so far as a chip (`payment 20 captured`), oldest first, the
   current step's in the accent; the earliest give way to `+N earlier` when they don't fit. A click jumps to
   the step that made the move.
@@ -335,6 +345,31 @@ All overlays are drawn inside the window (see docs/architecture.md, Hidden mode)
 belongs to a panel opens as a pane inside it (the op detail over the inspector, the step detail
 beside the sequence diagram), never as a card over what it explains.
 
+- **Hints** (Overlay/Hints.swift): every icon-only or non-obvious control says what it does on hover, in one
+  line, never `.help` (a system tooltip is a separate window that a screen share would show).
+  - 11 pt text on `Theme.overlay`, radius 6, a `Theme.borderStrong` hairline and a soft shadow; the shortcut,
+    when there is one, in a small mono keycap after the text (`Tidy layout  ⌥⌘L`). A few words: what it does,
+    not what it is.
+  - After a 450 ms rest; then instant while moving along a toolbar (a hint is showing, or one hid in the last
+    half second). A quick 0.1 s fade in and out, nothing else moves.
+  - Below the control and centred on it, above it when there is no room below (stage glyphs prefer above, so
+    the card stays readable), beside it when neither fits; clamped 8 pt inside the window and never over the
+    control (HintPlacement, with checks).
+  - A click, scroll, pinch or key dismisses it and the control keeps quiet until the pointer leaves it. A hint
+    never takes an event: Esc still closes what it would have closed.
+  - Only the overlay host's hint layer observes the hint, and a control's position is kept outside SwiftUI's
+    state, so a hint showing or moving re-renders nothing else.
+  - Use `.strataHint("What it does", shortcut)`; `SimButton` gives an icon-only button its title as a hint,
+    and takes `shortcut:` from `Shortcuts` (or `keys:` for one part of a shortcut, `←`).
+- **Shortcut sheet** (⌘/, or `?` outside a text field; also the sidebar's foot and ⌘K): every shortcut by area,
+  centred over a 42% black backdrop on `Theme.overlay`, radius 12. Each area is a column (three when the window
+  is 1080 pt or wider, else two) with an accent 11 pt heading; a row is the action in 12 pt and its keys as
+  keycaps, pointer gestures after the keys in muted text. It reads `Shortcuts.all` (StrataCore), the same list
+  the app menu, the stage's key handler, ⌘K and the hints use, and the checks keep it free of clashes and in
+  step with the README's table. Esc, ?, ⌘/, the close button or a click outside closes it.
+- **Selectable text** (a step's label, a reply, a drift message) copies through the app's own right-click menu
+  (`.strataSelectable`), never the system's text menu.
+
 - **Context menu:**
   - `Theme.overlay` with a hairline border, radius 8, and a 0 12 32 black-45% shadow.
   - Rows 26 pt, 13 pt text, an SF Symbol at 13 pt in the muted colour, and the shortcut right-aligned in faint.
@@ -349,6 +384,29 @@ beside the sequence diagram), never as a card over what it explains.
   Notes, Simulators, Nodes in the current sim, Glossary). Arrow keys and Return work.
 - **Toasts:** bottom centre, a small pill that fades out.
 
+## Keys and Escape
+
+- **One list.** `Shortcuts.all` (StrataCore/Support/Shortcuts.swift) holds every shortcut with its area. Chords
+  (⌘, ⌥, ⌃) are unique across the app; plain keys are unique within an area, and the players' Space, arrows and
+  Esc take over the stage's while they are open. Shortcuts show in Apple's order, ⌃⌥⇧⌘ then the key.
+- **Escape closes the innermost thing first**, one thing per press: the palette or the shortcut sheet, an
+  in-window menu or pinned card, the enum detail over the stage, the How it works step detail and then its player, the op
+  detail a journey opened and then the journey, the stage's overlays (a pinned blast radius, the op detail, a
+  table), then the selection, then the level (up out of a deep dive). Esc twice quickly with nothing left to close
+  hides the window. In a text field Esc first leaves the field (a rename cancels), so the next press reaches the
+  screen.
+- **What covers the dock makes way.** Ask (⌘L) and the Pressure tab live in the dock, so asking for them closes a
+  journey playing in the dock's place and the How it works player over it. ⌘J with a journey open says so in a
+  toast instead of toggling a dock that can't show.
+
+## First open
+
+The first time any map or simulator opens, one calm line sits at the top centre of the stage: **Click** a card to
+inspect it · **double-click** to dive in · **right-click** for actions · **⌘K** for everything · **?** for shortcuts.
+A capsule on `Theme.overlay` at 94% with a hand glyph in the accent; it drops its later parts when the stage is
+narrow (ViewThatFits) and stays clear of the Paused pill. Its close button hides it for good (`state.json`,
+`hints`). Offscreen snapshots show it only with `STRATA_SNAP_INTRO=1`.
+
 ## Notes
 
 - **Width:** the editor column is up to 760 pt wide and centred, in 15 pt text at 1.55 line height.
@@ -357,5 +415,5 @@ beside the sequence diagram), never as a card over what it explains.
   - Inline `code` is mono on raised. Bold and italic are styled.
   - `[[links]]` are accent-coloured and ⌘-clickable.
   - Fenced code blocks are mono on raised. A ```strata block shows a small "live sim ▶" chip.
-- **Reading view (⌘E):** rendered markdown, with ```strata blocks as live embedded sims, terms linked, and checkboxes clickable.
+- **Reading view (⇧⌘E):** rendered markdown, with ```strata blocks as live embedded sims, terms linked, and checkboxes clickable.
 - **Inspector:** outline, backlinks, outgoing links, and "Linked sims".

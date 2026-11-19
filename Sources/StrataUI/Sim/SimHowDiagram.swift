@@ -796,9 +796,10 @@ enum SimHowFormat {
         return "\(seconds.formatted(upToTwo)) s"
     }
 
-    /// The running clock: one decimal for seconds; whole milliseconds for a sequence that lives below a second.
+    /// The running clock: whole milliseconds below a second (so it agrees with the step's `at 10 ms`), else
+    /// one decimal for seconds; always milliseconds for a sequence that lives below a second.
     static func clock(_ seconds: Double, short: Bool = false) -> String {
-        if short { return "\(Int((seconds * 1000).rounded())) ms" }
+        if short || seconds < 0.9995 { return "\(Int((seconds * 1000).rounded())) ms" }
         return "\(seconds.formatted(one)) s"
     }
 

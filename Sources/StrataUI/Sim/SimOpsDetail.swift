@@ -64,7 +64,7 @@ struct SimOpDetail: View {
                 if !op.code.isEmpty {
                     SimSection(title: "Code") {
                         ForEach(op.code, id: \.self) { path in
-                            SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                            SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                         }
                     }
                 }
@@ -176,7 +176,8 @@ struct SimOpDetail: View {
                     model.overlays.toast(copy.title.replacingOccurrences(of: "Copy", with: "Copied"))
                 }
             }
-            SimButton(title: pinned ? "Unpin path" : "Pin path", icon: pinned ? "pin.slash" : "pin", active: pinned) {
+            SimButton(title: pinned ? "Unpin path" : "Pin path", icon: pinned ? "pin.slash" : "pin", active: pinned,
+                      hint: pinned ? "Stop lighting this op's path" : "Keep this op's path lit on the stage") {
                 state.togglePin(entry.ref, at: detail.anchor)
             }
         }
@@ -400,6 +401,7 @@ private struct SimOpsBackButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .strataHint("Back to \(title)", shortcut: Shortcuts.escape.display)
         .accessibilityLabel("Back to \(title)")
     }
 }

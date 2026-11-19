@@ -5,14 +5,15 @@ import SwiftUI
 public struct StrataIconButton: View {
     private let symbol: String
     private let title: String
+    private let shortcut: String?
     private let active: Bool
     private let action: () -> Void
     @State private var hovered = false
-    @State private var hintVisible = false
 
-    public init(_ symbol: String, title: String, active: Bool = false, action: @escaping () -> Void) {
+    public init(_ symbol: String, title: String, shortcut: String? = nil, active: Bool = false, action: @escaping () -> Void) {
         self.symbol = symbol
         self.title = title
+        self.shortcut = shortcut
         self.active = active
         self.action = action
     }
@@ -30,29 +31,7 @@ public struct StrataIconButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .onHover { hovered = $0 }
-        .task(id: hovered) {
-            hintVisible = false
-            guard hovered else { return }
-            do {
-                try await Task.sleep(for: .milliseconds(450))
-                hintVisible = true
-            } catch {}
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if hintVisible {
-                Text(title)
-                    .font(Theme.small)
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .card(Theme.overlay, radius: Theme.radiusSmall)
-                    .fixedSize()
-                    .alignmentGuide(.bottom) { $0[.top] - 4 }
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
-        .zIndex(hintVisible ? 1 : 0)
+        .strataHint(title, shortcut: shortcut)
     }
 }
 

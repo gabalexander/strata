@@ -112,6 +112,7 @@ struct SimStage: View {
     @State private var hovered: StageSelection?
     @State private var hoverTask: Task<Void, Never>?
     @State private var hoveredBadge = false
+    @State private var glyphHover = StageGlyphHover()
 
     var body: some View {
         let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
@@ -128,12 +129,16 @@ struct SimStage: View {
                     switch phase {
                     case .active(let point):
                         let target = hit(point, camera)
-                        let badge = SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
+                        let glyph = still ? nil : renderer.glyph(at: camera.world(point), on: target)
+                        // A glyph explains itself with a hint, which counts as the badge: no card under it.
+                        let badge = glyph != nil || SimFormulaStage.onBadge(target, point: point, camera: camera, layout: renderer.layout)
                         trackComponents(target, at: point, camera, badge: badge)
+                        hintGlyph(glyph, on: target, camera: camera, origin: { proxy.frame(in: .global).origin })
                         guard hovered != target || hoveredBadge != badge else { return }
                         clearTermHover()
                         hovered = target
                         hoveredBadge = badge
+                        if glyph != nil { return }
                         // One card at a time, so none covers another: the ƒ badge shows the node's formula
                         // (and hides the processes card); the rest of a card with process chips shows its
                         // processes; the rest of any other card its term, else its formula.
@@ -207,6 +212,15 @@ struct SimStage: View {
                 if !compact { componentsCard(camera, size: proxy.size) }
             }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { viewport.size = $0 }
+            .onAppear {
+                // Offscreen: once the cards are drawn (and their glyphs recorded), hover the requested one.
+                guard let id = SimGlyphSnapshot.node else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    guard let glyph = renderer.glyphs[id]?.first else { return }
+                    hintGlyph(glyph, on: .node(id), camera: viewport.current(renderer.layout, in: proxy.size, compact: compact),
+                              origin: { proxy.frame(in: .global).origin }, now: true)
+                }
+            }
             .onAppear { SimFormulaStage.showRequested(sim, layout: renderer.layout, camera: { viewport.current(renderer.layout, in: proxy.size, compact: compact) }, frame: { proxy.frame(in: .global) }, overlays: model.overlays, terms: terms) }
         }
         .clipped()
@@ -308,6 +322,28 @@ struct SimStage: View {
     private func clearHover() {
         clearTermHover()
         SimComponentsHover.of(sim).clear()
+        hintGlyph(nil, on: nil, camera: StageCamera(), origin: { .zero })
+    }
+
+    /// Shows the hint of the card glyph under the pointer, above it, and ends the last one's.
+    private func hintGlyph(_ glyph: StageGlyph?, on target: StageSelection?, camera: StageCamera, origin: @escaping () -> CGPoint,
+                           now: Bool = false) {
+        let hints = model.overlays.hints
+        let key: String? = if let glyph, case .node(let id)? = target { "\(id)|\(glyph.kind)" } else { nil }
+        guard key != glyphHover.key else { return }
+        if let old = glyphHover.key { hints.leave(old) }
+        glyphHover.key = key
+        guard let glyph, let key, case .node(let id)? = target else { return }
+        // Anchored on the glyph's column of the whole card, so the hint sits above the card (or below it, for
+        // a glyph on the lower half) and never over its title or numbers.
+        let card = renderer.layout.cardsByID[id]?.rect ?? glyph.rect
+        let column = CGRect(x: glyph.rect.minX, y: min(card.minY, glyph.rect.minY), width: glyph.rect.width,
+                            height: max(card.maxY, glyph.rect.maxY) - min(card.minY, glyph.rect.minY))
+        let rect = camera.screen(column)
+        hints.enter(key, text: glyph.hint, shortcut: glyph.shortcut, above: glyph.rect.midY < card.midY, now: now) {
+            let o = origin()
+            return rect.offsetBy(dx: o.x, dy: o.y)
+        }
     }
 
     /// Ends the term or formula hover, but not the components hover that `trackComponents` keeps, so

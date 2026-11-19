@@ -5,7 +5,7 @@ import StrataCore
 @MainActor
 public enum ShellCommand: CaseIterable {
     case palette, switcher, newNote, search, back, forward, sidebar, inspector, dock
-    case graph, home, reloadLibrary, dataFolder, editConfig
+    case graph, home, reloadLibrary, dataFolder, editConfig, shortcuts
 
     public var title: String {
         switch self {
@@ -23,6 +23,7 @@ public enum ShellCommand: CaseIterable {
         case .reloadLibrary: "Reload library"
         case .dataFolder: "Open data folder in Finder"
         case .editConfig: "Edit config"
+        case .shortcuts: "Keyboard shortcuts"
         }
     }
 
@@ -42,40 +43,40 @@ public enum ShellCommand: CaseIterable {
         case .reloadLibrary: "arrow.clockwise"
         case .dataFolder: "folder"
         case .editConfig: "gearshape"
+        case .shortcuts: "keyboard"
+        }
+    }
+
+    /// The command's entry in the app's one list of shortcuts (Shortcuts.swift), which the app menu registers.
+    public var shortcutEntry: Shortcut? {
+        switch self {
+        case .palette: Shortcuts.palette
+        case .switcher: Shortcuts.switcher
+        case .newNote: Shortcuts.newNote
+        case .search: Shortcuts.search
+        case .back: Shortcuts.back
+        case .forward: Shortcuts.forward
+        case .sidebar: Shortcuts.sidebar
+        case .inspector: Shortcuts.inspector
+        case .dock: Shortcuts.dock
+        case .graph: Shortcuts.graph
+        case .home: Shortcuts.home
+        case .editConfig: Shortcuts.config
+        case .shortcuts: Shortcuts.sheet
+        case .reloadLibrary, .dataFolder: nil
         }
     }
 
     public var keyEquivalent: String {
-        switch self {
-        case .palette: "k"
-        case .switcher: "o"
-        case .newNote: "n"
-        case .search: "f"
-        case .back: "["
-        case .forward: "]"
-        case .sidebar: "\\"
-        case .inspector: "i"
-        case .dock: "j"
-        case .graph: "g"
-        case .home: "h"
-        case .editConfig: ","
-        case .reloadLibrary, .dataFolder: ""
-        }
+        guard case .char(let key)? = shortcutEntry?.keys.first else { return "" }
+        return key
     }
 
     public var modifiers: NSEvent.ModifierFlags {
-        switch self {
-        case .search, .home: [.command, .shift]
-        case .inspector: [.command, .option]
-        default: .command
-        }
+        shortcutEntry?.modifiers.eventFlags ?? .command
     }
 
-    var shortcut: String? {
-        guard !keyEquivalent.isEmpty else { return nil }
-        let prefix = (modifiers.contains(.option) ? "⌥" : "") + (modifiers.contains(.shift) ? "⇧" : "")
-        return prefix + "⌘" + keyEquivalent.uppercased()
-    }
+    var shortcut: String? { shortcutEntry?.display }
 
     func isEnabled(in model: AppModel) -> Bool {
         switch self {
@@ -87,6 +88,7 @@ public enum ShellCommand: CaseIterable {
 
     public func perform(on model: AppModel) {
         model.overlays.dismissMenu()
+        if self != .shortcuts { model.shortcutSheetOpen = false }
         if self != .palette && self != .switcher {
             model.paletteOpen = false
             model.switcherOpen = false
@@ -118,6 +120,9 @@ public enum ShellCommand: CaseIterable {
             model.overlays.toast("Library reloaded")
         case .dataFolder, .editConfig:
             openData(model)
+        case .shortcuts:
+            model.overlays.closeTerm()
+            model.shortcutSheetOpen.toggle()
         }
     }
 

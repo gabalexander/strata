@@ -75,9 +75,9 @@ struct SimAskTab: View {
                 Text(SimAskHooks.shortcut).font(Theme.mono(10)).foregroundStyle(Theme.faint)
             }
             if state.running {
-                SimButton(title: "Stop", icon: "stop.fill", active: true) { state.stop() }
+                SimButton(title: "Stop", icon: "stop.fill", active: true, hint: "Stop the answer; what came so far stays") { state.stop() }
             } else {
-                SimButton(title: "Ask", icon: "arrow.up") { submit() }
+                SimButton(title: "Ask", icon: "arrow.up", hint: "Ask Claude about this map", keys: "↩") { submit() }
                     .disabled(state.question.trimmingCharacters(in: .whitespaces).isEmpty)
                     .opacity(state.question.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
             }
@@ -138,7 +138,7 @@ struct SimAskTab: View {
                 .font(Theme.ui(12)).foregroundStyle(Theme.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 6)
             SimButton(title: "Got it") { state.acknowledge() }
-            SimButton(title: "Turn Ask off", icon: "power") { state.setEnabled(false) }
+            SimButton(title: "Turn Ask off", icon: "power", hint: "Nothing leaves this Mac; turn it back on in this tab") { state.setEnabled(false) }
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(Theme.warn.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
@@ -153,7 +153,7 @@ struct SimAskTab: View {
                 Spacer(minLength: 8)
                 meta(exchange)
                 if exchange.phase == .done, !exchange.answer.isEmpty {
-                    SimButton(title: "Copy answer", icon: "doc.on.doc", iconOnly: true) {
+                    SimCopyButton(title: "Copy the answer") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(exchange.answer, forType: .string)
                         model.overlays.toast("Copied the answer")
@@ -230,7 +230,7 @@ struct SimAskTab: View {
         return Group {
             if !questions.isEmpty {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(state.current == nil ? "Try asking" : "Ask next").font(Theme.label).foregroundStyle(Theme.muted)
+                    Text(state.current == nil ? "Try asking" : "Ask next").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                     SimAskFlow(spacing: 6) {
                         ForEach(questions, id: \.self) { question in
                             SimAskChip(title: question) { submit(question) }
@@ -244,12 +244,13 @@ struct SimAskTab: View {
     private func earlier(_ state: SimAskState) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Earlier").font(Theme.label).foregroundStyle(Theme.muted)
+                Text("Earlier").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                 Spacer()
                 Button { state.clearHistory() } label: {
                     Label("Clear history", systemImage: "trash").font(Theme.ui(11)).foregroundStyle(Theme.faint)
                 }
                 .buttonStyle(.plain)
+                .strataHint("Delete this map's questions and answers")
                 .accessibilityHint("Deletes this map's questions and answers from ~/.strata/ask")
             }
             ForEach(state.earlier) { record in

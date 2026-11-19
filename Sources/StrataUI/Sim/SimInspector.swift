@@ -20,7 +20,7 @@ struct SimInspector: View {
                 Text("Inspector").font(Theme.ui(12, .semibold)).foregroundStyle(Theme.text)
                 Spacer()
                 if selection != nil {
-                    SimButton(title: "Deselect", icon: "xmark", iconOnly: true) { select(nil) }
+                    SimButton(title: "Deselect", icon: "xmark", iconOnly: true, shortcut: Shortcuts.escape) { select(nil) }
                 }
             }
             .padding(.horizontal, 14).frame(height: 44)
@@ -81,6 +81,16 @@ struct SimInspector: View {
                     legend("Failure", symbol: "xmark", color: Theme.bad)
                     legend("Deep dive", symbol: "square.3.layers.3d", color: Theme.muted)
                     legend("Personal note", symbol: "note.text", color: Theme.muted)
+                    // The card glyphs this level actually shows, so the legend explains what is on screen.
+                    let nodes = sim.level.nodes
+                    if nodes.contains(where: { !$0.ops.isEmpty }) || SimOpsState.of(sim).index.inheritance != nil {
+                        legendText("Operations", sample: "ops")
+                    }
+                    if nodes.contains(where: { $0.formula != nil }) { legendText("Formula (hover it)", sample: "ƒ") }
+                    if nodes.contains(where: StageLayout.hasChips) { legendText("Processes inside", sample: "proc") }
+                    if !SimDriftState.of(model).badges(for: sim).isEmpty {
+                        legend("Out of date (drift)", symbol: SimDriftMenus.icon, color: Theme.warn.opacity(0.85))
+                    }
                 }
             }
         }
@@ -143,7 +153,7 @@ struct SimInspector: View {
             if !node.code.isEmpty {
                 SimSection(title: "Code") {
                     ForEach(node.code, id: \.self) { path in
-                        SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                        SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                     }
                 }
             }
@@ -344,10 +354,26 @@ struct SimInspector: View {
             .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
     }
 
+    /// A legend row whose sample is a small badge, drawn like the card's.
+    private func legendText(_ label: String, sample: String) -> some View {
+        HStack(spacing: 7) {
+            Text(sample).font(Theme.mono(8.5, .medium)).foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
+                .padding(.horizontal, 3).frame(height: 12)
+                .background(Theme.hover, in: RoundedRectangle(cornerRadius: 3))
+                .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.border, lineWidth: 0.5))
+                .frame(width: Self.legendSlot)
+            Text(label).foregroundStyle(Theme.muted).lineLimit(1)
+        }
+        .font(Theme.small)
+    }
+
+    /// Every legend row's sample sits in a slot this wide, so the labels line up.
+    private static let legendSlot: CGFloat = 26
+
     private func legend(_ label: String, symbol: String, color: Color) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: symbol).frame(width: 13).foregroundStyle(color)
-            Text(label).foregroundStyle(Theme.muted)
+            Image(systemName: symbol).frame(width: Self.legendSlot).foregroundStyle(color)
+            Text(label).foregroundStyle(Theme.muted).lineLimit(1)
         }
         .font(Theme.small)
     }

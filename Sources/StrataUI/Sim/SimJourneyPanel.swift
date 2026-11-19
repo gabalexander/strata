@@ -97,13 +97,14 @@ private struct SimJourneyHeader: View {
                     .lineLimit(1).truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The same transport as the How it works player: frame glyphs, hints with their keys.
             HStack(spacing: 4) {
-                SimButton(title: "Back to the start", icon: "backward.end.fill", iconOnly: true) { player.jump(to: -1) }
-                SimButton(title: "Previous step", icon: "chevron.left", iconOnly: true) { player.step(-1) }
+                SimButton(title: "Back to the start", icon: "backward.end.fill", iconOnly: true, keys: "Home") { player.jump(to: -1) }
+                SimButton(title: "Previous step", icon: "backward.frame.fill", iconOnly: true, keys: "←") { player.step(-1) }
                     .disabled(player.shown < 0).opacity(player.shown < 0 ? 0.4 : 1)
                 SimButton(title: player.playing ? "Pause" : "Play", icon: player.playing ? "pause.fill" : "play.fill",
-                          iconOnly: true, active: player.playing) { player.toggle() }
-                SimButton(title: "Next step", icon: "chevron.right", iconOnly: true) { player.step(1) }
+                          iconOnly: true, active: player.playing, shortcut: Shortcuts.journeyPlay) { player.toggle() }
+                SimButton(title: "Next step", icon: "forward.frame.fill", iconOnly: true, keys: "→") { player.step(1) }
                     .disabled(player.atEnd).opacity(player.atEnd ? 0.4 : 1)
             }
             .fixedSize()
@@ -112,9 +113,10 @@ private struct SimJourneyHeader: View {
             if narrow {
                 SimSegments(values: [false, true], selected: player.narrowRows, label: { $0 ? "Rows" : "Step" }) { player.narrowRows = $0 }
                     .fixedSize()
+                    .strataHint("The step, or the rows as they are after it")
             }
-            if width >= 760 { StrataKeycap("esc").opacity(0.8) }
-            SimButton(title: "Close journey", icon: "xmark", iconOnly: true, action: close)
+            if width >= 760 { StrataKeycap("Esc") }
+            SimButton(title: "Close the journey", icon: "xmark", iconOnly: true, shortcut: Shortcuts.journeyEscape, action: close)
         }
         .padding(.horizontal, 12)
     }
@@ -220,6 +222,7 @@ private struct SimJourneyMoveChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .strataHint(current ? "" : "Go to step \(chip.step + 1), which made this move")
         .accessibilityLabel("\(chip.row) \(chip.code) \(chip.name ?? ""), step \(chip.step + 1)")
     }
 }

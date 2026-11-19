@@ -78,7 +78,7 @@ struct GraphScreen: View {
             Rectangle().fill(Theme.border).frame(width: 1, height: 20)
             StrataIconButton("minus", title: "Zoom out") { zoom(1 / 1.22) }
             StrataIconButton("plus", title: "Zoom in") { zoom(1.22) }
-            StrataIconButton("arrow.up.left.and.arrow.down.right", title: "Fit graph") { viewport.fit(layout.positions, in: size) }
+            StrataIconButton("arrow.up.left.and.arrow.down.right", title: "Fit the graph") { viewport.fit(layout.positions, in: size) }
         }
         .zIndex(1)
     }

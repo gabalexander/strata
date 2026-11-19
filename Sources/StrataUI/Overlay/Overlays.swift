@@ -3,7 +3,7 @@ import AppKit
 import StrataCore
 
 // In-window menus, hover cards and toasts. Strata never opens a separate system window for these
-// (no .contextMenu, .popover, .help, .sheet, NSMenu): every window is hidden from screen sharing,
+// (no .contextMenu, .popover, .help, .sheet, NSMenu; hover hints are Hints.swift): every window is hidden from screen sharing,
 // and a separate menu/popover window would not be. OverlayHost (shell) draws this state above everything.
 // CONTRACT FILE: owned by the lead.
 
@@ -48,13 +48,15 @@ public final class Overlays {
 
     public var menu: Menu?
     public var card: Card?
+    /// Hover hints (Hints.swift). A constant, so reading it never ties a view to the hint showing.
+    public let hints = HoverHints()
     public private(set) var toast: String?
     @ObservationIgnored private var toastGen = 0
 
     public init() {}
 
     /// `at` is in global (window) coordinates, top-left origin: what `.onRightClick` hands you.
-    public func showMenu(_ items: [MenuItem], at: CGPoint) { card = nil; menu = Menu(items: items, at: at) }
+    public func showMenu(_ items: [MenuItem], at: CGPoint) { card = nil; hints.dismiss(); menu = Menu(items: items, at: at) }
     public func dismissMenu() { menu = nil }
 
     public func showTerm(_ term: Term, anchor: CGRect, pinned: Bool = false, index: TermIndex? = nil) {

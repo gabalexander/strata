@@ -44,3 +44,11 @@ final class SimFocus {
         return request.node
     }
 }
+
+/// Offscreen snapshots that render the whole window: the level opens with this node selected.
+@_spi(Snapshots) @MainActor
+public enum SimFocusSnapshot {
+    public static func select(_ node: String, model: AppModel, id: String, path: [String]) {
+        SimFocus.of(model).select(node, onArrival: AppModel.sessionKey(id, path))
+    }
+}

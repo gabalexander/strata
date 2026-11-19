@@ -27,6 +27,10 @@ import StrataCore
 /// `STRATA_SNAP_JOURNEY=id` opens that journey's player at `STRATA_SNAP_JOURNEY_STEP`
 /// (a step id, or its 1-based number; the start by default); `STRATA_SNAP_JOURNEY_ROWS=1` shows the
 /// rows pane in the narrow layout and `STRATA_SNAP_JOURNEY_EXPAND=1` lists every column of each row.
+/// `STRATA_SNAP_HINT=text` shows the hover hint of the control whose hint contains that text (as if the
+/// pointer rested on it), `STRATA_SNAP_SHEET=1` opens the keyboard shortcut sheet and `STRATA_SNAP_INTRO=1`
+/// shows the first-open line, and `STRATA_SNAP_GLYPH=node` hovers that card's first glyph (its ops badge,
+/// deep-dive layers, note or drift mark) to show its hint; these render the whole window.
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -50,6 +54,10 @@ import StrataCore
                 + (env["STRATA_SNAP_JOURNEY"].map { ["journey", $0, env["STRATA_SNAP_JOURNEY_STEP"] ?? "start"] } ?? [])
                 + (dimensionsTag(env).map { [$0] } ?? [])
                 + (env["STRATA_SNAP_LINKS"].map { ["links", $0] } ?? [])
+                + (env["STRATA_SNAP_HINT"].map { ["hint", $0.lowercased().replacingOccurrences(of: " ", with: "-")] } ?? [])
+                + (env["STRATA_SNAP_SHEET"] == "1" ? ["sheet"] : []) + (env["STRATA_SNAP_INTRO"] == "1" ? ["intro"] : [])
+                + (env["STRATA_SNAP_GLYPH"].map { ["glyph", $0] } ?? [])
+                + (env["STRATA_SNAP_SIZE"].map { env["STRATA_SNAP_JOURNEY"] == nil ? [$0] : [] } ?? [])
                     .filter { !$0.isEmpty })
         .joined(separator: "-").replacingOccurrences(of: "#", with: "_").replacingOccurrences(of: "/", with: "_")
     // STRATA_SNAP_SIZE=WxH sets both; STRATA_SNAP_H only the height.
@@ -59,7 +67,9 @@ import StrataCore
     // A hover card is drawn by the real overlay host, and the Ask tab's field is an AppKit view:
     // only a hosted render (the whole window) draws them.
     let hover = env["STRATA_SNAP_HOVER"]
-    return [Scene(name: name, size: size, hosted: hover != nil || env["STRATA_SNAP_DOCK"] == "ask") {
+    let window = hover != nil || env["STRATA_SNAP_HINT"] != nil || env["STRATA_SNAP_SHEET"] == "1" || env["STRATA_SNAP_INTRO"] == "1"
+        || env["STRATA_SNAP_GLYPH"] != nil
+    return [Scene(name: name, size: size, hosted: window || env["STRATA_SNAP_DOCK"] == "ask") {
         let model = AppModel(library: Library(manifests: [manifest]),
                              vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
         if env["STRATA_SNAP_STAGE"] == "1" {
@@ -105,7 +115,12 @@ import StrataCore
             if env["STRATA_SNAP_JOURNEY_EXPAND"] == "1" { SimJourneySnapshot.expandRows(model) }
         }
         let tab = env["STRATA_SNAP_DOCK"].flatMap { tabs[$0] } ?? (env["STRATA_SNAP_SCENARIO"] == nil ? .controls : .scenarios)
-        if hover != nil {
+        if window {
+            model.overlays.hints.pinned = env["STRATA_SNAP_HINT"]
+            SimGlyphSnapshot.node = env["STRATA_SNAP_GLYPH"]
+            model.shortcutSheetOpen = env["STRATA_SNAP_SHEET"] == "1"
+            model.onboarding = env["STRATA_SNAP_INTRO"] == "1"
+            if let selected { SimFocusSnapshot.select(selected, model: model, id: manifest.id, path: levelPath) }
             model.open(.sim(manifest.id, path: levelPath))
             model.sidebarVisible = false
             return AnyView(RootView(model: model, fixtureEntries: model.library.entries, fixtureNotes: [:]))

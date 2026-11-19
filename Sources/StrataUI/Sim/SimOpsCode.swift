@@ -203,7 +203,6 @@ struct SimOpsCodeBlock: View {
     let overlays: Overlays
     var caption: String?
     var still = false
-    @State private var hovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -211,19 +210,9 @@ struct SimOpsCodeBlock: View {
                 Text(title).font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                 if let caption { Text(caption).font(Theme.mono(10)).foregroundStyle(Theme.faint) }
                 Spacer(minLength: 0)
-                Button(action: copy) {
-                    Image(systemName: "doc.on.doc")
-                        .font(Theme.ui(10, .medium))
-                        .foregroundStyle(hovered ? Theme.text : Theme.muted)
-                        .frame(width: 22, height: 20)
-                        .background(hovered ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovered = $0 }
-                .accessibilityLabel(copyTitle)
+                SimCopyButton(title: copyTitle, action: copy)
             }
-            .frame(height: 16)
+            .frame(height: 20)
             SimEnumCodeText(text)
                 .font(Theme.mono(11))
                 .foregroundStyle(Theme.text)

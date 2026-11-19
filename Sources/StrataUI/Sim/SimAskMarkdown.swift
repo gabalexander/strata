@@ -52,7 +52,7 @@ struct SimAskMarkdown: View {
             Text(verbatim: text)
                 .font(Theme.mono(size - 1))
                 .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
+                .strataSelectable("Copy code") { text }
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10).padding(.vertical, 8)

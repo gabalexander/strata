@@ -30,7 +30,7 @@ struct SimEnumDetailHost: View {
     private func escape(_ state: SimEnumState) -> some View {
                 WindowEvents(matching: .keyDown) { event, _ in
                     guard event.keyCode == 53, !event.hasCommandModifiers, model.overlays.menu == nil, model.overlays.card == nil,
-                          !model.paletteOpen, !model.switcherOpen else { return event }
+                          !model.paletteOpen, !model.switcherOpen, !model.shortcutSheetOpen else { return event }
                     if !event.isARepeat { state.close() }
                     return nil
                 }
@@ -111,12 +111,13 @@ struct SimEnumDetailPanel: View {
             }
             Spacer(minLength: 8)
             ForEach(def.code, id: \.self) { path in
-                SimButton(title: (path as NSString).lastPathComponent, icon: "chevron.left.forwardslash.chevron.right") {
+                SimButton(title: (path as NSString).lastPathComponent, icon: "chevron.left.forwardslash.chevron.right",
+                          hint: "Open \(path) in your editor") {
                     model.openCode(path, repo: sim.manifest.repo)
                 }
             }
             Text("Esc").font(Theme.mono(10)).foregroundStyle(Theme.faint)
-            SimButton(title: "Close", icon: "xmark", iconOnly: true) { state.close() }
+            SimButton(title: "Close", icon: "xmark", iconOnly: true, shortcut: Shortcuts.escape) { state.close() }
         }
     }
 

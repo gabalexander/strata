@@ -14,13 +14,18 @@ struct SimActions {
     var flip: (() -> Void)?
     /// Stores and applies the map's Links options; nil where they aren't offered.
     var links: ((StageLinkOptions) -> Void)?
+    /// Zooms the stage by a factor around its centre (⌘+ and ⌘−); nil where the palette shouldn't offer it.
+    var zoom: ((CGFloat) -> Void)?
 
     func palette(selection: StageSelection? = nil) -> [MenuItem] {
         var items = [
-            play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() },
-            command("Step simulation", icon: "forward.frame", shortcut: ".") { sim.pauseAndStep() },
+            play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: Shortcuts.reset.display) { sim.reset() },
+            command("Step simulation", icon: "forward.frame.fill", shortcut: Shortcuts.step.display) { sim.pauseAndStep() },
             fitItem,
-        ] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? []) + linkItems(header: false)
+        ] + (zoom.map { zoom in [
+            command("Zoom in", icon: "plus.magnifyingglass", shortcut: Shortcuts.zoomIn.display) { zoom(1.2) },
+            command("Zoom out", icon: "minus.magnifyingglass", shortcut: Shortcuts.zoomOut.display) { zoom(1 / 1.2) },
+        ] } ?? []) + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? []) + linkItems(header: false)
             + sim.level.scenarios.map(scenarioItem)
             + sim.level.flows.filter { !$0.isConsumer }.map(sendItem)
             + sim.level.nodes.filter(\.canDeepDive).map { node in
@@ -93,7 +98,7 @@ struct SimActions {
             return [.header(flow.label)] + (flow.isConsumer ? [play] : [sendItem(flow), play])
         case nil:
             var items = [fitItem] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? [])
-                + [play, command("Reset", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() }]
+                + [play, command("Reset", icon: "arrow.counterclockwise", shortcut: Shortcuts.reset.display) { sim.reset() }]
             let sources = sim.level.flows.filter { !$0.isConsumer }
             if !sources.isEmpty { items.append(.submenu("Send", icon: "paperplane", sources.map(sendItem))) }
             if !sim.level.scenarios.isEmpty {
@@ -189,15 +194,15 @@ struct SimActions {
     }
 
     private var play: MenuItem {
-        command(sim.playing ? "Pause" : "Play", icon: sim.playing ? "pause.fill" : "play.fill", shortcut: "Space") {
+        command(sim.playing ? "Pause" : "Play", icon: sim.playing ? "pause.fill" : "play.fill", shortcut: Shortcuts.play.display) {
             sim.playing.toggle()
         }
     }
 
-    private var fitItem: MenuItem { command("Fit view", icon: "arrow.up.left.and.arrow.down.right", shortcut: "⌘0", action: fit) }
+    private var fitItem: MenuItem { command("Fit view", icon: "arrow.up.left.and.arrow.down.right", shortcut: Shortcuts.fit.display, action: fit) }
 
     private var tidyItem: MenuItem? {
-        tidy.map { command("Tidy layout", icon: SimActions.tidyIcon, shortcut: "⌥⌘L", action: $0) }
+        tidy.map { command("Tidy layout", icon: SimActions.tidyIcon, shortcut: Shortcuts.tidy.display, action: $0) }
     }
 
     static let tidyIcon = "wand.and.rays"
@@ -205,7 +210,7 @@ struct SimActions {
     private var flipItem: MenuItem? {
         let down = (model.layoutDirections[sim.manifest.id] ?? sim.level.direction ?? .right) == .down
         return flip.map { command(down ? "Lay out left to right" : "Lay out top to bottom", icon: SimActions.flipIcon,
-                                  shortcut: "⌥⌘V", action: $0) }
+                                  shortcut: Shortcuts.flip.display, action: $0) }
     }
 
     static let flipIcon = "arrow.down.square"

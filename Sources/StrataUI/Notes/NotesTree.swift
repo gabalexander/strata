@@ -24,7 +24,7 @@ public struct NotesTree: View {
             HStack {
                 StrataSectionLabel("Notes")
                 Spacer(minLength: 0)
-                StrataIconButton("plus", title: "New note ⌘N") { create(in: nil, folder: false) }
+                StrataIconButton("plus", title: "New note", shortcut: Shortcuts.newNote.display) { create(in: nil, folder: false) }
             }
             .padding(.leading, 2)
             .padding(.trailing, -4)

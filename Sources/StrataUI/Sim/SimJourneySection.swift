@@ -45,7 +45,8 @@ struct SimJourneySection: View {
                 Text("\(journey.steps.count) steps · \(journey.entity.label ?? journey.entity.table) \(journey.entity.key?.description ?? "")")
                     .font(Theme.mono(10.5)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
-                SimButton(title: open ? "Following" : "Follow", icon: open ? "checkmark" : "play.fill", active: true) {
+                SimButton(title: open ? "Following" : "Follow", icon: open ? "checkmark" : "play.fill", active: true,
+                          hint: open ? "Playing in the dock's place; Esc closes it" : "Step through it on the map, in the dock's place") {
                     SimJourneyMenus.follow(journey, sim: sim, model: model)
                 }
                 .fixedSize()

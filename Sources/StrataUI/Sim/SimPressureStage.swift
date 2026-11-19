@@ -156,7 +156,7 @@ struct SimPressureLegend: View {
                     }
                     if !radius.lagging.isEmpty { swatch(Theme.warn, "lags") }
                 }
-                StrataKeycap("esc")
+                StrataKeycap("Esc")
                 Button { state.clear(overlay, selection: selection) } label: {
                     Image(systemName: "xmark").font(Theme.ui(9, .semibold)).foregroundStyle(Theme.muted)
                         .frame(width: 16, height: 16).contentShape(Rectangle())

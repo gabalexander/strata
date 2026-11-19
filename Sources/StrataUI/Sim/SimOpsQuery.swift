@@ -74,7 +74,6 @@ struct SimOpsQueryBlock: View {
     let sim: Simulation
     let overlays: Overlays
     var still = false
-    @State private var hovered = false
 
     /// The hook every statement's text goes through, plain text in and styled text out: keyword, string
     /// and parameter colours. `code` then shows it with `SimEnumCodeText`, which finds enum values on
@@ -124,17 +123,9 @@ struct SimOpsQueryBlock: View {
             if formatted.changed {
                 SimOpsQueryToggle(raw: raw) { SimOpsQueryMode.of(sim).setRaw(ref, $0) }
             }
-            Button { copy(raw ? source : formatted.text, "Copied query") } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(Theme.ui(10, .medium))
-                    .foregroundStyle(hovered ? Theme.text : Theme.muted)
-                    .frame(width: 22, height: 20)
-                    .background(hovered ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
-                    .contentShape(Rectangle())
+            SimCopyButton(title: raw ? "Copy the query as written" : "Copy the formatted query") {
+                copy(raw ? source : formatted.text, "Copied query")
             }
-            .buttonStyle(.plain)
-            .onHover { hovered = $0 }
-            .accessibilityLabel(raw ? "Copy query as written" : "Copy formatted query")
         }
         .frame(height: 20)
     }
@@ -206,6 +197,7 @@ private struct SimOpsQueryToggle: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .strataHint(selected ? "" : title == "Raw" ? "Show the query as written in the code" : "Show the query one clause per line")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityLabel(title == "Raw" ? "Show the query as written" : "Show the query formatted")
     }

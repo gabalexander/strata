@@ -2,7 +2,8 @@ import Foundation
 import StrataCore
 import StrataUI
 
-/// What state.json keeps: the open route, and per map the stage's vertical/horizontal switch and its Links control.
+/// What state.json keeps: the open route, per map the stage's vertical/horizontal switch and its Links control,
+/// and the once-only hints already seen.
 struct RouteState: Codable {
     private enum Screen: String, Codable { case home, note, sim, graph, search }
     private let screen: Screen
@@ -12,8 +13,11 @@ struct RouteState: Codable {
     private var directions: [String: String]?
     /// AppModel.linkOptions that differ from the defaults ("Show all links" is not kept).
     private var links: [String: StageLinkOptions]?
+    /// AppModel.seenHints: once-only hints already shown and dismissed (the map intro line).
+    private var hints: [String]?
 
-    init(_ route: Route, directions: [String: FlowDirection] = [:], links: [String: StageLinkOptions] = [:]) {
+    init(_ route: Route, directions: [String: FlowDirection] = [:], links: [String: StageLinkOptions] = [:],
+         hints: Set<String> = []) {
         switch route {
         case .home: screen = .home
         case .graph: screen = .graph
@@ -24,6 +28,7 @@ struct RouteState: Codable {
         self.directions = directions.isEmpty ? nil : directions.mapValues(\.rawValue)
         let saved = links.filter(\.value.saved)
         self.links = saved.isEmpty ? nil : saved
+        self.hints = hints.isEmpty ? nil : hints.sorted()
     }
 
     var route: Route {
@@ -39,6 +44,8 @@ struct RouteState: Codable {
     var layoutDirections: [String: FlowDirection] { (directions ?? [:]).compactMapValues(FlowDirection.init(rawValue:)) }
 
     var linkOptions: [String: StageLinkOptions] { links ?? [:] }
+
+    var seenHints: Set<String> { Set(hints ?? []) }
 
     static func load(from url: URL = StrataPaths.state) -> RouteState? {
         guard let data = try? Data(contentsOf: url) else { return nil }

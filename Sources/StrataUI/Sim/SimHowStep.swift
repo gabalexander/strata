@@ -51,14 +51,15 @@ struct SimHowStepDetail: View {
         let count = player.playback.frames.count
         return HStack(spacing: 6) {
             SimHowBackButton(title: "State") { player.closeInspector() }
+                .strataHint("Back to the keys and values", shortcut: Shortcuts.escape.display)
             Spacer(minLength: 4)
             Text(index < 0 ? "start" : "step \(index + 1) of \(count)")
                 .font(Theme.mono(11)).foregroundStyle(Theme.muted).monospacedDigit().lineLimit(1)
-            SimButton(title: "Previous step", icon: "chevron.left", iconOnly: true) { player.step(-1) }
+            SimButton(title: "Previous step", icon: "chevron.left", iconOnly: true, keys: "←") { player.step(-1) }
                 .disabled(index < 0).opacity(index < 0 ? 0.4 : 1)
-            SimButton(title: "Next step", icon: "chevron.right", iconOnly: true) { player.step(1) }
+            SimButton(title: "Next step", icon: "chevron.right", iconOnly: true, keys: "→") { player.step(1) }
                 .disabled(index >= count - 1).opacity(index >= count - 1 ? 0.4 : 1)
-            StrataKeycap("esc").opacity(0.8)
+            StrataKeycap("Esc")
         }
         .padding(.horizontal, 10)
         .frame(height: 40)
@@ -88,7 +89,7 @@ struct SimHowStepDetail: View {
         if !step.code.isEmpty {
             SimSection(title: "Code") {
                 ForEach(step.code, id: \.self) { path in
-                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                 }
             }
         }
@@ -108,7 +109,7 @@ struct SimHowStepDetail: View {
             }
             Text(step.label).font(Theme.heading).foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+                .strataSelectable { step.label }
             SimOpsChips {
                 participant(step.from)
                 if step.from != step.to {
@@ -183,7 +184,7 @@ struct SimHowStepDetail: View {
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                    .strataSelectable("Copy reply") { reply }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .card(Theme.bg, radius: Theme.radiusSmall)
@@ -276,7 +277,7 @@ struct SimHowStepDetail: View {
         if !mechanism.code.isEmpty {
             SimSection(title: "Code") {
                 ForEach(mechanism.code, id: \.self) { path in
-                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                 }
             }
         }
@@ -291,7 +292,6 @@ struct SimHowRedisBlock: View {
     let raw: String
     let overlays: Overlays
     var still = false
-    @State private var hovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -299,17 +299,7 @@ struct SimHowRedisBlock: View {
                 Text("Command").font(Theme.ui(11, .semibold)).foregroundStyle(Theme.muted)
                 Text("valkey").font(Theme.mono(10)).foregroundStyle(Theme.faint)
                 Spacer(minLength: 0)
-                Button(action: copy) {
-                    Image(systemName: "doc.on.doc")
-                        .font(Theme.ui(10, .medium))
-                        .foregroundStyle(hovered ? Theme.text : Theme.muted)
-                        .frame(width: 22, height: 20)
-                        .background(hovered ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovered = $0 }
-                .accessibilityLabel("Copy command")
+                SimCopyButton(title: "Copy the command", action: copy)
             }
             .frame(height: 20)
             VStack(alignment: .leading, spacing: 6) {
@@ -386,7 +376,7 @@ struct SimHowChangeRow: View {
                 .padding(.leading, 13)
             }
         }
-        .textSelection(.enabled)
+        .strataSelectable { [key, value].compactMap { $0 }.joined(separator: " ") }
         .padding(.horizontal, 9).padding(.vertical, 7)
         .background(Theme.raised.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
@@ -452,6 +442,7 @@ struct SimHowParticipantChip: View {
             Button { select(.node(node.id)) } label: { content.contentShape(Rectangle()) }
                 .buttonStyle(.plain)
                 .onHover { hovered = $0 }
+                .strataHint("Select \(node.label) on the stage")
                 .accessibilityLabel("\(participant.label), select \(node.label) on the stage")
         } else {
             content

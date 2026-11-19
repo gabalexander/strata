@@ -73,7 +73,7 @@ private struct SimEntityCard: View {
                 }
             }
             ForEach(entity.code, id: \.self) { path in
-                SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { model.openCode(path, repo: sim.manifest.repo) }
+                SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { model.openCode(path, repo: sim.manifest.repo) }
             }
             if expanded {
                 Rectangle().fill(Theme.border).frame(height: 1).padding(.horizontal, -10)

@@ -21,6 +21,21 @@ import StrataCore
         case .about: "info.circle"
         }
     }
+
+    /// The tab's hover hint: what it holds, in a few words.
+    var hint: String {
+        switch self {
+        case .controls: "Controls: change the system and see what moves"
+        case .scenarios: "Try this: guided scenarios to run"
+        case .pressure: "Pressure: bottlenecks, capacity, blast radius"
+        case .log: "Log: what just happened, newest first"
+        case .glossary: "Glossary: the terms this map uses"
+        case .ask: "Ask the map a question"
+        case .about: "About this map"
+        }
+    }
+
+    var shortcut: Shortcut? { self == .ask ? Shortcuts.ask : nil }
 }
 
 @MainActor
@@ -51,24 +66,14 @@ struct SimDock: View, Equatable {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 3) {
-                ForEach(SimDockTab.allCases.filter { $0 != .ask || !SimAskState.offInConfig(model) }, id: \.self) { item in
-                    Button { tab = item } label: {
-                        Label(item.rawValue, systemImage: item.icon)
-                            .font(Theme.ui(11, .medium))
-                            .lineLimit(1)
-                            .padding(.horizontal, 8)
-                            .frame(height: 26)
-                            .foregroundStyle(tab == item ? Theme.accent : Theme.muted)
-                            .background(tab == item ? Theme.accent.opacity(0.10) : .clear,
-                                        in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(tab == item ? .isSelected : [])
+                // Labels when they fit, else icons alone (each still says what it is in its hint).
+                ViewThatFits(in: .horizontal) {
+                    tabs(labels: true)
+                    tabs(labels: false)
                 }
                 Spacer(minLength: 0)
                 if tab == .pressure { SimPressureHeatToggle(sim: sim) }
-                SimButton(title: "Hide dock", icon: "chevron.down", iconOnly: true) { model.dockVisible = false }
+                SimButton(title: "Hide dock", icon: "chevron.down", iconOnly: true, shortcut: Shortcuts.dock) { model.dockVisible = false }
             }
             .padding(.horizontal, 12).frame(height: 40)
             Rectangle().fill(Theme.border).frame(height: 1)
@@ -81,6 +86,31 @@ struct SimDock: View, Equatable {
             }
         }
         .background(Theme.surface)
+    }
+
+    private func tabs(labels: Bool) -> some View {
+        HStack(spacing: 3) {
+            ForEach(SimDockTab.allCases.filter { $0 != .ask || !SimAskState.offInConfig(model) }, id: \.self) { item in
+                Button { tab = item } label: {
+                    Group {
+                        if labels { Label(item.rawValue, systemImage: item.icon) } else { Image(systemName: item.icon).frame(width: 14) }
+                    }
+                    .font(Theme.ui(11, .medium))
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .foregroundStyle(tab == item ? Theme.accent : Theme.muted)
+                    .background(tab == item ? Theme.accent.opacity(0.10) : .clear,
+                                in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .strataHint(item.hint, shortcut: item.shortcut?.display)
+                .accessibilityLabel(item.rawValue)
+                .accessibilityAddTraits(tab == item ? .isSelected : [])
+            }
+        }
+        .fixedSize()
     }
 
     /// A tab switch rebuilds this on the same frame. Rows observe what they show themselves:
@@ -269,7 +299,8 @@ struct SimDock: View, Equatable {
         let entries = sim.log.filter { entry in !filterNode || id == nil || entry.node == id }
         return VStack(alignment: .leading, spacing: 7) {
             if let id {
-                SimButton(title: sim.level.node(id)?.label ?? id, icon: "line.3.horizontal.decrease", active: filterNode) {
+                SimButton(title: sim.level.node(id)?.label ?? id, icon: "line.3.horizontal.decrease", active: filterNode,
+                          hint: filterNode ? "Showing this node's events; click for all" : "Show only this node's events") {
                     filterNode.toggle()
                 }
                 .accessibilityHint(filterNode ? "Show all events" : "Show only events for this node")

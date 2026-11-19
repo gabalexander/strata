@@ -54,7 +54,7 @@ struct SimDriftOverview: View {
                     }
                     Spacer(minLength: 4)
                     if running { ProgressView().controlSize(.mini) }
-                    SimButton(title: "Check again", icon: SimDriftMenus.icon, iconOnly: true) {
+                    SimButton(title: "Check the map against the repo again", icon: SimDriftMenus.icon, iconOnly: true) {
                         SimDriftState.of(model).check(sim.manifest, manual: true)
                     }
                     .disabled(running)
@@ -104,7 +104,8 @@ struct SimDriftOverview: View {
                     }
                 }
                 if !report.isClean || !unmapped.isEmpty {
-                    SimButton(title: "Copy prompt for your agent", icon: "doc.on.doc") {
+                    SimButton(title: "Copy prompt for your agent", icon: "doc.on.doc",
+                              hint: "A prompt that asks your coding agent to fix exactly these parts") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(SimDriftState.agentPrompt(sim.manifest, report: report), forType: .string)
                         model.overlays.toast("Copied a prompt for your agent")
@@ -136,6 +137,7 @@ struct SimDriftOverview: View {
                         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(on ? Theme.accent.opacity(0.3) : Theme.border))
                 }
                 .buttonStyle(.plain)
+                .strataHint(on ? "Show every kind again" : "Show only \(row.kind.rawValue) findings")
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -244,13 +246,14 @@ struct SimDriftRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(finding.message).font(Theme.ui(12)).foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                    .strataSelectable { finding.message }
                 if showPlace, let map = finding.map, let place = place(map) {
                     Button { reveal(map) } label: {
                         Text(place).font(Theme.mono(10.5)).foregroundStyle(Theme.muted).lineLimit(1).truncationMode(.middle)
                     }
                     .buttonStyle(.plain)
                     .disabled(map.node == nil)
+                    .strataHint(map.node == nil ? "" : "Select it on the map")
                 }
                 if let repo = finding.repo {
                     codeLink(repo.description, exists: finding.rule != "missing-file")
@@ -272,13 +275,13 @@ struct SimDriftRow: View {
                     .padding(7)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                    .textSelection(.enabled)
+                    .strataSelectable("Copy diff") { diff.joined(separator: "\n") }
                 }
                 // "Point code at x." says no more than the link to x above it.
                 if finding.found.map({ finding.fix != "Point code at \($0)." }) ?? true {
                     Text(finding.fix).font(Theme.small).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                        .strataSelectable { finding.fix }
                 }
             }
             Spacer(minLength: 0)
@@ -305,6 +308,7 @@ struct SimDriftRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!exists)
+        .strataHint(exists ? "Open \(text) in your editor" : "This file is gone from the repo")
         .accessibilityLabel(exists ? "Open \(text)" : "\(text), gone")
     }
 

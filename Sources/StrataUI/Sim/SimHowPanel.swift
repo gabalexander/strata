@@ -78,7 +78,7 @@ struct SimHowPanel: View {
                 }
             }
             Rectangle().fill(Theme.border).frame(height: 1)
-            SimHowTransport(player: player, still: still)
+            SimHowTransport(player: player, width: width, still: still)
             if !player.inspecting {
                 // The step detail shows the note in full, so the strip steps aside while it is open.
                 Rectangle().fill(Theme.border).frame(height: 1)
@@ -120,6 +120,7 @@ struct SimHowPanel: View {
                         Text(ownerTitle).font(Theme.mono(11)).foregroundStyle(Theme.muted).lineLimit(1).truncationMode(.tail)
                     }
                     .buttonStyle(.plain)
+                    .strataHint("Select it on the stage")
                     .accessibilityHint("Select it on the stage")
                 }
                 Text(player.mechanism.title).font(Theme.ui(16, .semibold)).foregroundStyle(Theme.text)
@@ -134,14 +135,15 @@ struct SimHowPanel: View {
                 Color.clear.frame(width: 0, height: 0)
             }
             ForEach(player.mechanism.code, id: \.self) { path in
-                SimButton(title: (path as NSString).lastPathComponent, icon: "chevron.left.forwardslash.chevron.right") {
+                SimButton(title: (path as NSString).lastPathComponent, icon: "chevron.left.forwardslash.chevron.right",
+                          hint: "Open \(path) in your editor") {
                     actions.openCode(path)
                 }
                 .fixedSize()
             }
             HStack(spacing: 6) {
-                StrataKeycap("esc")
-                SimButton(title: "Close", icon: "xmark", iconOnly: true, action: close)
+                StrataKeycap("Esc")
+                SimButton(title: "Close the player", icon: "xmark", iconOnly: true, shortcut: Shortcuts.howEscape, action: close)
             }
             .fixedSize()
         }
@@ -262,6 +264,7 @@ private struct SimHowMoreChip: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
+        .strataHint("The other paths")
         .accessibilityLabel("\(count) more paths")
     }
 }
@@ -293,6 +296,7 @@ struct SimHowBranchChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .strataHint(selected ? "" : "Play this path")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -490,34 +494,45 @@ private struct SimHowStateRow: View {
     }
 }
 
-/// Restart, step back, play or pause, step forward, the scrubber and the clock.
+/// Restart, step back, play or pause, step forward, the scrubber and the clock. The keycaps go first
+/// when the panel is narrow (each button's hint has its key), so the scrubber keeps room to drag.
 @MainActor
 struct SimHowTransport: View {
     let player: SimHowPlayer
+    var width: CGFloat = 1000
     var still = false
 
     var body: some View {
         HStack(spacing: 8) {
-            SimButton(title: "Restart", icon: "backward.end.fill", iconOnly: true) { player.restart() }
-            SimButton(title: "Step back", icon: "backward.frame.fill", iconOnly: true) { player.step(-1) }
+            SimButton(title: "Back to the start", icon: "backward.end.fill", iconOnly: true, keys: "Home") { player.restart() }
+            SimButton(title: "Step back", icon: "backward.frame.fill", iconOnly: true, keys: "←") {
+                player.step(-1)
+            }
             SimButton(title: player.playing ? "Pause" : "Play", icon: player.playing ? "pause.fill" : "play.fill",
-                      iconOnly: true, active: player.playing) { player.toggle() }
-            SimButton(title: "Step forward", icon: "forward.frame.fill", iconOnly: true) { player.step(1) }
+                      iconOnly: true, active: player.playing, shortcut: Shortcuts.howPlay) { player.toggle() }
+            SimButton(title: "Step forward", icon: "forward.frame.fill", iconOnly: true, keys: "→") {
+                player.step(1)
+            }
             TimelineView(.animation(paused: !player.playing || still)) { tick in
                 let position = player.position(at: tick.date)
                 HStack(spacing: 10) {
                     SimHowScrubber(player: player, position: position)
+                        .frame(minWidth: 96)
+                        .strataHint("Drag to any step")
                     readout(position)
                 }
             }
             SimSegments(values: [0.5, 1, 2, 4], selected: player.speed, label: speedLabel) { player.speed = $0 }
                 .accessibilityLabel("Playback speed")
-            HStack(spacing: 3) {
-                StrataKeycap("space")
-                StrataKeycap("←")
-                StrataKeycap("→")
+                .strataHint("Playback speed")
+            if width >= 900 {
+                HStack(spacing: 3) {
+                    StrataKeycap("Space")
+                    StrataKeycap("←")
+                    StrataKeycap("→")
+                }
+                .strataHint("Play or pause, and step, from the keyboard")
             }
-            .opacity(0.8)
         }
         .padding(.horizontal, 14)
         .frame(height: 46)
@@ -621,6 +636,7 @@ struct SimHowNotes: View {
                     .buttonStyle(.plain)
                     .onHover { hovered = $0 }
                     .pointerStyle(.link)
+                    .strataHint("The whole step: command, reply, keys and note", shortcut: Shortcuts.howDetail.display)
                     .accessibilityHint("Opens the step detail")
                     if frame.branch != nil, index == player.playback.branchStart {
                         SimPill(title: player.playback.branch?.label ?? "branch", icon: "arrow.turn.down.right", tint: Theme.warn)
@@ -644,8 +660,9 @@ struct SimHowNotes: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 5) {
-                SimButton(title: "Step details", icon: "sidebar.right") { player.inspect(index) }
-                StrataKeycap("↩").opacity(0.8)
+                SimButton(title: "Step details", icon: "sidebar.right", hint: "The whole step: command, reply, keys and note",
+                          shortcut: Shortcuts.howDetail) { player.inspect(index) }
+                StrataKeycap("↩")
             }
             .fixedSize()
         }

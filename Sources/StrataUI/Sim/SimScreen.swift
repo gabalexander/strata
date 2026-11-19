@@ -144,6 +144,7 @@ private struct SimWorkspace: View {
         actions.tidy = tidyAction
         actions.flip = flip
         actions.links = setLinks
+        actions.zoom = { [viewport, renderer] factor in viewport.zoom(factor, layout: renderer.layout, compact: false) }
         return actions
     }
 
@@ -261,6 +262,9 @@ private struct SimWorkspace: View {
         .background { SimJourneyFollower(model: model, sim: sim, viewport: viewport, renderer: renderer) }
         .onChange(of: SimFocus.of(model).request) { _, _ in takeFocus() }
         .onChange(of: SimPressureState.of(sim).tabRequest) { _, _ in
+            // Like Ask: what covers the dock (a journey in its place, the How it works player) makes way.
+            SimJourneyState.of(model).close()
+            SimHowState.of(sim).close()
             tab = .pressure
             model.dockVisible = true
         }
@@ -278,6 +282,10 @@ private struct SimWorkspace: View {
             .clipped()
             .overlay(alignment: .center) {
                 if snapshot?.previewMenu == true { SimMenuPreview(items: actions.menu(for: selection)) }
+            }
+            .overlay(alignment: .top) {
+                // Clear of the Paused pill (top right) and the pressure legend (top left).
+                SimIntroHint(model: model).padding(.top, 12).padding(.horizontal, 104)
             }
             .overlay(alignment: .top) { SimEnumDetailHost(model: model, sim: sim, still: snapshot != nil) }
     }
@@ -394,23 +402,24 @@ private struct SimWorkspace: View {
         }
     }
 
+    /// The stage's keys (Shortcuts.swift lists them all). Escape closes the innermost thing first: an
+    /// in-window menu or card, the enum detail over the stage, the How it works player (its step detail
+    /// first), the journey (an op detail it opened first), the stage's overlays (pressure, the op detail,
+    /// data), then the selection, then the level. The shortcut sheet and the palette sit above all of it.
     private func key(_ event: NSEvent) -> Bool {
-        guard !model.paletteOpen, !model.switcherOpen else { return false }
-        // Topmost first: in-window menus and cards, the enum detail over the stage, the how player over
-        // the stage column, then the stage's overlays (pressure, the op detail, data), the selection, the level.
+        guard !model.paletteOpen, !model.switcherOpen, !model.shortcutSheetOpen else { return false }
         // The enum detail has its own Escape monitor too; whichever runs first closes it, never what lies under it.
         let overlaysClear = model.overlays.menu == nil && model.overlays.card == nil
         let enums = SimEnumState.of(model)
-        if overlaysClear, event.keyCode == 53, !event.hasCommandModifiers, enums.detail?.manifest == sim.manifest.id {
+        if overlaysClear, Shortcuts.escape.matches(event), enums.detail?.manifest == sim.manifest.id {
             if !event.isARepeat { enums.close() }
             return true
         }
         if overlaysClear, SimHowState.of(sim).key(event) { return true }
         // The journey player next; Escape backs out of an op detail it opened first.
-        if overlaysClear, !(event.keyCode == 53 && SimOpsState.of(sim).detail(for: selection) != nil),
+        if overlaysClear, !(Shortcuts.escape.matches(event) && SimOpsState.of(sim).detail(for: selection) != nil),
            SimJourneyState.of(model).key(event, manifest: sim.manifest.id) { return true }
-        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if event.keyCode == 53 {
+        if Shortcuts.escape.matches(event) {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }
             else if model.overlays.card != nil { model.overlays.closeTerm() }
             else if SimPressureState.of(sim).escape(selection, tabOpen: pressureOpen, sim: sim) { return true }
@@ -422,37 +431,36 @@ private struct SimWorkspace: View {
             return true
         }
         guard model.overlays.menu == nil else { return false }
-        if flags == .command && event.keyCode == 126 {
+        if Shortcuts.up.matches(event) {
             if !sim.path.isEmpty { up(sim.path.count - 1); return true }
             if detailParent != nil { out(); return true }
         }
-        let key = event.charactersIgnoringModifiers?.lowercased()
-        if flags.isEmpty {
-            switch key {
-            case " ": if !event.isARepeat { sim.playing.toggle() }; return true
-            case ".": sim.pauseAndStep(); return true
-            default: return false
-            }
-        }
-        if flags == [.command, .option], key == "i" { model.inspectorVisible.toggle(); return true }
-        if flags == [.command, .option], key == "l" || event.keyCode == 37 { tidy(); return true }
-        if flags == [.command, .option], key == "v" || event.keyCode == 9 { flip(); return true }
-        if flags == [.command, .option], key == "a" || event.keyCode == 0 {
+        if Shortcuts.play.matches(event) { if !event.isARepeat { sim.playing.toggle() }; return true }
+        if Shortcuts.step.matches(event) { sim.pauseAndStep(); return true }
+        if Shortcuts.inspector.matches(event) { model.inspectorVisible.toggle(); return true }
+        if Shortcuts.tidy.matches(event) { tidy(); return true }
+        if Shortcuts.flip.matches(event) { flip(); return true }
+        if Shortcuts.showAllLinks.matches(event) {
             var options = Self.links(of: sim, in: model)
             options.showAll.toggle()
             setLinks(options)
             return true
         }
-        guard flags == .command || flags == [.command, .shift] && key == "+" else { return false }
-        switch key {
-        case "r": sim.reset()
-        case "0": viewport.fit()
-        case "+", "=": viewport.zoom(1.2, layout: renderer.layout, compact: false)
-        case "-", "−": viewport.zoom(1 / 1.2, layout: renderer.layout, compact: false)
-        case "j": model.dockVisible.toggle()
-        default: return false
+        if Shortcuts.reset.matches(event) { sim.reset(); return true }
+        if Shortcuts.fit.matches(event) { viewport.fit(); return true }
+        if Shortcuts.zoomIn.matches(event) { viewport.zoom(1.2, layout: renderer.layout, compact: false); return true }
+        if Shortcuts.zoomOut.matches(event) { viewport.zoom(1 / 1.2, layout: renderer.layout, compact: false); return true }
+        if Shortcuts.dock.matches(event) { toggleDock(); return true }
+        return false
+    }
+
+    /// ⌘J. A journey plays in the dock's place, so while one is open the dock can't show: say so instead.
+    private func toggleDock() {
+        if SimJourneyState.of(model).player(for: sim.manifest.id) != nil {
+            model.overlays.toast("The journey is in the dock's place; Esc closes it")
+        } else {
+            model.dockVisible.toggle()
         }
-        return true
     }
 }
 
@@ -494,26 +502,31 @@ private struct SimToolbar: View, Equatable {
             }
             .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
             playback
+            // The layout group (tidy, direction, links), then the panel toggles.
             HStack(spacing: 4) {
                 if let tidy {
-                    SimButton(title: "Tidy layout", icon: SimActions.tidyIcon, iconOnly: true, action: tidy)
+                    SimButton(title: "Tidy layout", icon: SimActions.tidyIcon, iconOnly: true, shortcut: Shortcuts.tidy, action: tidy)
                 }
                 if let flip {
                     // Lit while the map runs top to bottom; the toolbar reads the switch itself (see ==).
                     let down = SimWorkspace.direction(of: sim, in: model) == .down
                     SimButton(title: down ? "Lay out left to right" : "Lay out top to bottom", icon: SimActions.flipIcon,
-                              iconOnly: true, active: down, action: flip)
+                              iconOnly: true, active: down, shortcut: Shortcuts.flip, action: flip)
                 }
                 if let links {
                     SimLinksButton(options: SimWorkspace.links(of: sim, in: model), overlays: model.overlays, items: links)
                 }
-                if !model.dockVisible {
-                    SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true) {
+                if tidy != nil || flip != nil || links != nil {
+                    Rectangle().fill(Theme.border).frame(width: 1, height: 16).padding(.horizontal, 3)
+                }
+                // The journey player takes the dock's place, so the dock has nothing to show while it is open.
+                if !model.dockVisible, SimJourneyState.of(model).player(for: sim.manifest.id) == nil {
+                    SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true, shortcut: Shortcuts.dock) {
                         model.dockVisible = true
                     }
                 }
                 SimButton(title: model.inspectorVisible ? "Hide inspector" : "Show inspector",
-                          icon: "sidebar.right", iconOnly: true, active: model.inspectorVisible) {
+                          icon: "sidebar.right", iconOnly: true, active: model.inspectorVisible, shortcut: Shortcuts.inspector) {
                     model.inspectorVisible.toggle()
                 }
             }
@@ -542,12 +555,14 @@ private struct SimToolbar: View, Equatable {
                 Text(SimFormat.seconds(sim.now)).font(Theme.mono(11, .medium)).monospacedDigit()
                     .foregroundStyle(Theme.muted).lineLimit(1).fixedSize()
             }
+            .strataHint("Simulated time since the last reset")
             SimButton(title: sim.playing ? "Pause" : "Play", icon: sim.playing ? "pause.fill" : "play.fill",
-                      iconOnly: true, active: sim.playing) { sim.playing.toggle() }
-            SimButton(title: "Step", icon: "forward.frame", iconOnly: true) { sim.pauseAndStep() }
+                      iconOnly: true, active: sim.playing, shortcut: Shortcuts.play) { sim.playing.toggle() }
+            SimButton(title: "Step once", icon: "forward.frame.fill", iconOnly: true, shortcut: Shortcuts.step) { sim.pauseAndStep() }
             SimSegments(values: [0.25, 0.5, 1, 2, 4], selected: sim.speed, label: speedLabel) { sim.speed = $0 }
                 .accessibilityLabel("Playback speed")
-            SimButton(title: "Reset", icon: "arrow.counterclockwise", iconOnly: true) { sim.reset() }
+                .strataHint("Playback speed")
+            SimButton(title: "Reset the simulation", icon: "arrow.counterclockwise", iconOnly: true, shortcut: Shortcuts.reset) { sim.reset() }
         }
     }
 
@@ -560,6 +575,8 @@ private struct SimToolbar: View, Equatable {
                     Text(parent.title).font(Theme.ui(13)).foregroundStyle(Theme.muted)
                 }
                 .buttonStyle(.plain)
+                .strataHint(sim.path.isEmpty ? "Back out of this deep dive" : "Back to \(parent.title)",
+                            shortcut: sim.path.isEmpty ? Shortcuts.up.display : nil)
                 .accessibilityHint("Back out of this deep dive")
                 Image(systemName: "chevron.right").font(Theme.ui(8, .medium)).foregroundStyle(Theme.faint)
             }
@@ -580,6 +597,8 @@ private struct SimToolbar: View, Equatable {
                 .foregroundStyle(depth == sim.path.count ? Theme.text : Theme.muted)
         }
         .buttonStyle(.plain)
+        .strataHint(depth == sim.path.count ? "" : "Up to \(title)",
+                    shortcut: depth == sim.path.count - 1 ? Shortcuts.up.display : nil)
         .accessibilityAddTraits(depth == sim.path.count ? .isSelected : [])
     }
 

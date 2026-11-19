@@ -42,6 +42,12 @@ public final class AppModel {
     public var screenCommands: [MenuItem] = []
     public var paletteOpen = false          // ⌘K: commands + everything
     public var switcherOpen = false         // ⌘O: jump to a note or sim
+    /// The in-window keyboard shortcut sheet (⌘/ or ?), drawn by the shell.
+    public var shortcutSheetOpen = false
+    /// Hints shown once, ever (the map intro line): ids the user has seen. The app keeps them in state.json.
+    public var seenHints: Set<String> = []
+    /// Whether once-only hints show at all; the app turns them on, offscreen snapshots leave them off.
+    public var onboarding = false
 
     /// Running simulations by "id|path", so a sim keeps its state when you navigate away and back.
     /// Sim screens create and drop entries; a library reload of that id drops them.

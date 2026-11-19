@@ -41,6 +41,8 @@ final class StageRenderer {
     @ObservationIgnored var inheritedOps: [String: Int] = [:]
     /// Nodes with drift findings on them or inside them (SimDriftState): each card gets a small mark.
     @ObservationIgnored var drifted: [String: Int] = [:]
+    /// Where each card's small glyphs were last drawn (SimStageGlyphs.swift), for their hover hints.
+    @ObservationIgnored var glyphs: [String: [StageGlyph]] = [:]
     static let tidyDuration = 0.55
 
     enum Lettering: Hashable {
@@ -432,20 +434,28 @@ final class StageRenderer {
                      at: CGPoint(x: x, y: r.minY + 16), anchor: .leading)
 
         var statusX = r.maxX - 14 - SimFormulaStage.reserved(node)
+        var marks: [StageGlyph] = []
         if node.formula != nil { drawFormulaBadge(on: r, lit: selected || hovered, in: content) }
         if state.health == .slow {
             symbol("tortoise", at: CGPoint(x: statusX, y: r.minY + 16), size: 11, tint: Theme.warn, in: context)
+            marks.append(StageGlyph(.slow, around: CGPoint(x: statusX, y: r.minY + 16)))
             statusX -= 15
         }
         if note {
             symbol("note.text", at: CGPoint(x: statusX, y: r.minY + 16), size: 10, tint: Theme.muted, in: content)
+            marks.append(StageGlyph(.note, around: CGPoint(x: statusX, y: r.minY + 16)))
             statusX -= 15
         }
-        if drift { drawDriftMarker(at: CGPoint(x: statusX, y: r.minY + 16), in: content) }
+        if drift {
+            drawDriftMarker(at: CGPoint(x: statusX, y: r.minY + 16), in: content)
+            marks.append(StageGlyph(.drift, around: CGPoint(x: statusX, y: r.minY + 16)))
+        }
+        defer { glyphs[node.id] = marks.isEmpty ? nil : marks }
 
         if node.kind == .note {
-            if let doc = node.doc {
-                let resolved = text(doc.replacingOccurrences(of: "\n", with: " "), .hint, in: content)
+            if let doc = node.brief ?? node.doc {
+                // A card has no room for markdown: its marks would show as raw asterisks and backticks.
+                let resolved = text(Self.plainNote(doc), .hint, in: content)
                 content.draw(resolved, in: CGRect(x: x, y: r.minY + 25, width: r.maxX - x - 8, height: 33))
             }
             return
@@ -472,12 +482,16 @@ final class StageRenderer {
             content.fill(Path(roundedRect: box, cornerRadius: 4), with: .color(lit || selected ? Theme.accent.opacity(0.14) : Theme.hover))
             content.stroke(Path(roundedRect: box, cornerRadius: 4), with: .color(Theme.border), lineWidth: 0.5)
             content.draw(opsLabel, at: CGPoint(x: box.minX + 4, y: box.midY), anchor: .leading)
+            marks.append(StageGlyph(.ops(opCount), rect: box))
         }
         if down {
             pill("down", at: CGPoint(x: r.maxX - 27, y: r.minY + 32), width: 42,
                  color: Theme.bad.opacity(0.38), fill: Theme.bad.opacity(0.13), style: .failure, in: context)
+            marks.append(StageGlyph(.down, rect: CGRect(x: r.maxX - 48, y: r.minY + 25, width: 42, height: 14)))
         } else if state.replicas > 1 {
             drawReplicas(state.replicas, at: CGPoint(x: r.maxX - 10, y: r.minY + 32), tint: tint, in: content)
+            let width = CGFloat((replicaDots - 1) * 5 + 3 + (state.replicas > 5 ? 20 : 0))
+            marks.append(StageGlyph(.replicas(state.replicas), rect: CGRect(x: r.maxX - 10 - width, y: r.minY + 26, width: width, height: 12)))
         }
 
         let summary: String
@@ -500,6 +514,7 @@ final class StageRenderer {
         if node.canDeepDive {
             symbol("square.3.layers.3d", at: CGPoint(x: r.maxX - 15, y: footerY), size: 12,
                    tint: selected ? Theme.accent : Theme.muted, in: content)
+            marks.append(StageGlyph(.deepDive, around: CGPoint(x: r.maxX - 15, y: footerY)))
         }
         if node.kind.role == .buffer {
             drawSlots(state, in: content, at: CGPoint(x: r.minX + 10, y: r.maxY - 7))
@@ -512,6 +527,26 @@ final class StageRenderer {
                          with: .color(util < 0.7 ? Theme.good : util < 0.9 ? Theme.warn : Theme.bad))
         }
     }
+
+    /// A note card's text on one run: markdown emphasis, code marks, links and list bullets dropped. Worked out
+    /// once per text, since cards draw every frame.
+    static func plainNote(_ text: String) -> String {
+        if let cached = plainNotes[text] { return cached }
+        var plain = SimBriefPlain.text(text)
+        for mark in ["**", "__", "`"] { plain = plain.replacingOccurrences(of: mark, with: "") }
+        let lines = plain.split(separator: "\n", omittingEmptySubsequences: true).map { line -> String in
+            var line = line.trimmingCharacters(in: .whitespaces)
+            for bullet in ["- ", "* ", "+ "] where line.hasPrefix(bullet) { line.removeFirst(bullet.count) }
+            while line.hasPrefix("#") { line.removeFirst() }
+            return line.trimmingCharacters(in: .whitespaces)
+        }
+        let result = lines.joined(separator: " ")
+        if plainNotes.count > 256 { plainNotes.removeAll() }
+        plainNotes[text] = result
+        return result
+    }
+
+    private static var plainNotes: [String: String] = [:]
 
     /// A pressure tag (`util 92%`, `stops here`) sitting on the card's top edge, right-aligned.
     private func drawTag(_ value: String, tint: StageTint, on r: CGRect, in context: GraphicsContext) {

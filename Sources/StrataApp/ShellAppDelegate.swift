@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model.replace(state?.route ?? .home)
         model.layoutDirections = state?.layoutDirections ?? [:]
         model.linkOptions = state?.linkOptions ?? [:]
+        model.seenHints = state?.seenHints ?? []
+        model.onboarding = true
         observeRoute()
 
         let window = StrataWindow(model: model)
@@ -117,13 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showWindow()
     }
 
-    /// Saves state.json when the route, the vertical/horizontal switch or the Links control changes.
+    /// Saves state.json when the route, the vertical/horizontal switch, the Links control or a seen hint changes.
     private func observeRoute() {
         guard let model else { return }
         withObservationTracking {
             _ = model.route
             _ = model.layoutDirections
             _ = model.linkOptions
+            _ = model.seenHints
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.model != nil else { return }
@@ -143,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func save(_ model: AppModel) {
-        do { try RouteState(model.route, directions: model.layoutDirections, links: model.linkOptions).save() }
+        do { try RouteState(model.route, directions: model.layoutDirections, links: model.linkOptions, hints: model.seenHints).save() }
         catch { NSLog("Strata: could not save state: %@", error.localizedDescription) }
     }
 }
@@ -152,8 +155,8 @@ extension AppDelegate {
     private func installMainMenu() {
         let main = NSMenu()
         let app = addSubmenu("Strata", to: main)
-        addItem("Hide Window", #selector(hideWindow), to: app, key: "w", target: self)
-        addItem("Quit Strata", #selector(NSApplication.terminate(_:)), to: app, key: "q", target: NSApp)
+        addItem("Hide Window", #selector(hideWindow), to: app, key: Self.key(Shortcuts.hideWindow), target: self)
+        addItem("Quit Strata", #selector(NSApplication.terminate(_:)), to: app, key: Self.key(Shortcuts.quit), target: NSApp)
 
         let edit = addSubmenu("Edit", to: main)
         addItem("Undo", Selector(("undo:")), to: edit, key: "z")
@@ -171,6 +174,12 @@ extension AppDelegate {
         NSApp.mainMenu = main
     }
 
+    /// A shortcut's key equivalent from the app's one list (Shortcuts.swift).
+    private static func key(_ shortcut: Shortcut) -> String {
+        guard case .char(let key)? = shortcut.keys.first else { return "" }
+        return key
+    }
+
     private func installStatusItem(hint: String?) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "Strata")
@@ -185,7 +194,7 @@ extension AppDelegate {
         addCommand(.dataFolder, to: menu, status: true, title: "Open ~/.strata in Finder")
         addCommand(.editConfig, to: menu, status: true)
         menu.addItem(.separator())
-        addItem("Quit Strata", #selector(NSApplication.terminate(_:)), to: menu, key: "q", target: NSApp)
+        addItem("Quit Strata", #selector(NSApplication.terminate(_:)), to: menu, key: Self.key(Shortcuts.quit), target: NSApp)
         item.menu = menu
         statusItem = item
     }

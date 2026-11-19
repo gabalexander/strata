@@ -15,7 +15,7 @@ struct Sidebar: View {
                         .foregroundStyle(Theme.accent)
                     Text("Strata").font(Theme.ui(15, .semibold))
                     Spacer()
-                    StrataIconButton("sidebar.left", title: "Hide sidebar ⌘\\") {
+                    StrataIconButton("sidebar.left", title: "Hide the sidebar", shortcut: Shortcuts.sidebar.display) {
                         ShellCommand.sidebar.perform(on: model)
                     }
                 }
@@ -46,7 +46,7 @@ struct Sidebar: View {
                             HStack {
                                 StrataSectionLabel("Notes")
                                 Spacer()
-                                StrataIconButton("plus", title: "New note ⌘N") { ShellCommand.newNote.perform(on: model) }
+                                StrataIconButton("plus", title: "New note", shortcut: Shortcuts.newNote.display) { ShellCommand.newNote.perform(on: model) }
                             }
                             .padding(.leading, 8)
                             .padding(.trailing, 2)
@@ -76,6 +76,8 @@ struct Sidebar: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 12)
             }
+            Rectangle().fill(Theme.border).frame(height: 1)
+            SidebarShortcutsRow { ShellCommand.shortcuts.perform(on: model) }
         }
         .frame(width: Theme.sidebarWidth)
         .frame(maxHeight: .infinity)
@@ -99,6 +101,7 @@ struct Sidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .strataHint("Every command, note, sim and node", shortcut: Shortcuts.palette.display)
     }
 
     private func section(_ title: String) -> some View {
@@ -156,7 +159,37 @@ private struct SidebarRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        // A title cut short says itself in full.
+        .strataHint(title.count > 28 ? title : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The sidebar's foot: the way to every shortcut, quiet until hovered.
+@MainActor
+private struct SidebarShortcutsRow: View {
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "keyboard").font(Theme.ui(11, .medium)).frame(width: 17)
+                Text("Keyboard shortcuts").font(Theme.ui(11))
+                Spacer(minLength: 4)
+                StrataKeycap("?")
+            }
+            .foregroundStyle(hovered ? Theme.text : Theme.faint)
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(hovered ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .strataHint("Every shortcut, by area", shortcut: Shortcuts.sheet.display)
     }
 }
 

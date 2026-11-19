@@ -154,18 +154,65 @@ scenarios:
 
 ## Keyboard
 
+Press `?` (or ⌘/) in the app for this list, drawn in the window. Hover any control for what it does and
+its shortcut.
+
+**Anywhere**
+
 | Keys | Action |
 |---|---|
-| ctrl+option+s | show or hide Strata |
-| ⌘K / ⌘O | command palette / jump to a note or sim |
-| ⌘N, ⌘⇧F | new note, search notes |
+| ctrl+option+s | show or hide Strata from any app (`hotkey:` in config.yaml) |
+| ⌘K | command palette: commands, notes, sims and nodes |
+| ⌘O | open a note or simulator |
+| ⌘N, ⇧⌘F | new note, search notes |
 | ⌘[ ⌘] | back, forward |
-| ⌘\\, ⌘⌥I, ⌘J | sidebar, inspector, simulator dock |
-| Space, `.`, ⌘R, ⌘0 | play/pause, step, reset, fit (in a simulator) |
-| ⌥⌘L, ⌥⌘V | tidy a manual layout; run the map top to bottom or left to right (in a simulator) |
-| ⌘L | ask the map (in a simulator) |
-| ⌥⌘A | show all links: open up shared links, every pill, nothing quiet or faded (in a simulator) |
-| ⌘⇧E | edit or read a note |
+| ⌘\\, ⌥⌘I | show or hide the sidebar, the inspector |
+| ⌘G, ⇧⌘H | the graph, home |
+| ⌘, | edit config.yaml |
+| ? or ⌘/ | keyboard shortcuts (`?` outside a text field) |
+| ⌘W, Esc Esc | hide the window (Esc twice only when nothing is open to close) |
+| ⌘Q | quit |
+
+**Maps and simulators**
+
+| Keys | Action |
+|---|---|
+| Space, `.` | play or pause, step once |
+| ⌘R, ⌘0 | reset, fit the view |
+| ⌘+ ⌘− | zoom in, out (or ⌘ scroll, or pinch) |
+| Esc | close the innermost thing first (menu or card, enum detail, How it works, journey, op detail), then deselect, then up a level |
+| ⌘↑ | up a level, out of a deep dive |
+| ⌘J | show or hide the dock |
+| ⌘L | ask the map |
+| ⌥⌘L, ⌥⌘V | tidy a manual layout; run the map top to bottom or left to right |
+| ⌥⌘A | show all links: open up shared links, every pill, nothing quiet or faded |
+| Click, Double-click, Right-click | select; dive into a deep dive; actions for anything |
+| Drag | pan |
+
+**How it works player** and **Journey player**
+
+| Keys | Action |
+|---|---|
+| Space | play or pause |
+| ← → | step back, forward |
+| Home End | jump to the start, the end |
+| ↩ | open or close the step detail (How it works) |
+| Esc | close the step detail or the op detail first, then the player |
+
+**Notes**
+
+| Keys | Action |
+|---|---|
+| ⇧⌘E | edit or read the note |
+| ⌘B, ⌘I, ⌘E | bold, italic, inline code |
+| ⌘F | find in the note |
+| ⌘-click | follow a `[[link]]` |
+
+**Palette and menus**
+
+| Keys | Action |
+|---|---|
+| ↑ ↓, ↩, Esc | move, run or open, close |
 
 ## Build from source
 

@@ -44,7 +44,8 @@ struct SimPressureHeatToggle: View {
 
     var body: some View {
         let state = SimPressureState.of(sim)
-        SimButton(title: "Heat map", icon: "thermometer.medium", active: state.heat) { state.toggleHeat() }
+        SimButton(title: "Heat map", icon: "thermometer.medium", active: state.heat,
+                  hint: state.heat ? "Turn the heat map off" : "Colour every card by how busy it is") { state.toggleHeat() }
             .accessibilityValue(state.heat ? "On" : "Off")
     }
 }

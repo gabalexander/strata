@@ -77,7 +77,7 @@ private struct SimHowCard: View {
             }
             if !mechanism.code.isEmpty {
                 ForEach(mechanism.code, id: \.self) { path in
-                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                 }
             }
         }

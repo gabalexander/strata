@@ -311,7 +311,9 @@ struct SimLinksButton: View {
     @State private var frame: CGRect = .zero
 
     var body: some View {
-        SimButton(title: "Links", icon: SimLinksMenus.icon, iconOnly: true, active: options.showAll || !options.bundle || !options.quiet) {
+        SimButton(title: "Links", icon: SimLinksMenus.icon, iconOnly: true, active: options.showAll || !options.bundle || !options.quiet,
+                  hint: options.showAll ? "Showing all links (click for the options)" : "Links: bundling, quiet data links, show all",
+                  shortcut: options.showAll ? Shortcuts.showAllLinks : nil) {
             overlays.showMenu(items(), at: CGPoint(x: frame.minX, y: frame.maxY + 4))
         }
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
@@ -331,7 +333,7 @@ enum SimLinksMenus {
         return (header ? [MenuItem.header("Links")] : []) + [
             MenuItem("Bundle shared links", icon: "arrow.triangle.merge", checked: options.bundle) { set(bundle) },
             MenuItem("Quiet data links", icon: "cylinder", checked: options.quiet) { set(quiet) },
-            MenuItem("Show all links", icon: "eye", shortcut: "⌥⌘A", checked: options.showAll) { set(all) },
+            MenuItem("Show all links", icon: "eye", shortcut: Shortcuts.showAllLinks.display, checked: options.showAll) { set(all) },
         ]
     }
 }

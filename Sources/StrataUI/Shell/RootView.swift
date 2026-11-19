@@ -31,12 +31,13 @@ public struct RootView: View {
                     .padding(.top, 34)
             }
             if !model.sidebarVisible {
-                StrataIconButton("sidebar.left", title: "Show sidebar ⌘\\") {
+                StrataIconButton("sidebar.left", title: "Show the sidebar", shortcut: Shortcuts.sidebar.display) {
                     ShellCommand.sidebar.perform(on: model)
                 }
                 .padding(.leading, 80)
                 .padding(.top, 3)
             }
+            ShortcutSheetHost(model: model)
             if model.paletteOpen || model.switcherOpen {
                 CommandPalette(catalog: catalog, switching: model.switcherOpen, recent: $recentPalettePicks)
                     .id(model.switcherOpen)
@@ -47,6 +48,7 @@ public struct RootView: View {
         .font(Theme.ui())
         .foregroundStyle(Theme.text)
         .tint(Theme.accent)
+        .strataOverlays(model.overlays)
         .background(Theme.bg)
         .ignoresSafeArea()
     }

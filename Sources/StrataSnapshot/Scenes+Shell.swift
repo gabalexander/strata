@@ -1,6 +1,6 @@
 import SwiftUI
 import StrataCore
-import StrataUI
+@_spi(Snapshots) import StrataUI
 
 @MainActor func shellScenes() -> [Scene] {
     [
@@ -33,6 +33,16 @@ import StrataUI
                                     pinned: true, index: TermIndex(terms: terms))
         },
         shellScene("shell-graph", route: .graph),
+        // The keyboard shortcut sheet, a hover hint on a toolbar button, and the first-open line on a map.
+        shellScene("shell-shortcuts", route: .sim("checkout", path: [])) { model in
+            model.shortcutSheetOpen = true
+        },
+        shellScene("shell-hint", route: .sim("checkout", path: [])) { model in
+            model.overlays.hints.pinned = "Reset the simulation"
+        },
+        shellScene("shell-intro", route: .sim("checkout", path: [])) { model in
+            model.onboarding = true
+        },
         shellScene("shell-library-error", route: .sim("checkout", path: []), includingError: true) { model in
             var diagnostic = Term(id: "manifest-error/billing", term: "Manifest error",
                                   short: "Edge refers to an undeclared node: ledger.")

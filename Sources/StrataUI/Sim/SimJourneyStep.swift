@@ -67,9 +67,9 @@ struct SimJourneyStepPane: View {
         HStack(spacing: 6) {
             StrataKeycap("→")
             Text("or").font(Theme.ui(11)).foregroundStyle(Theme.faint)
-            StrataKeycap("space")
+            StrataKeycap("Space")
             Text("to step through, a click on a step to jump,").font(Theme.ui(11)).foregroundStyle(Theme.muted)
-            StrataKeycap("esc")
+            StrataKeycap("Esc")
             Text("to close").font(Theme.ui(11)).foregroundStyle(Theme.muted)
         }
         .lineLimit(1)
@@ -95,7 +95,7 @@ struct SimJourneyStepPane: View {
         if let code = frame.op?.op.code, !code.isEmpty {
             SimSection(title: "Code") {
                 ForEach(code, id: \.self) { path in
-                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right") { actions.openCode(path) }
+                    SimButton(title: path, icon: "chevron.left.forwardslash.chevron.right", hint: "Open \(path) in your editor") { actions.openCode(path) }
                 }
             }
         }
@@ -112,7 +112,7 @@ struct SimJourneyStepPane: View {
             }
             Text(frame.step.label).font(Theme.heading).foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+                .strataSelectable { frame.step.label }
             places(frame)
             dive(frame)
         }
@@ -245,7 +245,7 @@ struct SimJourneyStepPane: View {
                         Text(bind.value ?? "NULL").font(Theme.mono(11)).foregroundStyle(bind.value == nil ? Theme.muted : Theme.text)
                             .lineLimit(3).truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                            .strataSelectable("Copy value") { bind.value ?? "NULL" }
                     }
                 }
             }
@@ -285,7 +285,7 @@ struct SimJourneyStepPane: View {
                 manifest.level(at: Array(found.path.dropLast()))?.node(last.split(separator: "#").first.map(String.init) ?? last)?.label
             } ?? manifest.title
             SimButton(title: found.mechanism.title + (here ? "" : " (in \(level))"),
-                      icon: SimHowMenus.icon, active: true) {
+                      icon: SimHowMenus.icon, active: true, hint: "Play “\(found.mechanism.title)” step by step") {
                 if here {
                     player.pause()
                     let label = found.op.flatMap { op in owner?.ops.first { $0.id == op }?.label } ?? owner?.label ?? found.node
@@ -331,6 +331,7 @@ struct SimJourneyNodeChip: View {
             Button(action: select) { content.contentShape(Rectangle()) }
                 .buttonStyle(.plain)
                 .onHover { hovered = $0 }
+                .strataHint("Select \(node?.label ?? id) on the stage")
                 .accessibilityLabel("Select \(node?.label ?? id) on the stage")
         } else {
             content

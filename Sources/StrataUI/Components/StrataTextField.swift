@@ -79,7 +79,12 @@ struct StrataTextField: NSViewRepresentable {
                 configuration.text = textView.string
                 submit()
             case #selector(NSResponder.cancelOperation(_:)):
-                guard let escape = configuration.onEscape else { return false }
+                // Escape leaves the field first (the innermost thing), so the next one reaches the screen.
+                guard let escape = configuration.onEscape else {
+                    control.window?.makeFirstResponder(nil)
+                    if let field = control as? Field { reportFocus(of: field) }
+                    return true
+                }
                 escape()
             default: return false
             }

@@ -35,15 +35,26 @@ struct SimButton: View {
     var iconOnly = false
     var active = false
     var tint = Theme.muted
+    /// The hover hint (Hints.swift). An icon-only button explains itself with its title by default.
+    var hint: String?
+    /// The keys shown in the hint: a shortcut from the app's list, or `keys` for one part of it (`←`).
+    var shortcut: Shortcut?
+    var keys: String?
     var action: () -> Void
     @State private var hovered = false
+
+    init(title: String, icon: String? = nil, iconOnly: Bool = false, active: Bool = false, tint: Color = Theme.muted,
+         hint: String? = nil, shortcut: Shortcut? = nil, keys: String? = nil, action: @escaping () -> Void) {
+        self.title = title; self.icon = icon; self.iconOnly = iconOnly; self.active = active; self.tint = tint
+        self.hint = hint; self.shortcut = shortcut; self.keys = keys; self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
             Group {
                 if let icon, iconOnly { Image(systemName: icon).frame(width: 13) }
-                else if let icon { Label(title, systemImage: icon) }
-                else { Text(title) }
+                else if let icon { Label(title, systemImage: icon).lineLimit(1).truncationMode(.middle) }
+                else { Text(title).lineLimit(1).truncationMode(.middle) }
             }
             .font(Theme.ui(11, .medium))
             .foregroundStyle(active ? Theme.accent : hovered ? Theme.text : tint)
@@ -56,6 +67,31 @@ struct SimButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .strataHint(hint ?? (iconOnly || shortcut != nil || keys != nil ? title : ""), shortcut: keys ?? shortcut?.display)
+        .accessibilityLabel(title)
+    }
+}
+
+/// The small copy glyph in a code block's header, with its hint. One look for every code block.
+@MainActor
+struct SimCopyButton: View {
+    /// What it copies, for the hint and accessibility: "Copy the query".
+    let title: String
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "doc.on.doc")
+                .font(Theme.ui(10, .medium))
+                .foregroundStyle(hovered ? Theme.text : Theme.muted)
+                .frame(width: 22, height: 20)
+                .background(hovered ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .strataHint(title)
         .accessibilityLabel(title)
     }
 }
@@ -266,6 +302,7 @@ struct SimSlider: View {
     let range: ClosedRange<Double>
     let step: Double
     @State private var dragValue: Double?
+    @FocusState private var focused: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -281,6 +318,8 @@ struct SimSlider: View {
                 Capsule().fill(Theme.accent.opacity(0.78)).frame(width: x, height: 3)
                     .offset(y: y - 1.5)
                 Circle().fill(Theme.accent).frame(width: radius * 2, height: radius * 2)
+                    // Focus in the accent, like everything else, instead of the system's blue ring.
+                    .overlay(Circle().strokeBorder(Theme.accent.opacity(focused ? 0.45 : 0), lineWidth: 3).padding(-3))
                     .position(x: x, y: y)
             }
             .contentShape(Rectangle())
@@ -293,6 +332,8 @@ struct SimSlider: View {
         }
         .frame(height: 20)
         .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
         .onKeyPress(.leftArrow) { update(value - step); return .handled }
         .onKeyPress(.rightArrow) { update(value + step); return .handled }
         .accessibilityLabel(title)
