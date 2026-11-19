@@ -144,6 +144,7 @@ scenarios:
 | ⌘\\, ⌘⌥I, ⌘J | sidebar, inspector, simulator dock |
 | Space, `.`, ⌘R, ⌘0 | play/pause, step, reset, fit (in a simulator) |
 | ⌥⌘L, ⌥⌘V | tidy a manual layout; run the map top to bottom or left to right (in a simulator) |
+| ⌥⌘A | show all links: open up shared links, every pill, nothing quiet or faded (in a simulator) |
 | ⌘⇧E | edit or read a note |
 
 ## Build from source

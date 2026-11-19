@@ -2,7 +2,7 @@ import Foundation
 import StrataCore
 import StrataUI
 
-/// What state.json keeps: the open route and the stage's vertical/horizontal switch per map.
+/// What state.json keeps: the open route, and per map the stage's vertical/horizontal switch and its Links control.
 struct RouteState: Codable {
     private enum Screen: String, Codable { case home, note, sim, graph, search }
     private let screen: Screen
@@ -10,8 +10,10 @@ struct RouteState: Codable {
     private var path: [String]?
     /// AppModel.layoutDirections, as raw values so an unknown one is skipped rather than failing the file.
     private var directions: [String: String]?
+    /// AppModel.linkOptions that differ from the defaults ("Show all links" is not kept).
+    private var links: [String: StageLinkOptions]?
 
-    init(_ route: Route, directions: [String: FlowDirection] = [:]) {
+    init(_ route: Route, directions: [String: FlowDirection] = [:], links: [String: StageLinkOptions] = [:]) {
         switch route {
         case .home: screen = .home
         case .graph: screen = .graph
@@ -20,6 +22,8 @@ struct RouteState: Codable {
         case .search(let query): screen = .search; target = query
         }
         self.directions = directions.isEmpty ? nil : directions.mapValues(\.rawValue)
+        let saved = links.filter(\.value.saved)
+        self.links = saved.isEmpty ? nil : saved
     }
 
     var route: Route {
@@ -33,6 +37,8 @@ struct RouteState: Codable {
     }
 
     var layoutDirections: [String: FlowDirection] { (directions ?? [:]).compactMapValues(FlowDirection.init(rawValue:)) }
+
+    var linkOptions: [String: StageLinkOptions] { links ?? [:] }
 
     static func load(from url: URL = StrataPaths.state) -> RouteState? {
         guard let data = try? Data(contentsOf: url) else { return nil }

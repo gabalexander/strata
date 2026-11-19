@@ -59,6 +59,8 @@ struct StageLayout {
         private let lengths: [CGFloat]
         let labelPoint: CGPoint
         let labelWidth: CGFloat
+        /// The router found its pill a spot (a bundle member's may find none on its short stretch).
+        let hasPill: Bool
 
         init(edge: StrataCore.Edge, geometry: EdgeRoute) {
             self.edge = edge
@@ -82,6 +84,7 @@ struct StageLayout {
             for (a, b) in zip(samples, samples.dropFirst()) { lengths.append(lengths.last! + (b - a).length) }
             self.lengths = lengths
             labelWidth = geometry.label == nil ? 72 : geometry.labelWidth
+            hasPill = geometry.label != nil
             labelPoint = geometry.label ?? Self.point(0.5, samples, lengths)
         }
 
@@ -89,6 +92,9 @@ struct StageLayout {
         var midpoint: CGPoint { labelPoint }
 
         func point(at progress: Double) -> CGPoint { Self.point(progress, samples, lengths) }
+
+        /// The route's length along the line.
+        var length: CGFloat { lengths.last ?? 0 }
 
         private static func point(_ progress: Double, _ samples: [CGPoint], _ lengths: [CGFloat]) -> CGPoint {
             guard let total = lengths.last, total > 0, samples.count > 1 else { return samples.first ?? .zero }
@@ -117,6 +123,9 @@ struct StageLayout {
     let regions: [Region]
     let routes: [Route]
     let routesByID: [String: Route]
+    /// Edges into one store drawn as one link (EdgeBundling, SimStageLinks.swift), the ones that found room.
+    let bundles: [Bundle]
+    let bundlesByID: [String: Bundle]
     let bounds: CGRect
     /// Which way the cards run, so edges leave and enter on the matching sides.
     let direction: FlowDirection
@@ -125,7 +134,8 @@ struct StageLayout {
 
     /// The level as laid out (`at` on every node). `rects` overrides card positions, for the frames
     /// of a "Tidy layout" animation. `direction` is the way the positions run, the level's own by default.
-    init(level: Level, rects: [String: CGRect]? = nil, direction: FlowDirection? = nil) {
+    /// `bundles` are routed with the edges, each as one link.
+    init(level: Level, rects: [String: CGRect]? = nil, direction: FlowDirection? = nil, bundles: [EdgeBundle] = []) {
         let direction = direction ?? level.direction ?? .right
         self.direction = direction
         let cards = level.nodes.enumerated().map { i, node in
@@ -157,15 +167,26 @@ struct StageLayout {
         obstacles = cards.map { EdgeRouter.Card(id: $0.node.id, rect: $0.rect) }
         labels = regions.map { EdgeRouter.Region(rect: $0.rect, label: $0.group.label) }
         let requests = level.edges.map { Self.request($0, direction: direction) }
-        let routing = EdgeRouter.routing(cards: obstacles, regions: labels, edges: requests, direction: direction)
+        let groups = Dictionary(regions.map { ($0.group.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
+        let bundled = EdgeRouter.routing(cards: obstacles, regions: labels, groups: groups, edges: requests, bundles: bundles,
+                                         direction: direction)
+        let routing = bundled.routing
         for (index, label) in routing.labels.enumerated() { regions[index].label = label }
         self.regions = regions
         let geometry = Dictionary(routing.routes.map { ($0.edge, $0) }, uniquingKeysWith: { first, _ in first })
         routes = level.edges.compactMap { edge in geometry[edge.id].map { Route(edge: edge, geometry: $0) } }
         routesByID = Dictionary(routes.map { ($0.edge.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let byBundle = Dictionary(bundles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.bundles = bundled.bundles.compactMap { route in
+            byBundle[route.bundle].map { bundle in
+                Bundle(bundle, geometry: route, data: byID[bundle.target].map { EdgeBundling.dataKinds.contains($0.node.kind) } ?? false)
+            }
+        }
+        bundlesByID = Dictionary(self.bundles.map { ($0.bundle.id, $0) }, uniquingKeysWith: { first, _ in first })
         var extent = cards.reduce(CGRect.null) { $0.union($1.rect) }
         extent = regions.reduce(extent) { $0.union($1.rect) }
         extent = routes.reduce(extent) { $0.union($1.path.boundingRect) }
+        extent = self.bundles.reduce(extent) { $0.union($1.bounds) }
         bounds = extent.isNull ? CGRect(x: 0, y: 0, width: 168, height: 64) : extent
     }
 
@@ -183,18 +204,27 @@ struct StageLayout {
         return Route(edge: edge, geometry: geometry)
     }
 
-    func hit(_ point: CGPoint, camera: StageCamera, tokens: [TokenView],
-             runtimeRoutes: [String: Route] = [:]) -> StageSelection? {
+    /// What is under `point`: a card, a token, a pill, then the nearest line. `links` says which lines and
+    /// pills are drawn now (folded members and quiet pills are not) and where a folded edge's tokens are.
+    @MainActor func hit(_ point: CGPoint, camera: StageCamera, tokens: [TokenView],
+             runtimeRoutes: [String: Route] = [:], links: StageLinks? = nil) -> StageSelection? {
         let world = camera.world(point)
         if let card = cards.reversed().first(where: { $0.rect.contains(world) }) { return .node(card.node.id) }
         for token in tokens.reversed() {
-            guard let route = routesByID[token.edge] ?? runtimeRoutes[token.edge] else { continue }
-            if (camera.screen(route.point(at: token.progress)) - point).length <= max(6, camera.zoom * 5) {
+            guard let at = links?.point(token, in: self) ?? (routesByID[token.edge] ?? runtimeRoutes[token.edge])?.point(at: token.progress)
+            else { continue }
+            if (camera.screen(at) - point).length <= max(6, camera.zoom * 5) {
                 return .flow(token.flow)
             }
         }
-        let allRoutes = routes + runtimeRoutes.values.sorted { $0.edge.id < $1.edge.id }
-        for route in allRoutes where route.edge.label != nil || route.edge.protocol != nil {
+        func style(_ id: String) -> StageLinks.Style { links?.style(id) ?? .full }
+        let drawn = bundles.filter { style($0.bundle.id).alpha > 0.01 }
+        for bundle in drawn {
+            let p = bundle.trunk.labelPoint, width = bundle.trunk.labelWidth + 6
+            if CGRect(x: p.x - width / 2, y: p.y - 8, width: width, height: 16).contains(world) { return .edge(bundle.bundle.id) }
+        }
+        let allRoutes = (routes + runtimeRoutes.values.sorted { $0.edge.id < $1.edge.id }).filter { style($0.edge.id).alpha > 0.01 }
+        for route in allRoutes where (route.edge.label != nil || route.edge.protocol != nil) && route.hasPill && style(route.edge.id).pill > 0.01 {
             let p = route.labelPoint
             let width = route.labelWidth
             if CGRect(x: p.x - width / 2, y: p.y - 8, width: width, height: 16).contains(world) {
@@ -209,6 +239,15 @@ struct StageLayout {
             if distance <= nearest {
                 nearest = distance
                 best = .edge(route.edge.id)
+            }
+        }
+        for bundle in drawn {
+            for line in [bundle.trunk] + bundle.stubs.values where line.path.boundingRect.insetBy(dx: -radius, dy: -radius).contains(world) {
+                let distance = line.distance(to: world)
+                if distance <= nearest {
+                    nearest = distance
+                    best = .edge(bundle.bundle.id)
+                }
             }
         }
         return best

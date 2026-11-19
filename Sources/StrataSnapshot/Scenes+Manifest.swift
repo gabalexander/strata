@@ -19,7 +19,9 @@ import StrataCore
 /// `STRATA_SNAP_HOW_STEP` (a step id, or its 1-based number in the path; the start by default) on the
 /// path of `STRATA_SNAP_HOW_BRANCH`, with that step's detail open (`STRATA_SNAP_HOW_DETAIL=0` keeps the
 /// state panel instead). `STRATA_SNAP_MORE=1` opens every "More" disclosure (briefs), and
-/// `STRATA_SNAP_HOVER=node` shows that node's hover card (processes, term, formula or brief).
+/// `STRATA_SNAP_HOVER=node` shows that node's hover card (processes, term, formula or brief) and draws the stage
+/// hovered there. `STRATA_SNAP_FOCUS=node` draws the stage hovered on a node (or a bundle, `bundle:…`) without
+/// the card, and `STRATA_SNAP_LINKS=all` (or `off`, `nobundle`, `noquiet`) sets the toolbar's Links control.
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -40,6 +42,7 @@ import StrataCore
                 + (env["STRATA_SNAP_HOW"].map { ["how", $0, env["STRATA_SNAP_HOW_BRANCH"] ?? "", env["STRATA_SNAP_HOW_STEP"] ?? "",
                                                  env["STRATA_SNAP_HOW_DETAIL"] == "0" ? "state" : ""] } ?? [])
                 + (env["STRATA_SNAP_MORE"] == "1" ? ["more"] : [])
+                + (env["STRATA_SNAP_LINKS"].map { ["links", $0] } ?? [])
                     .filter { !$0.isEmpty })
         .joined(separator: "-").replacingOccurrences(of: "#", with: "_").replacingOccurrences(of: "/", with: "_")
     // STRATA_SNAP_SIZE=WxH sets both; STRATA_SNAP_H only the height.
@@ -76,6 +79,11 @@ import StrataCore
             SimStageSnapshot.direct(sim, direction)
         }
         if env["STRATA_SNAP_TIDY"] == "1" { SimStageSnapshot.tidy(sim) }
+        if let links = env["STRATA_SNAP_LINKS"] {
+            model.linkOptions[manifest.id] = StageLinkOptions(bundle: !["off", "nobundle"].contains(links),
+                                                              quiet: !["off", "noquiet"].contains(links), showAll: links == "all")
+        }
+        if let focus = env["STRATA_SNAP_FOCUS"] ?? hover { SimLinksSnapshot.hover(sim, focus) }
         if let hover { SimBriefSnapshot.hoverNode(sim, node: hover) }
         if let how = env["STRATA_SNAP_HOW"]?.split(separator: "/").map(String.init), how.count >= 2 {
             SimHowSnapshot.open(sim, node: how[0], op: how.count > 2 ? how[1] : nil, mechanism: how[how.count - 1],

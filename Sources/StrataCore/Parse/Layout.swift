@@ -59,15 +59,16 @@ public enum DiagramLayout {
 
     /// Places `level`. Positions already there are hints, read the way the level runs (`level.direction`);
     /// `direction` lays it out another way instead (the stage's switch), without changing `level.direction`.
+    /// `bundled` (the stage's "Bundle shared links") lays bundled edges out as one link (EdgeBundling).
     @discardableResult
-    static func place(_ level: inout Level, mode: LayoutMode, direction: FlowDirection? = nil) -> [Issue] {
+    static func place(_ level: inout Level, mode: LayoutMode, direction: FlowDirection? = nil, bundled: Bool = false) -> [Issue] {
         let hints = level.direction ?? .right
         switch mode {
         case .manual:
             ManualLayout.fill(&level, direction: hints)
             return []
         case .auto:
-            let result = AutoLayout.run(level, direction: direction ?? hints, hints: hints)
+            let result = AutoLayout.run(level, direction: direction ?? hints, hints: hints, bundled: bundled)
             for index in level.nodes.indices {
                 if let point = result.positions[level.nodes[index].id] { level.nodes[index].at = point }
             }
@@ -80,9 +81,9 @@ public enum DiagramLayout {
 
     /// The level laid out automatically, using its current positions as hints: "Tidy layout" on the stage.
     /// `direction` overrides the level's own.
-    public static func tidy(_ level: Level, direction: FlowDirection? = nil) -> Level {
+    public static func tidy(_ level: Level, direction: FlowDirection? = nil, bundled: Bool = false) -> Level {
         var copy = level
-        place(&copy, mode: .auto, direction: direction)
+        place(&copy, mode: .auto, direction: direction, bundled: bundled)
         return copy
     }
 
@@ -104,10 +105,10 @@ public enum DiagramLayout {
 
     /// An auto-laid-out level placed again from the author's hints (`Node.hint`) to run in `direction`: the
     /// stage's vertical/horizontal switch. In the level's own direction it is the layout parsing made.
-    public static func arranged(_ level: Level, direction: FlowDirection) -> Level {
+    public static func arranged(_ level: Level, direction: FlowDirection, bundled: Bool = false) -> Level {
         var copy = level
         for index in copy.nodes.indices { copy.nodes[index].at = copy.nodes[index].hint }
-        place(&copy, mode: .auto, direction: direction)
+        place(&copy, mode: .auto, direction: direction, bundled: bundled)
         return copy
     }
 }

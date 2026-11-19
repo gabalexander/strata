@@ -7,8 +7,18 @@ final class StageRenderer {
     /// Where everything is: the level as laid out, or as "Tidy layout" or the vertical/horizontal switch
     /// last arranged it.
     private(set) var layout: StageLayout
-    /// A "Tidy layout" move is playing, so the stage keeps drawing frames while paused.
-    private(set) var animating = false
+    /// A "Tidy layout" move is playing.
+    private(set) var gliding = false
+    /// A move or a link fade is playing, so the stage keeps drawing frames while paused.
+    var animating: Bool { gliding || links.fading }
+    /// How links are drawn: bundles, quiet data links, focus (SimStageLinks.swift).
+    @ObservationIgnored let links = StageLinks()
+    /// The level's bundles (EdgeBundling), routed while "Bundle shared links" is on.
+    @ObservationIgnored private let bundles: [EdgeBundle]
+    /// Counts layouts, so link strengths start over on a new one.
+    @ObservationIgnored private var generation = 0
+    /// Whether the cards were laid out giving each bundle one lane (parsing lays a level out without).
+    @ObservationIgnored private var laidOutBundled = false
     @ObservationIgnored private var level: Level
     /// The level as the manifest placed it: what Tidy layout and the switch lay out again.
     @ObservationIgnored private let source: Level
@@ -48,7 +58,21 @@ final class StageRenderer {
         source = level
         placed = level.direction ?? .right
         wanted = placed
-        layout = StageLayout(level: level)
+        bundles = EdgeBundling.bundles(in: level)
+        layout = StageLayout(level: level, bundles: bundles)
+    }
+
+    /// The bundles to route: none while "Bundle shared links" is off.
+    private var routedBundles: [EdgeBundle] { links.options.bundle ? bundles : [] }
+    /// Whether auto layout should give each bundle one lane: while bundling, where there are bundles.
+    private var bundledLayout: Bool { links.options.bundle && !bundles.isEmpty }
+
+    /// Routes the cards where they are again, with or without bundles.
+    func relink() {
+        runtimeRoutes = [:]
+        frameLayout = nil
+        generation += 1
+        layout = StageLayout(level: level, direction: placed, bundles: routedBundles)
     }
 
     /// Re-runs auto layout for this level (positions as hints) and moves the cards there. Returns
@@ -58,7 +82,8 @@ final class StageRenderer {
         // Once tidied, the layout stays put: running it again on its own output could only shuffle it.
         guard !tidied else { return false }
         tidied = true
-        return move(to: DiagramLayout.tidy(source, direction: wanted), direction: wanted, animated: animated)
+        laidOutBundled = bundledLayout
+        return move(to: DiagramLayout.tidy(source, direction: wanted, bundled: laidOutBundled), direction: wanted, animated: animated)
     }
 
     /// Runs the level `direction`, the stage's vertical/horizontal switch. An auto level is laid out again
@@ -67,15 +92,38 @@ final class StageRenderer {
     @discardableResult
     func direct(_ direction: FlowDirection, auto: Bool, animated: Bool) -> Bool {
         wanted = direction
-        guard direction != placed else { return false }
-        if auto { return move(to: DiagramLayout.arranged(source, direction: direction), direction: direction, animated: animated) }
-        guard tidied else { return false }
-        return move(to: DiagramLayout.tidy(source, direction: direction), direction: direction, animated: animated)
+        guard direction != placed, auto || tidied else { return false }
+        laidOutBundled = bundledLayout
+        return move(to: arranged(direction, auto: auto), direction: direction, animated: animated)
+    }
+
+    /// The level laid out again `direction`, from the manifest's hints (auto) or its positions (manual).
+    private func arranged(_ direction: FlowDirection, auto: Bool) -> Level {
+        auto ? DiagramLayout.arranged(source, direction: direction, bundled: laidOutBundled)
+            : DiagramLayout.tidy(source, direction: direction, bundled: laidOutBundled)
+    }
+
+    /// The toolbar's Links control and ⌘K. Bundling changes what the layout makes room for, so an auto level
+    /// (or a tidied manual one) is laid out again and its cards glide; a manual one keeps its places and is
+    /// routed again. The rest only changes how links are drawn. Returns true when cards move.
+    @discardableResult
+    func setLinks(_ options: StageLinkOptions, auto: Bool, animated: Bool) -> Bool {
+        let rebundle = options.bundle != links.options.bundle
+        links.options = options
+        links.nudge()
+        if auto || tidied, bundledLayout != laidOutBundled {
+            laidOutBundled = bundledLayout
+            if move(to: arranged(placed, auto: auto), direction: placed, animated: animated) { return true }
+            relink()
+        } else if rebundle {
+            relink()
+        }
+        return false
     }
 
     /// Moves the cards to `arranged`, gliding over `tidyDuration` when animated.
     private func move(to arranged: Level, direction: FlowDirection, animated: Bool) -> Bool {
-        let next = StageLayout(level: arranged, direction: direction)
+        let next = StageLayout(level: arranged, direction: direction, bundles: routedBundles)
         // From where the cards are drawn now, so a second move during the first glides on from there.
         let from = Dictionary(drawnLayout(at: Date()).cards.map { ($0.node.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
         let moves = next.cards.contains { card in from[card.node.id].map { !$0.equalTo(card.rect) } ?? true }
@@ -84,17 +132,18 @@ final class StageRenderer {
         placed = direction
         runtimeRoutes = [:]
         frameLayout = nil
+        generation += 1
         layout = next
         guard moves, animated else { return moves }
         let start = Date()
         transition = (from, start)
-        animating = true
+        gliding = true
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(Int(Self.tidyDuration * 1000) + 40))
             guard let self, self.transition?.start == start else { return }
             self.transition = nil
             self.frameLayout = nil
-            self.animating = false
+            self.gliding = false
         }
         return true
     }
@@ -112,14 +161,14 @@ final class StageRenderer {
             rects[card.node.id] = CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
                                          width: b.width, height: b.height)
         }
-        let moving = StageLayout(level: level, rects: rects, direction: placed)
+        let moving = StageLayout(level: level, rects: rects, direction: placed, bundles: routedBundles)
         frameLayout = (time, moving)
         return moving
     }
 
     func hit(_ point: CGPoint, camera: StageCamera, frame: SimFrame, includeTokens: Bool) -> StageSelection? {
         updateRoutes(frame)
-        return layout.hit(point, camera: camera, tokens: includeTokens ? frame.tokens : [], runtimeRoutes: runtimeRoutes)
+        return layout.hit(point, camera: camera, tokens: includeTokens ? frame.tokens : [], runtimeRoutes: runtimeRoutes, links: links)
     }
 
     private func updateRoutes(_ frame: SimFrame) {
@@ -135,7 +184,12 @@ final class StageRenderer {
               highlight: StageHighlight? = nil) {
         source.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.bg))
         drawGrid(in: source, size: size, camera: camera)
-        let layout = drawnLayout(at: Date())
+        let now = Date()
+        let layout = drawnLayout(at: now)
+        let hovered = hovered ?? links.pinnedHover
+        let alerts = Set(frame.edges.compactMap { $0.value.cut || $0.value.breakerOpen ? $0.key : nil })
+        links.update(layout, generation: generation, level: level, selected: selected, hovered: hovered, highlight: highlight,
+                     alerts: alerts, at: now)
         var context = source
         context.translateBy(x: camera.offset.x, y: camera.offset.y)
         context.scaleBy(x: camera.zoom, y: camera.zoom)
@@ -154,20 +208,24 @@ final class StageRenderer {
         let routes = layout.routes + runtimeRoutes.values.sorted { $0.edge.id < $1.edge.id }
         let visibleEdges = routes.filter { viewport.intersects($0.path.boundingRect.insetBy(dx: -1, dy: -1)) }
         for route in visibleEdges {
+            let style = links.style(route.edge.id, at: now)
+            guard style.alpha > 0.01 else { continue }
             let hit = StageSelection.edge(route.edge.id)
             let tint = highlight?.edgeTints[route.edge.id]
             drawEdge(route, state: frame.edges[route.edge.id] ?? EdgeState(),
                      selected: selected == hit || tint == nil && highlight?.edges.contains(route.edge.id) == true,
-                     hovered: hovered == hit, tint: tint, in: edgeContext(route.edge.id))
+                     hovered: hovered == hit, tint: tint, style: style, in: edgeContext(route.edge.id))
         }
+        drawBundles(layout, viewport: viewport, hovered: hovered, in: dims ? dimmed : context)
 
         // One fill per color and mark keeps dense traffic from issuing a draw call for each token.
         var marks = Array(repeating: TokenMarks(), count: flowColors.count * 2 + 1)
         var offPath = marks   // tokens off a highlighted op path, drawn dimmed
         var focusToken: (token: TokenView, point: CGPoint)?
         for token in frame.tokens {
-            guard let route = layout.routesByID[token.edge] ?? runtimeRoutes[token.edge] else { continue }
-            let point = route.point(at: token.progress)
+            // A token on an edge folded into a bundle travels along the bundle.
+            guard let point = links.point(token, in: layout)
+                    ?? (layout.routesByID[token.edge] ?? runtimeRoutes[token.edge])?.point(at: token.progress) else { continue }
             guard viewport.contains(point) else { continue }
             let focused = selected == .flow(token.flow) || hovered == .flow(token.flow)
             let index = (max(1, token.color) - 1) % flowColors.count
@@ -176,7 +234,7 @@ final class StageRenderer {
             case .orphan: index + flowColors.count
             default: index
             }
-            if dims, highlight?.edges.contains(token.edge) == false {
+            if dims && highlight?.edges.contains(token.edge) == false || links.fades(token.edge) {
                 offPath[layer].add(token.kind, at: point, focused: focused)
             } else {
                 marks[layer].add(token.kind, at: point, focused: focused)
@@ -193,8 +251,11 @@ final class StageRenderer {
         }
 
         for route in visibleEdges {
-            drawEdgeLabel(route, state: frame.edges[route.edge.id] ?? EdgeState(), in: edgeContext(route.edge.id))
+            let style = links.style(route.edge.id, at: now)
+            guard style.alpha > 0.01 else { continue }
+            drawEdgeLabel(route, state: frame.edges[route.edge.id] ?? EdgeState(), style: style, in: edgeContext(route.edge.id))
         }
+        drawBundleLabels(layout, viewport: viewport, hovered: hovered, in: dims ? dimmed : context)
         for card in layout.cards where viewport.intersects(card.rect) {
             let hit = StageSelection.node(card.node.id)
             let lit = highlight.map { $0.nodes.contains(card.node.id) }
@@ -243,7 +304,9 @@ final class StageRenderer {
     }
 
     private func drawEdge(_ route: StageLayout.Route, state: EdgeState, selected: Bool, hovered: Bool,
-                          tint: StageTint? = nil, in context: GraphicsContext) {
+                          tint: StageTint? = nil, style: StageLinks.Style = .full, in source: GraphicsContext) {
+        var context = source
+        context.opacity = source.opacity * style.alpha
         let tinted = tint.map { $0.color.opacity(0.45 + 0.45 * $0.strength) }
         let ink = state.cut ? Theme.bad : state.breakerOpen ? Theme.warn : selected ? Theme.accent : tinted ??
             Theme.text.opacity(hovered ? 0.58 : 0.20 + min(0.38, log1p(max(0, state.rate)) * 0.08))
@@ -254,12 +317,17 @@ final class StageRenderer {
             context.stroke(route.path, with: .color(ink.opacity(0.12)), style: StrokeStyle(lineWidth: 8, lineCap: .round))
         }
         context.stroke(route.path, with: .color(ink),
-                       style: StrokeStyle(lineWidth: selected || hovered || tint != nil ? 2 : 1.5, lineCap: .round,
+                       style: StrokeStyle(lineWidth: selected || hovered || tint != nil ? 2 : style.width, lineCap: .round,
                                           dash: state.cut ? [4, 5] : []))
         context.stroke(route.arrow, with: .color(ink), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
     }
 
-    private func drawEdgeLabel(_ route: StageLayout.Route, state: EdgeState, in context: GraphicsContext) {
+    /// The edge's pill: its cut or breaker state always (at the line's strength), its label at `style.pill`.
+    private func drawEdgeLabel(_ route: StageLayout.Route, state: EdgeState, style: StageLinks.Style = .full,
+                               in source: GraphicsContext) {
+        var context = source
+        context.opacity = source.opacity * (state.cut || state.breakerOpen ? style.alpha : style.pill)
+        guard context.opacity > 0.01 else { return }
         let point = route.midpoint
         if state.cut {
             let r = CGRect(x: point.x - 10, y: point.y - 9, width: 20, height: 18)
@@ -267,7 +335,7 @@ final class StageRenderer {
             symbol("scissors", at: point, size: 10, tint: Theme.bad, in: context)
         } else if state.breakerOpen {
             pill("open", at: point, width: route.labelWidth, color: Theme.warn.opacity(0.35), fill: Theme.overlay, in: context)
-        } else if let label = route.edge.label ?? route.edge.protocol, !label.isEmpty {
+        } else if let label = route.edge.label ?? route.edge.protocol, !label.isEmpty, route.hasPill {
             pill(label, at: route.labelPoint, width: route.labelWidth, color: Theme.border,
                  fill: Theme.overlay.opacity(0.96), in: context)
         }
@@ -487,7 +555,7 @@ final class StageRenderer {
         return r.maxX
     }
 
-    private func pill(_ value: String, at point: CGPoint, width: CGFloat, color: Color, fill: Color,
+    func pill(_ value: String, at point: CGPoint, width: CGFloat, color: Color, fill: Color,
                       style: Lettering = .badge, in context: GraphicsContext) {
         let pad: CGFloat = width < 44 ? 3 : 5
         let resolved = text(value, style, width: width - pad * 2, in: context)

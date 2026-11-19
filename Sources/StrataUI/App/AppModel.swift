@@ -35,6 +35,9 @@ public final class AppModel {
     /// The stage's vertical/horizontal switch (⌥⌘V), by manifest id: it overrides the `direction` of every
     /// level of that map. The app saves it in state.json.
     public var layoutDirections: [String: FlowDirection] = [:]
+    /// The stage's Links control (bundle shared links, quiet data links, show all links), by manifest id, for
+    /// every level of that map. The app saves it in state.json, all but "Show all links".
+    public var linkOptions: [String: StageLinkOptions] = [:]
     /// Commands the active screen offers to the ⌘K palette (e.g. a sim's play/pause, scenarios, node actions).
     public var screenCommands: [MenuItem] = []
     public var paletteOpen = false          // ⌘K: commands + everything

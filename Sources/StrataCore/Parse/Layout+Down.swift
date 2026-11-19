@@ -221,7 +221,8 @@ extension LayeredGraph {
             var travel = 0.0
             var pills: [(lo: Double, hi: Double)] = []
             for (index, link) in links.enumerated() where !flat.contains(index) {
-                let chain = chains[index]
+                // A bundle's member has no lane, but its pill shows when it leaves the bundle (in focus).
+                let chain = folded.contains(index) && layer[link.tail] + 1 == layer[link.head] ? [link.tail, link.head] : chains[index]
                 for (a, b) in zip(chain, chain.dropFirst()) where vertices[a].layer == l {
                     travel = max(travel, abs(y[a] - y[b]))
                     if chain.count == 2 && link.label > 0 {

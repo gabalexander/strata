@@ -121,6 +121,43 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
     pills and other lines.
   - **Cut:** a red dashed line with a scissors glyph mid-edge. **Breaker open:** an amber "open" pill.
   - Edge brightness follows `EdgeState.rate`.
+- **Shared links** (EdgeBundling, Layout+BundleRoutes.swift): edges into one store or external API
+  (database, cache, store, search, vector, external) over one protocol family (`sql` takes postgres and
+  mysql, `redis` takes valkey, `http` takes https) draw as one link when three or more callers share it.
+  Display only: the manifest and the simulation keep every edge, and tokens on a folded edge travel the
+  link. Edges without a protocol, and edges into anything else, keep their own line, so the request path
+  stays drawn edge by edge.
+  - **From the group's box:** callers inside one top-level group that doesn't hold the target collapse into
+    one line from the box of the deepest group they share, leaving the side that faces the target (the
+    bottom top to bottom), across from it where the border reaches. A 5 pt dot marks where it leaves.
+  - **Trunk:** callers left over (ungrouped, or fewer than three in their group) join one trunk at a
+    junction just past the last of them; only when the target is further than the next row (column).
+  - One arrowhead and one count pill, `sql · 8`; the line is half a point heavier than a single edge.
+  - **Back out:** a member edge leaves its link while its source is hovered or selected, or an op path,
+    pressure overlay or selected flow lights it; the count drops (`sql · 7`). Hovering or selecting the
+    target, or a link left with one member, draws every member on its own. A member runs from its source
+    into the link's start and on along it, like a harness, its pill on its own stretch (none when that
+    stretch has no clear room), so nothing else moves.
+  - Hovering a link brightens it (no unbundling, so the pointer never loses it); a click selects its target.
+  - Auto layout gives a link one lane where its members would take one each (a bundle's deepest member
+    lays out for all of them), so the diagram tightens; the room a member's pill needs stays.
+- **Quiet data links:** links into datastores (database, cache, store, search, vector) draw at 1.1 pt
+  and 60% strength, without their pill unless relevant (in focus, hovered, selected or lit). Count pills
+  always show.
+- **Focus:** hovering or selecting a node keeps its edges (and so its neighbours) at full strength and
+  fades every other line and pill to 20%; a selected edge or flow does the same for its edges. Strengths
+  ease on `Theme.snappy`'s spring (none with reduced motion), and the fade clears on hover end or
+  deselect. An op path or pressure blast radius dims the stage itself, so focus doesn't fade on top of it
+  (its edges still leave their links); heat mode dims nothing, so focus works under it. Tokens off the
+  focus draw dimmed with their lines.
+- **Links control** (toolbar, next to the layout buttons; also ⌘K), an in-window menu:
+  - **Bundle shared links** (on by default): off routes every edge on its own line and lays the level
+    out again (cards glide); a manual level keeps its places and is routed again.
+  - **Quiet data links** (on by default).
+  - **Show all links** (⌥⌘A): for now, everything at full: every link opened up, every pill, no quiet
+    lines, no fading. Cards stay where they are.
+  - The button lights while anything differs from the defaults. The first two are saved per map in
+    `~/.strata/state.json` with the direction; Show all lasts for the session.
 - **Tokens:** 7 pt circles in the flow colour with a soft glow (blur 6, 40%).
   - Responses are the same colour, hollow (ring).
   - Messages are small rounded squares. Failures are red with an ×. Orphans are faded rings.

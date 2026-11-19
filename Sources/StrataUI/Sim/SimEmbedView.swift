@@ -179,6 +179,8 @@ private struct SimEmbedWorkspace: View {
         if let direction = model.layoutDirections[sim.manifest.id] {
             renderer.direct(direction, auto: sim.manifest.layout == .auto, animated: false)
         }
+        // And so does its Links control (AppModel.linkOptions).
+        renderer.setLinks(model.linkOptions[sim.manifest.id] ?? StageLinkOptions(), auto: sim.manifest.layout == .auto, animated: false)
         _renderer = State(initialValue: renderer)
         terms = SimSessions.terms(for: sim)
     }

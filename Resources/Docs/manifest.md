@@ -730,6 +730,11 @@ Requests travel `from → to` and responses come back on the same edge. If a flo
 two nodes that have no edge, Strata draws one and `strata validate` warns. Consumer flows draw
 `buffer → consumer` automatically.
 
+Give edges into stores a `protocol`: when three or more callers reach one store or external API over one
+protocol family (`sql`, `postgres` and `mysql` are one; so are `redis` and `valkey`), the stage draws them
+as one link with a count, `sql · 8`, from their group's box when they share one. Selecting or hovering a
+caller or the store opens it up again; the toolbar's Links control turns it off.
+
 ## Groups
 
 ```yaml

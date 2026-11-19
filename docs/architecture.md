@@ -58,7 +58,7 @@ Everything lives under `~/.strata/` (`STRATA_HOME` overrides it):
 - `sims/`: user and agent manifests, live-reloaded;
 - `vault/`: markdown notes;
 - `config.yaml`;
-- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch).
+- `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch and Links options).
 
 Nothing about a work project goes into this repo.
 
