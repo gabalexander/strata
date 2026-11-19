@@ -30,10 +30,12 @@ import StrataCore
         },
         howStateScene(),
         howHoverScene(size: size),
+        howScene("how-formula-section", size: CGSize(width: 1400, height: 1500), selected: "scheduler"),
+        howScene("how-overview", size: size, manifest: "checkout", path: ["orders"], selected: nil),
         howScene("how-formula-op", size: size, selected: "scheduler") { sim in
             SimOpsSnapshot.open(sim, node: "scheduler", op: "heartbeat", from: "scheduler")
         },
-        Scene(name: "how-formula-typeset", size: CGSize(width: 320, height: 1180)) {
+        Scene(name: "how-formula-typeset", size: CGSize(width: 320, height: 1000)) {
             AnyView(SimHowSnapshot.formulas(formulaSamples()))
         },
         howScene("how-roster-stage", size: size, selected: nil, seconds: 6),

@@ -83,7 +83,7 @@ private struct SimHowCard: View {
         .card()
     }
 
-    private var thumbnailHeight: CGFloat { CGFloat(min(12, mechanism.steps.count)) * 7 + 22 }
+    private var thumbnailHeight: CGFloat { SimHowThumbnail.height(mechanism) }
 
     private var stats: String {
         var parts = ["\(mechanism.steps.count) steps"]
@@ -120,9 +120,10 @@ struct SimHowThumbnail: View {
                 context.draw(label, at: CGPoint(x: x + shift, y: 6), anchor: anchor)
             }
             let steps = mechanism.steps.prefix(12)
+            let rows = SimHowThumbnail.rows(Array(steps), height: size.height)
             for (index, step) in steps.enumerated() {
                 guard let x1 = xs[step.from], let x2 = xs[step.to] else { continue }
-                let y = 20 + CGFloat(index) * 7
+                let y = rows[index]
                 let ink = Theme.text.opacity(0.5)
                 if x1 == x2 {
                     let s: CGFloat = step.from == participants.last?.id && participants.count > 1 ? -1 : 1
@@ -145,6 +146,27 @@ struct SimHowThumbnail: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// Row positions spaced by the time between steps, so a heartbeat rhythm shows even this small.
+    static func rows(_ steps: [MechStep], height: CGFloat) -> [CGFloat] {
+        var offsets: [CGFloat] = []
+        var y: CGFloat = 0
+        var previous = 0.0
+        for (index, step) in steps.enumerated() {
+            let time = max(previous, step.at ?? previous)
+            if index > 0 { y += 5 + min(12, CGFloat(time - previous) * 1.4) }
+            offsets.append(y)
+            previous = time
+        }
+        let room = max(1, height - 24)
+        let scale = (offsets.last ?? 0) > room ? room / (offsets.last ?? 1) : 1
+        return offsets.map { 20 + $0 * scale }
+    }
+
+    static func height(_ mechanism: Mechanism) -> CGFloat {
+        let rows = rows(Array(mechanism.steps.prefix(12)), height: .infinity)
+        return min(110, (rows.last ?? 20) + 6)
     }
 }
 
@@ -192,5 +214,49 @@ struct SimHowLevelSection: View {
                 .card()
             }
         }
+    }
+}
+
+/// "How it works" in the node menu and in ⌘K: each mechanism opens the player.
+@MainActor
+enum SimHowMenus {
+    static let icon = "arrow.left.arrow.right"
+
+    /// The node's mechanisms and its operations' mechanisms, one item each, or one submenu for several.
+    static func node(_ node: Node, sim: Simulation) -> [MenuItem] {
+        let items = entries(of: node).map { entry in
+            MenuItem(entry.mechanism.title, icon: icon) { open(entry, sim: sim) }
+        }
+        if items.isEmpty { return [] }
+        if items.count == 1 {
+            var item = items[0]
+            item.title = "How it works: " + item.title
+            return [.separator, item]
+        }
+        return [.separator, .submenu("How it works", icon: icon, items)]
+    }
+
+    /// Every mechanism on the level, for the palette.
+    static func palette(sim: Simulation) -> [MenuItem] {
+        sim.level.nodes.flatMap(entries).map { entry in
+            MenuItem("How it works: \(entry.mechanism.title) (\(entry.owner))", icon: icon) { open(entry, sim: sim) }
+        }
+    }
+
+    private struct Entry {
+        let ref: SimHowRef
+        let owner: String
+        let mechanism: Mechanism
+    }
+
+    private static func entries(of node: Node) -> [Entry] {
+        node.how.map { Entry(ref: SimHowRef(node: node.id, op: nil, mechanism: $0.id), owner: node.label, mechanism: $0) }
+            + node.ops.flatMap { op in
+                op.how.map { Entry(ref: SimHowRef(node: node.id, op: op.id, mechanism: $0.id), owner: op.label, mechanism: $0) }
+            }
+    }
+
+    private static func open(_ entry: Entry, sim: Simulation) {
+        SimHowState.of(sim).open(entry.mechanism, ref: entry.ref, owner: entry.owner)
     }
 }

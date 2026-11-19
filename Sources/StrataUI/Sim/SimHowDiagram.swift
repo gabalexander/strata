@@ -339,8 +339,9 @@ struct SimHowCanvasPainter {
             context.stroke(line, with: .color(color.opacity(0.55)), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
             let dot = CGRect(x: axis - 3.5, y: y - 3.5, width: 7, height: 7)
             context.fill(Path(ellipseIn: dot), with: .color(color))
-            let label = cache.text("deadline-\(key.key)-\(deadline)", in: context) {
-                Text("\(Image(systemName: "hourglass.bottomhalf.filled")) \(key.key) expires at \(SimHowFormat.time(deadline))")
+            let when = SimHowFormat.time((deadline * 100).rounded() / 100)
+            let label = cache.text("deadline-\(key.key)-\(when)", in: context) {
+                Text("\(Image(systemName: "hourglass.bottomhalf.filled")) \(key.key) expires at \(when)")
                     .font(Theme.mono(9.5)).foregroundStyle(color)
             }
             let size = label.measure(in: CGSize(width: 400, height: 20))
@@ -360,8 +361,9 @@ struct SimHowCanvasPainter {
         context.stroke(line, with: .color(Theme.accent.opacity(0.32)), lineWidth: 1)
         guard let axis = layout.axis else { return }
         let time = schedule.time(at: position)
-        let label = cache.text("now-\(Int((time * 10).rounded()))", in: context) {
-            Text(SimHowFormat.clock(time, short: playback.duration < 1)).font(Theme.mono(10, .semibold)).foregroundStyle(Theme.bg)
+        let clock = SimHowFormat.clock(time, short: playback.duration < 1)
+        let label = cache.text("now-\(clock)", in: context) {
+            Text(clock).font(Theme.mono(10, .semibold)).foregroundStyle(Theme.bg)
         }
         let measured = label.measure(in: CGSize(width: 80, height: 16))
         let pill = CGRect(x: axis - measured.width - 12, y: y - 8, width: measured.width + 10, height: 16)
