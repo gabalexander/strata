@@ -152,6 +152,8 @@ extension LayeredGraph {
             guard zip(chain, chain.dropFirst()).allSatisfy({ abs(y[$0] - y[$1]) < 0.5 }) else { continue }
             score += 1 + 0.25 * Double(min(4, reach[link.head]))
         }
+        // The spine runs straight in every candidate it can; one bent by groups reads worst.
+        if let first = spine.first, spine.contains(where: { abs(y[$0] - y[first]) > 0.5 }) { score -= 1_000 }
         // Tall, stepped placements read worse than compact ones with a bend.
         let cards = vertices.indices.filter { vertices[$0].node != nil }
         let height = (cards.map { y[$0] }.max() ?? 0) - (cards.map { y[$0] }.min() ?? 0)
@@ -199,7 +201,8 @@ extension LayeredGraph {
             for left in [true, false] {
                 var layering = up ? order : order.reversed()
                 if !left { layering = layering.map { $0.reversed() } }
-                let (root, align) = verticalAlignment(layering, neighbors: up ? preds : succs, conflicts: conflicts, pair: pair)
+                let (root, align) = verticalAlignment(layering, neighbors: up ? preds : succs, conflicts: conflicts, pair: pair,
+                                                      partner: up ? spineAbove : spineBelow)
                 var xs = compaction(layering, root: root, align: align, reversed: !left, bands: bands)
                 if !left { xs = xs.map { -$0 } }
                 results.append(xs)
@@ -230,19 +233,34 @@ extension LayeredGraph {
         return [balanced] + results
     }
 
+    /// Each vertex joins the block of a median neighbour in the layer before (in `layering` order). The
+    /// spine (`partner`: a spine vertex's neighbour on the spine in that layer) is one block whatever
+    /// else wants its vertices, and nothing aligns across it.
     private func verticalAlignment(_ layering: [[Int]], neighbors: [[Int]], conflicts: Set<Int>,
-                                   pair: (Int, Int) -> Int) -> (root: [Int], align: [Int]) {
+                                   pair: (Int, Int) -> Int, partner: [Int: Int] = [:]) -> (root: [Int], align: [Int]) {
         var root = Array(vertices.indices), align = Array(vertices.indices)
         var position = Array(repeating: 0, count: vertices.count)
         for layer in layering { for (index, v) in layer.enumerated() { position[v] = index } }
+        let reserved = Set(partner.values)
         for layer in layering {
             var previous = -1
+            let spine = partner.isEmpty ? nil : layer.first { partner[$0] != nil }
+            var fence = spine.map { position[partner[$0]!] } ?? Int.max
             for v in layer {
+                if v == spine, let w = partner[v] {
+                    align[w] = v
+                    root[v] = root[w]
+                    align[v] = root[v]
+                    previous = position[w]
+                    fence = Int.max
+                    continue
+                }
                 let ws = Array(Set(neighbors[v])).sorted { (position[$0], $0) < (position[$1], $1) }
                 guard !ws.isEmpty else { continue }
                 let middle = Double(ws.count - 1) / 2
                 for i in Int(middle.rounded(.down))...Int(middle.rounded(.up)) {
                     let w = ws[i]
+                    guard reserved.isEmpty || (!reserved.contains(w) && position[w] < fence) else { continue }
                     if align[v] == v && previous < position[w] && !conflicts.contains(pair(v, w)) {
                         align[w] = v
                         root[v] = root[w]
@@ -315,6 +333,7 @@ extension LayeredGraph {
         var top: [Int: Int] = [:], bottom: [Int: Int] = [:]
         var desired = aligned
         var weight = vertices.map { $0.isFiller ? 1e-6 : $0.isDummy ? 0.5 : 1 }
+        for v in spine { weight[v] = Self.spineWeight }
         for group in groups.sorted() {
             top[group] = desired.count
             desired.append(0); weight.append(0.01)
@@ -366,6 +385,9 @@ extension LayeredGraph {
             solver.separate(top[parent]!, top[group]!, by: frame.padBefore)
             solver.separate(bottom[group]!, bottom[parent]!, by: frame.padAfter)
         }
+        // The spine moves as one: a push on any of its vertices moves all of them, unless that would
+        // contradict the other constraints (the spine passing a group on both sides).
+        if spine.count > 1, let rigid = solver.merging(spine) { return Array(rigid.prefix(count)) }
         return Array(solver.solve().prefix(count))
     }
 
@@ -465,6 +487,26 @@ struct SeparationSolver {
 
     mutating func separate(_ left: Int, _ right: Int, by gap: Double) {
         constraints.append(Constraint(left: left, right: right, gap: gap))
+    }
+
+    /// The solution with `members` held at one position (as one variable), or nil when the constraints
+    /// can't all hold that way.
+    func merging(_ members: [Int]) -> [Double]? {
+        guard let first = members.first else { return solve() }
+        let set = Set(members)
+        func map(_ v: Int) -> Int { set.contains(v) ? first : v }
+        var merged = self
+        let total = members.reduce(0) { $0 + weight[$1] }
+        merged.desired[first] = members.reduce(0) { $0 + desired[$1] * weight[$1] } / max(total, 1e-9)
+        merged.weight[first] = total
+        merged.constraints = constraints.compactMap { c in
+            let left = map(c.left), right = map(c.right)
+            return left == right ? nil : Constraint(left: left, right: right, gap: c.gap)
+        }
+        var result = merged.solve()
+        for v in members { result[v] = result[first] }
+        for c in constraints where result[c.right] - result[c.left] < c.gap - 0.5 { return nil }
+        return result
     }
 
     func solve() -> [Double] {

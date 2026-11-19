@@ -151,9 +151,11 @@ Don't hand-place nodes. Leave `layout: auto`, express structure with `groups`, a
 hint to fix one specific ordering.
 
 Architecture maps with a request spine (a request enters, then flows step by step through services and
-queues) read best top to bottom: set `direction: down` at the top level. The spine runs down the
-middle, a store or API that one step alone calls sits beside that step, and databases shared by
-several steps line the bottom. Deep dives inherit it; give a deep dive `direction: right` if it reads
+queues) read best top to bottom: set `direction: down` at the top level. The spine (the longest path
+of sources, services and queues the flows take) runs straight down the middle, a store or API that one
+step alone calls sits beside that step, and databases shared by several steps line the bottom. Model
+the spine as real edges and flows so the layout can find it: an external engine or store on the main
+path breaks it there. Deep dives inherit it; give a deep dive `direction: right` if it reads
 better left to right. Keep `direction: right` (the default) for short pipelines and most lessons.
 
 ### 7. Verification

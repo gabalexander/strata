@@ -17,10 +17,20 @@ import StrataCore
                     }
                 }
                 let regions = groupRegions(level)
+                // A spine node between two members of a group may sit in its region (Layout+Spine.swift).
+                let spine = DiagramLayout.spine(of: level, direction: .down)
+                func within(_ id: String, _ group: String) -> Bool {
+                    var current = spine.adopted[id]
+                    while let g = current {
+                        if g == group { return true }
+                        current = level.groups.first { $0.id == g }?.parent
+                    }
+                    return false
+                }
                 for group in level.groups {
                     guard let region = regions[group.id] else { continue }
                     let members = groupMembers(group.id, in: level)
-                    for card in rects where !members.contains(card.id) && region.intersects(card.rect) {
+                    for card in rects where !members.contains(card.id) && !within(card.id, group.id) && region.intersects(card.rect) {
                         check(false, "\(sample.name): \(card.id) sits inside group \(group.id)")
                     }
                     if let parent = group.parent, let outer = regions[parent] {
@@ -30,6 +40,11 @@ import StrataCore
                         guard let second = regions[other.id] else { continue }
                         check(!region.intersects(second), "\(sample.name): groups \(group.id) and \(other.id) overlap")
                     }
+                }
+                // The spine runs straight down one centre line.
+                let centres = spine.nodes.compactMap { id in rects.first { $0.id == id }?.rect.midX }
+                if let first = centres.first {
+                    check(centres.allSatisfy { abs($0 - first) < 0.5 }, "\(sample.name): the spine \(spine.nodes) is not straight: \(centres)")
                 }
                 // Sources (and ports nothing calls) start the top row; every edge outside a cycle runs down or sideways.
                 let diagram = level.nodes.filter { $0.kind.role != .annotation }
@@ -142,6 +157,85 @@ import StrataCore
             let side = routes(level, .down).first { $0.edge == "api->cache" }!
             check(abs(side.start.y - side.tip.y) < 0.5, "api → cache is not level")
         },
+        CheckCase(name: "vertical layout draws the main path as one straight spine, through a group or not") {
+            for grouped in [false, true] {
+                let queue = grouped ? ", group: app" : ""
+                guard let manifest = parsed("""
+                    direction: down
+                    groups: [{ id: app, label: One image }]
+                    nodes:
+                      - { id: timer, kind: cron }
+                      - { id: operator, kind: user }
+                      - { id: plan, kind: service, group: app }
+                      - { id: choose, kind: service, group: app }
+                      - { id: jobs, kind: queue\(queue) }
+                      - { id: prepare, kind: worker, group: app }
+                      - { id: work, kind: queue\(queue) }
+                      - { id: run, kind: worker, group: app }
+                      - { id: done, kind: queue\(queue) }
+                      - { id: finish, kind: worker, group: app }
+                      - { id: console, kind: service, group: app }
+                      - { id: outbound, kind: queue }
+                      - { id: provider, kind: external }
+                      - { id: replies, kind: queue }
+                      - { id: partner, kind: external }
+                      - { id: db, kind: database }
+                      - { id: cache, kind: cache }
+                    edges:
+                      - { from: timer, to: plan }
+                      - { from: plan, to: choose, label: Pick }
+                      - { from: choose, to: jobs, protocol: amqp }
+                      - { from: jobs, to: prepare, protocol: amqp }
+                      - { from: prepare, to: work, protocol: amqp }
+                      - { from: work, to: run, protocol: amqp }
+                      - { from: run, to: done, protocol: amqp }
+                      - { from: done, to: finish, protocol: amqp }
+                      - { from: run, to: outbound, protocol: amqp }
+                      - { from: outbound, to: provider }
+                      - { from: provider, to: replies }
+                      - { from: replies, to: finish, protocol: amqp }
+                      - { from: plan, to: partner, protocol: grpc }
+                      - { from: plan, to: db, protocol: sql }
+                      - { from: plan, to: cache, protocol: redis }
+                      - { from: choose, to: db, protocol: sql }
+                      - { from: choose, to: cache, protocol: redis }
+                      - { from: prepare, to: db, protocol: sql }
+                      - { from: run, to: db, protocol: sql }
+                      - { from: run, to: cache, protocol: redis }
+                      - { from: finish, to: db, protocol: sql }
+                      - { from: operator, to: console, protocol: https }
+                      - { from: console, to: db, protocol: sql }
+                      - { from: console, to: cache, protocol: redis }
+                    """) else { check(false, "spine fixture"); continue }
+                let level = manifest.root
+                let name = grouped ? "queues in the group" : "queues outside the group"
+                let spine = DiagramLayout.spine(of: level, direction: .down)
+                check(spine.nodes == ["timer", "plan", "choose", "jobs", "prepare", "work", "run", "done", "finish"],
+                      "\(name): spine \(spine.nodes)")
+                check(spine.adopted == (grouped ? [:] : ["jobs": "app", "work": "app", "done": "app"]), "\(name): adopted \(spine.adopted)")
+                let rects = Dictionary(cardRects(level).map { ($0.id, $0.rect) }, uniquingKeysWith: { a, _ in a })
+                let centres = spine.nodes.compactMap { rects[$0]?.midX }
+                check(centres.count == spine.nodes.count && Set(centres.map { ($0 * 2).rounded() }).count == 1,
+                      "\(name): the spine is not one column: \(centres)")
+                let cards = Array(rects)
+                for (i, a) in cards.enumerated() {
+                    for b in cards[(i + 1)...] where a.value.insetBy(dx: 1, dy: 1).intersects(b.value) {
+                        check(false, "\(name): \(a.key) overlaps \(b.key)")
+                    }
+                }
+                if let region = groupRegions(level)["app"] {
+                    for (id, rect) in rects where level.node(id)?.group != "app" && spine.adopted[id] == nil && region.intersects(rect) {
+                        check(false, "\(name): \(id) sits inside the group")
+                    }
+                }
+                func row(_ id: String) -> Double { level.node(id)?.at?.y ?? -1 }
+                check(row("partner") == row("plan"), "\(name): partner is not beside plan")
+                let bottom = level.nodes.compactMap { $0.at?.y }.max()
+                check(row("db") == bottom && row("cache") == bottom, "\(name): the stores are not in the bottom row")
+                check(throughCards(routedLines(level, .down), level) == 0, "\(name): an edge runs through a card")
+                check(DiagramLayout.spine(of: level, direction: .right).nodes.isEmpty, "\(name): left to right has no spine")
+            }
+        },
         CheckCase(name: "vertical layout is deterministic and the switch round-trips to the parsed layout") {
             let first = try verticalSamples(), second = try verticalSamples()
             check(first.count == second.count, "sample count changed")
@@ -251,3 +345,4 @@ private func reaches(_ from: String, _ to: String, in level: Level) -> Bool {
     }
     return false
 }
+

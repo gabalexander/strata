@@ -191,9 +191,17 @@ extension LayeredGraph {
             var items = (children[container] ?? []).sorted {
                 (key($0), (first[$0] ?? 0) * tie) < (key($1), (first[$1] ?? 0) * tie)
             }
-            let slots = items.indices.filter { if case .group = items[$0] { true } else { false } }
+            // Groups keep their global order; the spine counts as one more of them (at index
+            // groupIDs.count), so a group stays on one side of it in every layer.
+            func slot(_ item: Item) -> Int? {
+                switch item {
+                case .group(let g): g
+                case .vertex(let v): spineSet.contains(v) ? groupIDs.count : nil
+                }
+            }
+            let slots = items.indices.filter { slot(items[$0]) != nil }
             let ordered = slots.map { items[$0] }.sorted { a, b in
-                guard case .group(let x) = a, case .group(let y) = b else { return false }
+                let x = slot(a)!, y = slot(b)!
                 return (ranks[x], x) < (ranks[y], y)
             }
             for (slot, item) in zip(slots, ordered) { items[slot] = item }
@@ -219,8 +227,17 @@ extension LayeredGraph {
                 }
             }
         }
-        return groupIDs.indices.map { count[$0] > 0 ? sum[$0] / count[$0] : 0 }
+        let ranks = groupIDs.indices.map { count[$0] > 0 ? sum[$0] / count[$0] : 0 }
+        guard !spine.isEmpty else { return ranks }
+        // The spine's rank, after the groups'.
+        let spineRank = spine.reduce(0.0) { total, v in
+            total + (Double(position[v]) + 0.5) / Double(max(1, layers[vertices[v].layer].count))
+        } / Double(spine.count)
+        return ranks + [spineRank]
     }
+
+    /// The spine's vertices, for ordering.
+    var spineSet: Set<Int> { Set(spine) }
 
     // MARK: - Crossings
 
@@ -240,6 +257,9 @@ extension LayeredGraph {
                     while shared < pa.count && shared < pb.count && pa[shared] == pb[shared] { shared += 1 }
                     let left = shared < pa.count ? pa[shared] : nil, right = shared < pb.count ? pb[shared] : nil
                     if left != nil && right != nil { continue }      // two groups: their global order decides
+                    // The spine keeps its place among groups too.
+                    if (left == nil && spineSet.contains(layer[i]) && right != nil)
+                        || (right == nil && spineSet.contains(layer[i + 1]) && left != nil) { continue }
                     var start = i, end = i + 1
                     if let left { while start > 0 && path(of: layer[start - 1]).contains(left) { start -= 1 } }
                     if let right { while end + 1 < layer.count && path(of: layer[end + 1]).contains(right) { end += 1 } }

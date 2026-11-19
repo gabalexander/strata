@@ -86,6 +86,22 @@ public enum DiagramLayout {
         return copy
     }
 
+    /// The spine auto layout draws straight when `level` runs `direction` (node ids, from the first layer
+    /// down), and the spine nodes a group takes in for layout without being members (node id → group id).
+    /// Only top-to-bottom layouts have one.
+    public static func spine(of level: Level, direction: FlowDirection) -> (nodes: [String], adopted: [String: String]) {
+        guard direction == .down else { return ([], [:]) }
+        var copy = level
+        for index in copy.nodes.indices { copy.nodes[index].at = copy.nodes[index].hint }
+        var graph = LayeredGraph(level: copy, direction: direction, hints: level.direction ?? .right)
+        guard !graph.ids.isEmpty else { return ([], [:]) }
+        graph.breakCycles()
+        graph.assignLayers()
+        graph.chooseSpine()
+        let adopted = graph.adoptedGroups.map { (graph.ids[$0.key], graph.groupIDs[$0.value]) }
+        return (graph.spineNodes.map { graph.ids[$0] }, Dictionary(adopted, uniquingKeysWith: { first, _ in first }))
+    }
+
     /// An auto-laid-out level placed again from the author's hints (`Node.hint`) to run in `direction`: the
     /// stage's vertical/horizontal switch. In the level's own direction it is the layout parsing made.
     public static func arranged(_ level: Level, direction: FlowDirection) -> Level {

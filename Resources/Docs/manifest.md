@@ -122,6 +122,14 @@ direction: down          # at the top level, or on any inside: level
 
 - Layers become rows from top to bottom, and each row runs left to right. Sources and inbound ports
   start the top row; outbound ports end the bottom one.
+- **The spine.** The level's main path runs down one straight centre line, and everything else sits
+  to its sides. It is the longest chain of nodes that carry the flow (sources, ports, services,
+  workers, gateways, queues and topics; not stores or external APIs), heavier flow `rate` winning a
+  tie, ending on a node that does the work rather than a queue. A queue on the spine between two
+  services of one group sits inside that group's region, so the region runs straight with the spine
+  (it is still the group's members that the region is drawn around). Where a straight line can't keep
+  clear of a group (the spine would leave a group that goes on beside it), only the part that can
+  stays straight.
 - A store or external API that only one node calls sits in that node's row, beside it, joined by a
   level edge: a step and what it talks to read at one height. A node keeps at most two this way (one
   each side); with more they fan out in the row below.

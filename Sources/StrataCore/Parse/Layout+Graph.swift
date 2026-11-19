@@ -22,6 +22,7 @@ enum AutoLayout {
         }
         graph.breakCycles()
         graph.assignLayers()
+        if direction == .down { graph.chooseSpine() }
         guard direction == .down else {
             graph.buildVertices()
             graph.orderLayers()
@@ -96,6 +97,11 @@ struct LayeredGraph {
     /// Top to bottom only (Layout+Down.swift): a side node sits in its caller's row, next to it.
     var sideOf: [Int: Int] = [:]
     var flat: Set<Int> = []        // links between a side node and its caller, inside one layer
+    /// The main path drawn straight (Layout+Spine.swift): its nodes, its vertices layer by layer, and the
+    /// spine nodes a group took in for layout.
+    var spineNodes: [Int] = []
+    var spine: [Int] = []
+    var adoptedGroups: [Int: Int] = [:]
 
     init(level: Level, direction: FlowDirection = .right, hints hintDirection: FlowDirection = .right) {
         self.level = level
@@ -456,6 +462,7 @@ struct LayeredGraph {
         }
         position = Array(repeating: 0, count: vertices.count)
         for l in layers.indices { reindex(l) }
+        traceSpine()
     }
 
     mutating func reindex(_ l: Int) {

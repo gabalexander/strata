@@ -83,6 +83,11 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   cards in a row (wider where a side edge's label sits) and at least 64 pt between rows, more for the
   pills that stack there, for group bands, and for long sideways S-bends. A store or API with one
   caller sits beside it in its row; stores shared across rows line the bottom row.
+- **Spine:** top to bottom, the main path (Layout+Spine.swift) is one straight column: the longest
+  chain through the flow's sources, services and queues, ties broken by flow rate. It is one
+  Brandes–Köpf block in every alignment, nothing aligns across it, it moves as one in the group solver,
+  and ordering keeps every group on one side of it. A queue between two members of a group on the
+  spine joins that group for layout, so the group's region runs straight through it.
 - **Vertical/horizontal switch:** the toolbar's arrow-down button (lit while the map runs top to
   bottom), ⌘K and ⌥⌘V run every level of the current map the other way, overriding the manifest's
   `direction`. Cards glide like Tidy layout and the view fits; the choice is saved per map in
