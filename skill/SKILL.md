@@ -129,7 +129,8 @@ without a meaning is not done.
   and its `reply`; `at` timings from the code's intervals; `state` changes with their `ttl`.
 - `branches:` cover the failures: a crash, an expired lease, a lost race, a timeout, a split brain.
 - Participants link to diagram nodes with `node:`, and `code:` points at the implementation.
-- Model it on the roster example in `strata schema` (How it works).
+- Model it on the roster example in `strata schema` (How it works); `strata how valkey-roster` prints a
+  complete one.
 
 ### 4. Formulas
 
@@ -155,8 +156,9 @@ hint to fix one specific ordering.
 
 - `strata ops <id>`: every binary has its endpoints, queries, keys and topics, and the ops you care about are named by a flow;
 - `strata data <id>`: tables, keys and sample rows join, and entities assemble;
-- `strata how <id>`: every mechanism plays from start to end with exact commands and its failure branches;
-- `strata enums <id>`: every code has a name, a meaning and its transitions;
+- `strata how <id>`: every mechanism plays from start to end with exact commands and its failure branches
+  (`--mechanism <id>` or `--branch <id>` prints just one);
+- `strata enums <id>`: every code has a name, a meaning and its transitions (`--find 3200` looks one up);
 - `strata analyze <id>`: the bottleneck and max rates match what the team knows ([Pressure](#pressure)).
 
 When you hand the map over, tell the user what you covered (binaries, mechanisms, formulas, enums)
