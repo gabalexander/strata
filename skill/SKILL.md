@@ -56,15 +56,16 @@ Survey before you draw, and read the code, not only the file names:
   `FOR UPDATE`, `SKIP LOCKED`, tickers and intervals, leases, backoff, `score`, `rate`, `budget`, status
   constants and `iota` blocks. Each one you find gets explained ([Depth checklist](#depth-checklist)).
 - **Real numbers**: DB pool sizes, worker counts, goroutine pools, timeouts, retries and backoff,
-  prefetch, replicas, TTLs and intervals, rate limits and SLOs. When you guess, say so in the `doc`.
+  prefetch, replicas, TTLs and intervals, rate limits and SLOs. When you guess, say so in the `doc`
+  (`estimate`).
 
 Then build:
 
 - **Overview level**: 8-15 nodes, `groups` for clusters, VPCs or teams, edges with `protocol`, and
   labels as the team says them (`orders-svc`, `ledger-db`). Set `repo:` at the top and `code:` on
   every node.
-- **A `doc` on every node**, 2-5 lines: what it owns; its key endpoints, topics or tables; how it
-  fails; the non-obvious thing a new engineer should know. Explain; don't write "handles X" or "see code".
+- **A `brief` on every node and op**: one line, about 15 words: what it is, what it owns, why it matters
+  ([Briefs and docs](#briefs-and-docs)).
 - **Deep dives** (`inside:`) for every important service: its binaries, then handler → domain logic →
   repositories, outbox, caches and clients, with `port` nodes for callers and `rate: parent` so traffic
   follows the overview. For a big service, write a separate manifest `<project>-<service>` and link it
@@ -79,29 +80,79 @@ Then build:
   `say` narration at each step.
 - **Optionally a note**: `~/.strata/vault/Maps/<project>.md` with an overview, a ```strata embed and `[[links]]`.
 
+## Briefs and docs
+
+The inspector shows the `brief` first and keeps the `doc` behind a quiet "More". The user scans briefs
+and won't read paragraphs, so write for that:
+
+- **`brief`** on every node (inner nodes too) and every op, and on flows, `how:` mechanisms and deep-dive
+  levels: one line, about 15 words (100 characters at most): what it is, what it owns, why it matters.
+  Not "handles X" or "the X service": say what X is for.
+- **`doc`** is optional: at most 3 short lines or bullets of the non-obvious facts only: how it fails, a
+  key number, a gotcha. No paragraphs, no restating the brief, the label or the tech badge.
+- **Everything else has a better home**: mechanics in `how:` (step by step, with commands), numbers in
+  ops (`facts`, `ttl`, `status`) and node parameters, code paths in `code:`, the status codes in
+  `enums:`, and background or history in a vault note linked from `links:`.
+- **Level `narration`**: a `brief` plus at most 3 lines on what to watch. **Mechanism `summary`**: a
+  `brief` plus at most 3 lines; the steps tell the rest. **Step `note`**: the one thing to notice, in a
+  line or two.
+- `strata validate` warns about a doc, narration or summary over 280 characters or 3 lines without a
+  brief, and about a brief over 120 characters. Fix the text; don't just add a brief on top of a wall.
+
+Before (what an agent tends to write):
+
+```yaml
+- id: billing
+  kind: service
+  doc: |
+    The billing service is a Go service that owns invoices and payment attempts. It exposes a REST API
+    to the storefront and consumes order events from Kafka. It writes to the billing database and calls
+    the payment provider with a 2 s timeout and 3 retries. If the provider is slow, its worker pool
+    fills up and order events start to lag, which delays invoices for every customer.
+```
+
+After:
+
+```yaml
+- id: billing
+  kind: service
+  brief: Owns invoices and payment attempts; charges the provider for each order.
+  doc: |
+    - A slow provider fills the worker pool; order events lag behind it.
+    - Charges are idempotent by order id, so a redelivered event never charges twice.
+  ops:
+    - { id: charge, kind: http, target: provider, label: POST /charges, brief: Charges one order.,
+        facts: { timeout: 2s, retries: "3, exponential" } }
+```
+
+The REST API, the topic and the database are already on the diagram as edges and ops; the timeout and
+retries are facts on the op that has them.
+
 ## Depth checklist
 
 A map is deep enough when a new engineer can answer "what runs, what does it query, how does that
 mechanism work, what does 3200 mean" from it alone. For **every important service**, do all seven.
 A mechanism that is only "noted", a formula without numbers, a query with `...` or a status code
-without a meaning is not done.
+without a meaning is not done. Deep means more ops, mechanisms, formulas and enums, never longer prose:
+a node's brief and its 3-line doc stay that size however deep the map goes.
 
 ### 1. Binaries
 
 - Each binary (`cmd/api`, `cmd/worker`, `cmd/scheduler`, each Procfile entry) is its own node inside
   the service: `kind: service` for servers, `worker` for consumers and loops, `cron` for schedulers.
   Give it `binary:` and `code:` (its `main.go`). The service card then lists them as chips.
-- The service's `doc` names the shared packages (`internal/*`, `pkg/*`): what each owns and which
-  binaries use it.
+- The service's `doc` names the shared packages (`internal/*`, `pkg/*`) in a bullet each: what it owns
+  and which binaries use it.
 
 ```yaml
 - id: campaigns
   kind: service
   label: campaigns-svc
   code: cmd
+  brief: Owns campaigns, their schedule and pacing; one Go module, three binaries.
   doc: |
-    One Go module, three binaries. internal/campaign (pacing, the status machine) is shared by api and
-    worker; internal/store (sqlc queries) by all three.
+    - internal/campaign (pacing, the status machine): api and worker.
+    - internal/store (sqlc queries): all three.
   inside:
     nodes:
       - { id: in, kind: port, label: admin UI }
@@ -125,6 +176,8 @@ without a meaning is not done.
 - Any algorithm or protocol gets a `how:` sequence on the node or op that implements it: leader
   election, a roster with heartbeats, locks and leases, rate limiting, sharding and rebalancing,
   retries with fencing tokens, outbox relays, schedulers.
+- A `brief` says the idea in one line; `summary` adds at most 3 lines. Each step's `note` is the one
+  thing to notice there, in a line or two.
 - Each step has the **exact command** (the Valkey or Redis command with its arguments, the SQL, the RPC)
   and its `reply`; `at` timings from the code's intervals; `state` changes with their `ttl`.
 - `branches:` cover the failures: a crash, an expired lease, a lost race, a timeout, a split brain.
@@ -161,6 +214,9 @@ better left to right. Keep `direction: right` (the default) for short pipelines 
 ### 7. Verification
 
 `strata validate` must print nothing. Then read each report as a reviewer and fix what's missing:
+
+- every node and op has a `brief`, and no `doc` runs past 3 short lines (`strata ops <id> --json` shows
+  each op's `brief` and `doc`);
 
 - `strata ops <id>`: every binary has its endpoints, queries, keys and topics, the ops you care about are named by a flow,
   and in each deep dive every op that talks to something maps to an inner node;
@@ -232,7 +288,8 @@ Check it against reality and tell the user what you found:
 
 For a technology or pattern (retries vs timeouts, prefetch, cache stampede, outbox, consumer lag):
 3-8 nodes on one level with a `category` and `glossaries:`; 2-4 controls whose insights name the metric
-that moves and whether that's good; 2-4 scenarios that each prove one point; `narration` that says what to watch.
+that moves and whether that's good; 2-4 scenarios that each prove one point; a `brief` and a short
+`narration` that says what to watch; a `brief` on each node.
 
 ## Gotchas
 

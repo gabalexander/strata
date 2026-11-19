@@ -88,6 +88,8 @@ import StrataCore
                 let consume = listing("", "mailer", "on-order-placed")
                 check(json.status == 0 && consume?["direction"] as? String == "in" && consume?["flows"] as? [String] == ["email"],
                       "flow-level op missing from --json: \(String(describing: consume))")
+                check(listing("", "orders", "place-order")?["brief"] as? String == "Prices the cart, commits the order with its outbox row, then emits OrderPlaced.",
+                      "op brief missing from --json: \(String(describing: listing("", "orders", "place-order")))")
                 let insert = listing("", "orders", "insert-order")
                 check(insert?["tx"] as? Bool == true && insert?["inside"] as? Bool == true &&
                       (insert?["facts"] as? [[String: String]])?.map { $0["key"] } == ["isolation", "pool"],

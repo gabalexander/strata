@@ -84,7 +84,7 @@ struct SimDataTableView: View {
         VStack(alignment: .leading, spacing: 14) {
             // Anchors sit a little above what they mark, so a landing leaves headroom.
             header.simDataAnchor(SimDataState.tableAnchor(ref))
-            if let doc = schema.doc { SimMarkdown(source: doc, model: model, terms: terms, size: 12) }
+            SimBriefText(brief: nil, detail: schema.doc, key: SimBriefKey.item(sim, "table:" + ref.id), model: model, terms: terms, size: 12)
             writers
             columns
             if !schema.indexes.isEmpty { indexes }

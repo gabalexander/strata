@@ -54,8 +54,10 @@ struct SimInspector: View {
 
     private var overview: some View {
         Group {
-            if let narration = sim.level.narration {
-                SimSection(title: "This level") { SimMarkdown(source: narration, model: model, terms: terms) }
+            if sim.level.narration != nil || sim.level.brief != nil {
+                SimSection(title: "This level") {
+                    SimBriefText(brief: sim.level.brief, detail: sim.level.narration, key: SimBriefKey.level(sim), model: model, terms: terms)
+                }
             }
             // A deep dive: the ops of the node it is inside, which stay on that node in the overview.
             if let owner = SimOpsState.of(sim).index.inheritance?.owner {
@@ -116,7 +118,7 @@ struct SimInspector: View {
                     }
                 }
             }
-            if let doc = node.doc { SimMarkdown(source: doc, model: model, terms: terms) }
+            SimBriefText(brief: node.brief, detail: node.doc, key: SimBriefKey.node(sim, node.id), model: model, terms: terms)
             if !node.how.isEmpty {
                 SimHowSection(mechanisms: node.how, node: node.id, owner: node.label, model: model, sim: sim, terms: terms, actions: actions)
             }
@@ -300,6 +302,9 @@ struct SimInspector: View {
                 if !flow.isConsumer {
                     SimButton(title: "Send 1", icon: "paperplane") { sim.send(flow.id) }
                 }
+            }
+            if let brief = flow.brief, !brief.isEmpty {
+                SimMarkdown(source: brief, model: model, terms: terms, size: 12, lineLimit: 2)
             }
             if !flow.isConsumer {
                 HStack(spacing: 9) {

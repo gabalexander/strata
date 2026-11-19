@@ -228,6 +228,7 @@ private func specFence(containing marker: String) throws -> String {
             let full = try runCLI(cli, ["how", examples.path])
             check(full.status == 0, "how failed: \(full.output)")
             check(full.output.contains("scheduler · roster: Roster membership with heartbeats"), "header: \(full.output.prefix(200))")
+            check(full.output.contains("heartbeats\n  Each instance keeps a 15 s key alive with 5 s heartbeats;"), "brief under the header: \(full.output.prefix(300))")
             check(full.output.contains("  1  t=0s   instance A → Valkey      A registers"), "numbered step: \(full.output.prefix(800))")
             check(full.output.contains("SET roster:inst:a 10.0.1.7:7070 NX PX 15000  →  OK"), "command and reply")
             check(full.output.contains("roster:inst:a = 10.0.1.7:7070 (ttl 15s, renewed)"), "renewed state")

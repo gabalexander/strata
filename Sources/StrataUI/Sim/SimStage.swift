@@ -203,12 +203,12 @@ struct SimStage: View {
                 if !compact { componentsCard(camera, size: proxy.size) }
             }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { viewport.size = $0 }
-            .onAppear { SimFormulaStage.showRequested(sim, layout: renderer.layout, camera: { viewport.current(renderer.layout, in: proxy.size, compact: compact) }, frame: { proxy.frame(in: .global) }, overlays: model.overlays) }
+            .onAppear { SimFormulaStage.showRequested(sim, layout: renderer.layout, camera: { viewport.current(renderer.layout, in: proxy.size, compact: compact) }, frame: { proxy.frame(in: .global) }, overlays: model.overlays, terms: terms) }
         }
         .clipped()
         .background(Theme.bg)
         .overlay(alignment: .bottom) {
-            if !compact, let narration = sim.narration ?? sim.level.narration, !narration.isEmpty {
+            if !compact, let narration = stripText, !narration.isEmpty {
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: "text.bubble").font(Theme.ui(12)).foregroundStyle(Theme.accent)
                         .padding(.top, 1)
@@ -223,11 +223,17 @@ struct SimStage: View {
                 .padding(.horizontal, 12).padding(.bottom, 10)
             }
         }
-        .animation(reduceMotion ? nil : Theme.snappy, value: sim.narration ?? sim.level.narration)
+        .animation(reduceMotion ? nil : Theme.snappy, value: stripText)
         .onDisappear {
             clock.suspend()
             clearHover()
         }
+    }
+
+    /// The narration strip: a scenario's narration, else the level's brief (or its narration's first
+    /// sentence when long; "This level" in the inspector has all of it).
+    private var stripText: String? {
+        sim.narration ?? Brief.parts(brief: sim.level.brief, detail: sim.level.narration)?.lead
     }
 
     @ViewBuilder

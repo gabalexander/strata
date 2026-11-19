@@ -319,8 +319,11 @@ private func expectClean(_ result: (Manifest?, [Diagnostic])) -> Manifest? {
             for (index, snippet) in fences.enumerated() {
                 let input = specManifest(snippet)
                 let (manifest, diagnostics) = load(input, preamble: "")
-                check(manifest != nil && diagnostics.allSatisfy { $0.severity == .warning && $0.message.contains("implicit edge") },
-                      "reference fence \(index + 1): \(diagnostics)")
+                // The "before" of Briefs is the long doc the brief warning exists for.
+                let before = snippet.hasPrefix("- id: billing") && !snippet.contains("brief:")
+                check(manifest != nil && diagnostics.allSatisfy {
+                    $0.severity == .warning && $0.message.contains(before ? "add a one-line brief:" : "implicit edge")
+                } && (!before || diagnostics.count == 1), "reference fence \(index + 1): \(diagnostics)")
             }
         },
         CheckCase(name: "parser automatic checkout layout and longest path") {
@@ -493,6 +496,10 @@ func specManifest(_ snippet: String) -> String {
               - {from: orders, to: events}
               - {from: orders, to: payments}
             """
+    }
+    if text.hasPrefix("- id: billing") {
+        // The before and after of Briefs: one node each. Before is meant to warn (a long doc, no brief).
+        return header + "nodes:\n" + indent(text, 2)
     }
     if text.hasPrefix("- id: db"), text.contains("\n  schema:") {
         // The data example: a database with tables and a service with an entity assembled from them.

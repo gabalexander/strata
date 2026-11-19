@@ -238,7 +238,8 @@ extension StageRenderer {
 extension SimFormulaStage {
     /// What hovering a node shows after the delay: its formula over the ƒ badge; elsewhere on a card
     /// with process chips nothing (the processes card shows there); else its glossary term, or its
-    /// formula when it has no term. nil when there is nothing to show.
+    /// formula when it has no term, or its brief (the short form of its doc) in a term card when it has
+    /// neither. nil when there is nothing to show.
     @MainActor
     static func hoverCard(_ node: Node, badge: Bool, chips: Bool, terms: TermIndex) -> ((Overlays, CGRect) -> Void)? {
         if badge, let formula = node.formula {
@@ -248,17 +249,30 @@ extension SimFormulaStage {
         if let formula = node.formula, node.term.flatMap(terms.term) == nil {
             return { overlays, anchor in overlays.showFormula(formula, title: node.label, anchor: anchor) }
         }
-        guard let term = node.term.flatMap(terms.term) else { return nil }
-        return { overlays, anchor in overlays.showTerm(term, anchor: anchor, index: terms) }
+        if let term = node.term.flatMap(terms.term) {
+            return { overlays, anchor in overlays.showTerm(term, anchor: anchor, index: terms) }
+        }
+        guard node.kind != .note, let brief = Brief.line(brief: node.brief, detail: node.doc) else { return nil }
+        let card = Term(id: "node:" + node.id, term: node.label, short: SimBriefPlain.text(brief))
+        return { overlays, anchor in overlays.showTerm(card, anchor: anchor) }
     }
 
     /// Snapshots: the node whose formula card to show as if hovered, per simulation.
     @MainActor static var requested: [ObjectIdentifier: String] = [:]
+    /// Snapshots: the node whose hover card (term, formula or brief) to show as if hovered, per simulation.
+    @MainActor static var requestedHover: [ObjectIdentifier: String] = [:]
 
-    /// Shows a requested formula card once the stage is laid out (offscreen snapshots only).
+    /// Shows a requested formula or hover card once the stage is laid out (offscreen snapshots only).
     @MainActor
     static func showRequested(_ sim: Simulation, layout: StageLayout, camera: @escaping () -> StageCamera,
-                              frame: @escaping () -> CGRect, overlays: Overlays) {
+                              frame: @escaping () -> CGRect, overlays: Overlays, terms: TermIndex) {
+        if let id = requestedHover.removeValue(forKey: ObjectIdentifier(sim)), let card = layout.cardsByID[id],
+           let show = hoverCard(card.node, badge: false, chips: StageLayout.hasChips(card.node), terms: terms) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                let origin = frame().origin
+                show(overlays, camera().screen(card.rect).offsetBy(dx: origin.x, dy: origin.y))
+            }
+        }
         guard let id = requested.removeValue(forKey: ObjectIdentifier(sim)), let card = layout.cardsByID[id],
               let formula = card.node.formula else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {

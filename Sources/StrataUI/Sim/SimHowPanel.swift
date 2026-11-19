@@ -625,8 +625,10 @@ struct SimHowNotes: View {
                     if frame.branch != nil, index == player.playback.branchStart {
                         SimPill(title: player.playback.branch?.label ?? "branch", icon: "arrow.turn.down.right", tint: Theme.warn)
                     }
-                    if let note = frame.step.note ?? (index == player.playback.branchStart ? player.playback.branch?.note : nil) {
-                        SimMarkdown(source: note, model: model, terms: terms, color: Theme.text.opacity(0.86), size: 13, lineLimit: 3)
+                    // A long note shows its first sentence here; the step detail has all of it.
+                    if let note = frame.step.note ?? (index == player.playback.branchStart ? player.playback.branch?.note : nil),
+                       let lead = Brief.parts(brief: nil, detail: note)?.lead {
+                        SimMarkdown(source: lead, model: model, terms: terms, color: Theme.text.opacity(0.86), size: 13, lineLimit: 3)
                     }
                 }
             } else {
@@ -634,8 +636,8 @@ struct SimHowNotes: View {
                     Text("START").font(Theme.mono(10, .semibold)).foregroundStyle(Theme.accent)
                 }
                 .frame(width: 52, alignment: .leading)
-                if let summary = player.mechanism.summary {
-                    SimMarkdown(source: summary, model: model, terms: terms, color: Theme.text.opacity(0.86), size: 13, lineLimit: 3)
+                if let lead = Brief.parts(brief: player.mechanism.brief, detail: player.mechanism.summary)?.lead {
+                    SimMarkdown(source: lead, model: model, terms: terms, color: Theme.text.opacity(0.86), size: 13, lineLimit: 3)
                 } else {
                     Text("Press play or → to take the first step.").font(Theme.ui(13)).foregroundStyle(Theme.muted)
                 }

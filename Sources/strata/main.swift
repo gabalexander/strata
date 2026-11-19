@@ -162,9 +162,15 @@ private func create(_ args: Arguments) throws {
     kind: \(kind.rawValue)
 
     # Drop at from a node to let Strata place it.
+    # brief: one line on every node and op (what it is or owns, about 15 words).
+    # doc: optional, at most 3 short lines or bullets of the non-obvious facts.
     nodes:
       - { id: client, kind: client, at: [0, 0] }
-      - { id: service, kind: service, at: [1, 0], latency: 20ms }
+      - id: service
+        kind: service
+        at: [1, 0]
+        latency: 20ms
+        brief: What it owns and why it matters, in one line.
     edges:
       - { from: client, to: service, protocol: http }
 

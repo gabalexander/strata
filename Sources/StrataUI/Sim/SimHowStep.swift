@@ -76,10 +76,12 @@ struct SimHowStepDetail: View {
         let branchNote = frame.index == player.playback.branchStart ? player.playback.branch?.note : nil
         if let note = step.note ?? branchNote {
             SimSection(title: "Note") {
-                SimMarkdown(source: note, model: model, terms: terms, color: Theme.text.opacity(0.88), size: 13)
-            }
-            if step.note != nil, let branchNote {
-                SimMarkdown(source: branchNote, model: model, terms: terms, color: Theme.text.opacity(0.88), size: 13)
+                SimBriefText(brief: nil, detail: note, key: SimBriefKey.step(sim, player.ref, branch: frame.branch, step: step.id),
+                             model: model, terms: terms, color: Theme.text.opacity(0.88), size: 13)
+                if step.note != nil, let branchNote {
+                    SimBriefText(brief: nil, detail: branchNote, key: SimBriefKey.step(sim, player.ref, branch: frame.branch, step: "branch"),
+                                 model: model, terms: terms, color: Theme.text.opacity(0.88), size: 13)
+                }
             }
         }
         branches(frame)
@@ -253,9 +255,8 @@ struct SimHowStepDetail: View {
             Text(mechanism.title).font(Theme.heading).foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        if let summary = mechanism.summary {
-            SimMarkdown(source: summary, model: model, terms: terms, color: Theme.text.opacity(0.88), size: 13)
-        }
+        SimBriefText(brief: mechanism.brief, detail: mechanism.summary, key: SimBriefKey.mechanism(sim, player.ref),
+                     model: model, terms: terms, color: Theme.text.opacity(0.88), leadColor: Theme.text, size: 13)
         SimSection(title: "Participants") {
             SimOpsChips {
                 ForEach(mechanism.participants) { participant in

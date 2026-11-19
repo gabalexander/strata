@@ -59,7 +59,7 @@ private struct SimEntityCard: View {
         let expanded = state.isExpanded(key)
         VStack(alignment: .leading, spacing: 9) {
             header(source: source, expanded: expanded)
-            if let doc = entity.doc { SimMarkdown(source: doc, model: model, terms: terms, size: 12) }
+            SimBriefText(brief: nil, detail: entity.doc, key: SimBriefKey.item(sim, "entity:" + key), model: model, terms: terms, size: 12)
             SimOpsChips {
                 ForEach([entity.root] + entity.includes, id: \.self) { table in
                     if let source, let ref = index.table(named: table, on: source) {

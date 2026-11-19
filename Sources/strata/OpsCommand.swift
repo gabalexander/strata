@@ -49,6 +49,7 @@ struct OpListing: Encodable {
     let risks: [String]
     let tags: [String]
     let facts: [Fact]
+    let brief: String?
     let doc: String?
     let detail: String?
     let inside: Bool
@@ -64,7 +65,7 @@ struct OpListing: Encodable {
         command = op.command; key = op.key; ttl = op.ttl; topic = op.topic; group = op.group; payload = op.payload
         method = op.method; path = op.path; request = op.request; response = op.response; streaming = op.streaming
         status = op.status; calls = op.calls; code = op.code; risks = op.risks; tags = op.tags
-        facts = op.facts.map { Fact(key: $0.key, value: $0.value) }; doc = op.doc; detail = op.detail
+        facts = op.facts.map { Fact(key: $0.key, value: $0.value) }; brief = op.brief; doc = op.doc; detail = op.detail
         inside = op.inside != nil; self.flows = flows; self.deepDive = deepDive; line = op.line
     }
 }

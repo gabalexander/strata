@@ -95,7 +95,7 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `direction` | | `right` (default: flow runs left to right) or `down` (top to bottom); a level's key, so a deep dive can set its own. See [Layout](#layout) |
 | `notes` | | long markdown shown in the sim's About tab |
 | `links` | | `[{label, url}]`, `[{label, note: "path/in/vault.md"}]`, or `[{label, sim: other-id}]` |
-| everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `narration`, `direction`. The top level is the root diagram |
+| everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `brief`, `narration`, `direction`. The top level is the root diagram |
 
 ### Layout
 
@@ -152,8 +152,9 @@ switch alone leaves a manual level's positions where they are.
 
 ## Levels and deep dives
 
-A **level** is one diagram: `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, and
-`narration` (markdown shown when the level opens). The manifest's top level is the root level.
+A **level** is one diagram: `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `brief` (one
+line on what it shows, see [Briefs](#briefs)) and `narration` (markdown shown when the level opens). The
+manifest's top level is the root level.
 Any node can have its own level inside it:
 
 ```yaml
@@ -161,7 +162,8 @@ Any node can have its own level inside it:
     kind: service
     label: orders-svc
     inside:
-      narration: Inside orders-svc, one request is a handler, a validator, and an outbox write in one transaction.
+      brief: One request is a handler, a validator and one transaction.
+      narration: Watch the outbox row commit with the order, and the relay publish it later.
       nodes:
         - { id: in, kind: port, label: from api-gateway, at: [0, 1] }
         - { id: handler, kind: service, label: HTTP handler, at: [1, 1], latency: 2ms }
@@ -194,8 +196,10 @@ Any node can have its own level inside it:
   tech: Go 1.27         # small badge
   at: [2, 1]            # grid column and row, fractions allowed. A hint with layout: auto (see Layout), exact with manual
   group: backend        # a group id
-  doc: |                # markdown in the inspector
-    Owns the order lifecycle...
+  brief: Owns orders; writes each order and its outbox row in one transaction.   # one line, see Briefs
+  doc: |                # optional markdown under "More": at most 3 short lines of what isn't obvious
+    - A refused Postgres write fails checkout.
+    - Retries reuse the idempotency key, so a duplicate gets 409.
   term: grpc            # glossary term shown when hovering the node
   code: services/orders # or a list; relative to `repo`, `path:line` allowed
   binary: cmd/orders    # the executable it runs as (a `cmd/*` main package, a Procfile entry)
@@ -266,6 +270,49 @@ Defaults: `replicas: 1`, `errors: 0`, no timeout, no retries, `backoff: 100ms`, 
 Explicit limits are 64 replicas, 100,000 concurrency or prefetch per replica, and 1,000,000 for
 `capacity` or the `queue` waiting room. Runtime updates above these limits are clamped and logged.
 
+## Briefs
+
+The inspector shows a one-line `brief` first and keeps the longer text behind a quiet **More**, so a
+panel reads at a glance. `brief` is optional on nodes (inner nodes too), operations, flows, mechanisms
+(`how:` entries) and levels (next to `narration`). It is markdown on one line, about 100 characters:
+what the thing is, what it owns, why it matters.
+
+Before: a paragraph nobody reads in a 320 pt inspector.
+
+```yaml
+- id: billing
+  kind: service
+  doc: |
+    The billing service is a Go service that owns invoices and payment attempts. It exposes a REST API
+    to the storefront and consumes order events from Kafka. It writes to the billing database and calls
+    the payment provider with a 2 s timeout and 3 retries. If the provider is slow, its worker pool fills.
+```
+
+After: the brief says what it is, the doc keeps only what isn't obvious, and the numbers live in ops.
+
+```yaml
+- id: billing
+  kind: service
+  brief: Owns invoices and payment attempts; charges the provider for each order.
+  doc: |
+    - A slow provider fills the worker pool (2 s timeout × 3 retries per charge).
+    - Charges are idempotent by order id, so a redelivered event never charges twice.
+```
+
+- **Where it shows.** The node pane, the op detail, "This level", a mechanism's card, the step detail and
+  a flow's card show the brief, then "More" for the doc (narration, summary). A node's hover card and the
+  processes card show the brief alone, and so does the narration strip at the bottom of the stage.
+- **Without a brief,** a short text (up to 280 characters on at most 3 lines) shows as it is. A longer one
+  shows its first sentence, about two lines at most with an ellipsis, then "More" for all of it. The
+  sentence ends at `.`, `!` or `?` before a space, at a blank line or before a list, but not at a dot in
+  `code`, a link, a number (`0.5`, `v1.2`) or an abbreviation (`e.g.`, `i.e.`, `vs.`). A step's `note`
+  works the same way.
+- **Validation** warns about a `doc`, `narration` or `summary` longer than 280 characters or 3 lines
+  that has no `brief`: add the brief and cut the text to at most 3 short lines or bullets of the
+  non-obvious facts. Mechanics belong in `how:`, numbers in ops and controls, background in a vault note.
+  A brief longer than 120 characters or on several lines is a warning too.
+- `strata ops --json` and `strata how` print briefs.
+
 ## Operations
 
 Operations are what a node actually does: the queries it runs, the endpoints it serves, the messages
@@ -288,7 +335,7 @@ it publishes or consumes, the cache keys it touches. They're the bridge between 
       path: /orders
       request: '{ "sku": "A-1", "qty": 2 }'
       status: ["201 created", "409 duplicate idempotency key"]
-      doc: Validates the cart, writes the order and its outbox row in one transaction.
+      brief: Validates the cart, writes the order and its outbox row in one transaction.
     - id: insert-order
       kind: sql
       target: db                    # an outbound op names the node it talks to
@@ -339,7 +386,7 @@ names its buffer in `topic` or `target`). Override with `direction: in|out`.
 | `publish`, `consume` (Kafka, RabbitMQ, SQS, NATS) | `topic`, `key` (partition/routing), `group`, `payload`; `calls` on a publish |
 | `rpc` (gRPC, Thrift), `http`, `llm`, `call` | `method`, `path`, `request`, `response`, `streaming` (`unary`, `server`, `client`, `bidi`), `status`, `calls` |
 | `storage` (S3, GCS, blob) | `key` (object key pattern), `path`, `method`, `access`, `ttl`, `payload` |
-| any kind | `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts, kept in order), `inside` / `detail` |
+| any kind | `brief`, `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts, kept in order), `inside` / `detail` |
 
 **Queries.** `query` is the SQL exactly as the code runs it, copied verbatim from the sqlc `.sql` file,
 the ORM call or the raw SQL string: every statement of a transaction, never shortened. Write it as a `|`
@@ -547,9 +594,10 @@ command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases 
   how:
     - id: roster
       title: Roster membership with heartbeats
+      brief: Each instance keeps a TTL key alive with heartbeats; an expired key drops it from the roster.
       summary: |
-        Each instance registers itself in a Valkey key with a TTL and renews it twice per TTL.
-        An instance whose key expires is dropped from the roster, and its shards are reassigned.
+        Two heartbeats land inside every TTL, so one lost heartbeat is harmless.
+        Its shards are reassigned when its key expires.
       code: internal/roster/roster.go:40
       participants:
         - { id: a, label: instance A, node: scheduler }
@@ -582,6 +630,8 @@ command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases 
 
 - Steps play in order and branches leave the main sequence after the step named in `after`.
 - `from: v, to: v` is a self-step: an expiry, a timer, internal work.
+- `brief` is the idea in one line, shown before `summary` ([Briefs](#briefs)); a step's `note` says the
+  one thing to notice there, in a line or two.
 - `at` builds a timeline, `command` and `reply` are shown verbatim, and `state` changes the
   state panel. `value: null` deletes a key, and `ttl` counts down while playing.
 - `code:` on a step (one path or a list) says where the code takes it; the step detail links it.
@@ -699,6 +749,7 @@ messages from a buffer (`on:` + `by:`).
 flows:
   - id: place-order
     label: Place order
+    brief: A customer checks out; the order commits with its outbox row.   # one line, see Briefs
     from: web             # a source (or port) node
     rate: 20/s
     color: 2              # token colour 1-6 (default: by order)

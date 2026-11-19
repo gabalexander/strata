@@ -37,6 +37,7 @@ enum Validate {
         duplicates(level.scenarios, at: field["scenarios"])
 
         var validator = LevelValidation(level: level, terms: terms, owner: owner)
+        BriefValidation.level(level, at: field)
         for (edge, location) in zip(level.edges, field["edges"].items()) {
             validator.edge(edge, at: location)
         }
@@ -168,6 +169,7 @@ struct LevelValidation {
         }
         ops(of: node, at: field)
         how(of: node, at: field)
+        BriefValidation.node(node, at: field)
     }
 
     mutating func flow(_ flow: Flow, at field: Field) {
@@ -197,6 +199,7 @@ struct LevelValidation {
         }
         steps(flow.steps, at: field["steps"], chain: origin.map { [$0] } ?? [])
         flowOp(flow, runsAt: origin, at: field["op"])
+        BriefValidation.flow(flow, at: field)
         trafficSanity(flow, at: field)
     }
 

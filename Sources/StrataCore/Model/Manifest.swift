@@ -64,6 +64,8 @@ public struct Level: Sendable {
     public var controls: [Control] = []
     public var scenarios: [Scenario] = []
     public var narration: String?
+    /// One line that says what this level shows, shown before the narration (docs/manifest.md, Briefs).
+    public var brief: String?
     /// Which way auto layout runs this level (docs/manifest.md, Layout). Parsing fills it in: a level
     /// without `direction:` takes its enclosing level's, and the root defaults to `right`.
     public var direction: FlowDirection?
@@ -211,6 +213,8 @@ public struct Node: Sendable, Identifiable {
     /// (in another direction) from the author's hints.
     public var hint: GridPoint?
     public var group: String?
+    /// One line: what it is, what it owns, why it matters. Shown before `doc` (docs/manifest.md, Briefs).
+    public var brief: String?
     public var doc: String?
     public var term: String?
     public var code: [String] = []
@@ -276,6 +280,8 @@ public struct Flow: Sendable, Identifiable {
     public var by: String?               // consumer flows: consumer node id
     public var rate: Rate = .manual      // source flows only
     public var deadline: Double?
+    /// One line that says what this traffic is (docs/manifest.md, Briefs).
+    public var brief: String?
     public var steps: [Step] = []
     /// The op each run of this flow performs, counted when the run finishes (a consumer flow's
     /// consume op on its `by` node, or an op on its `from` node); an op id on that node, or "node/op".
@@ -355,6 +361,8 @@ public struct Operation: Sendable, Identifiable {
     public var direction: OpDirection
     public var target: String?          // node id (outbound)
     public var access: OpAccess?
+    /// One line: what it does and why it matters. Shown before `doc` (docs/manifest.md, Briefs).
+    public var brief: String?
     public var doc: String?
     public var code: [String] = []
     public var risks: [String] = []
@@ -673,6 +681,8 @@ public struct Mechanism: Sendable, Identifiable {
     public var id: String
     public var title: String
     public var summary: String?          // markdown: the idea in a paragraph
+    /// One line: the idea of the mechanism, shown before `summary` (docs/manifest.md, Briefs).
+    public var brief: String?
     public var participants: [Participant] = []
     public var initial: [StateEntry] = []
     public var steps: [MechStep] = []

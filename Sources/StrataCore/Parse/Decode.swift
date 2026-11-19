@@ -1,7 +1,7 @@
 import Foundation
 
 enum Decode {
-    static let levelKeys: Set<String> = ["nodes", "edges", "groups", "flows", "controls", "scenarios", "narration", "direction"]
+    static let levelKeys: Set<String> = ["nodes", "edges", "groups", "flows", "controls", "scenarios", "narration", "brief", "direction"]
     static let embedKeys: Set<String> = ["view", "scenario", "height", "autoplay"]
 
     static func manifest(_ root: Field, source: ManifestSource, inline: Bool = false) -> Manifest? {
@@ -50,6 +50,7 @@ enum Decode {
         level.controls = field["controls"].items(named: true).compactMap(control)
         level.scenarios = field["scenarios"].items(named: true).compactMap(scenario)
         level.narration = field["narration"].text()
+        level.brief = field["brief"].text()
         level.direction = direction(field["direction"])
         return level
     }
@@ -73,7 +74,7 @@ enum Decode {
     }
 
     static func node(_ field: Field) -> Node? {
-        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops",
+        let keys: Set<String> = ["id", "kind", "label", "tech", "at", "group", "brief", "doc", "term", "code", "icon", "links", "inside", "detail", "actions", "ops",
                                   "schema", "entities", "how", "formula"]
         let behaviour = Set(ParameterType.node.keys).subtracting(["up", "slow"])
         guard field.mapping(keys.union(behaviour).union(["binary"])) else { return nil }
@@ -92,6 +93,7 @@ enum Decode {
         node.icon = field["icon"].text()
         node.at = point(field["at"])
         node.group = field["group"].id()
+        node.brief = field["brief"].text()
         node.doc = field["doc"].text()
         node.term = field["term"].termID()
         node.code = field["code"].textList(orOne: true)
@@ -164,7 +166,7 @@ enum Decode {
     }
 
     static func flow(_ field: Field) -> Flow? {
-        guard field.mapping(["id", "label", "from", "on", "by", "rate", "color", "deadline", "steps", "op", "traffic", "slo"]) else { return nil }
+        guard field.mapping(["id", "label", "brief", "from", "on", "by", "rate", "color", "deadline", "steps", "op", "traffic", "slo"]) else { return nil }
         var flow = Flow(id: field["id"].id(required: true) ?? "", label: field["label"].text())
         flow.line = field.line
         flow.color = field["color"].integer(in: 1...6)
@@ -173,6 +175,7 @@ enum Decode {
         flow.by = field["by"].id()
         flow.rate = field["rate"].scalar(Syntax.rate) ?? .manual
         flow.deadline = field["deadline"].duration()
+        flow.brief = field["brief"].text()
         flow.steps = field["steps"].items().compactMap(step)
         flow.op = field["op"].scalar { try Syntax.opReference($0, qualified: false, owner: true) }
         flow.traffic = traffic(field["traffic"])

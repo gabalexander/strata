@@ -28,6 +28,7 @@ Sources/StrataCore/
   Model/Enums.swift           enum lookups, lifecycle order, usage, search; EnumOccurrences finds values in text
   Model/Mechanisms.swift      replays a how-it-works mechanism (state after each step) for the validator, CLI and player
   Model/Components.swift      the processes a node's deep dive runs, listed as chips on its card
+  Model/Brief.swift           brief first: the long-text threshold and the automatic short form (validator, CLI, UI)
   Engine/EngineTypes.swift    CONTRACT: what the engine hands the UI (SimFrame, NodeState, ...)
   Engine/Simulation.swift     engine (public API is the contract)
   Parse/                      YAML subset, manifest decoding + validation, commands, auto-layout, config

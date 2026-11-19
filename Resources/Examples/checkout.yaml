@@ -6,6 +6,7 @@ category: platform
 summary: Trace order creation from the web app to Postgres and follow the confirmation event to the email provider.
 tags: [demo]
 glossaries: [http, grpc, go, redis, postgres, kafka, consistency, resilience]
+brief: An order goes web → gateway → orders-svc → Postgres; OrderPlaced reaches the mailer through Kafka.
 narration: "Follow Place order to Postgres, then follow OrderPlaced to the mailer. Select a service to see the endpoints, queries, keys and topics it uses. Double-click orders-svc to trace validation and the outbox relay."
 
 terms:
@@ -52,9 +53,8 @@ nodes:
     label: Web app
     tech: React
     at: [0, 1]
-    doc: |
-      Sends a checkout request when the customer places an order.
-      A gateway error leaves the customer without a confirmation.
+    brief: The storefront; sends one checkout request per order.
+    doc: A gateway error leaves the customer without a confirmation.
     ops:
       - id: submit-order
         kind: http
@@ -75,9 +75,8 @@ nodes:
     tech: Envoy
     group: backend
     at: [1, 1]
-    doc: |
-      Accepts HTTPS requests and forwards each order to orders-svc over gRPC.
-      A short timeout with retries can send the same order to the service several times.
+    brief: Edge proxy; terminates HTTPS and forwards each order to orders-svc over gRPC.
+    doc: A short timeout with retries can send the same order several times; the idempotency key dedupes it.
     ops:
       - id: post-orders
         kind: http
@@ -116,9 +115,10 @@ nodes:
     concurrency: 4
     replicas: 2
     term: grpc/unary
+    brief: Owns orders; prices the cart and commits the order with its outbox row.
     doc: |
-      Reads the price and commits the order before the confirmation email can be sent.
-      Slow Redis calls hold its request slots. A refused Postgres write fails checkout.
+      - Slow Redis calls hold its request slots.
+      - A refused Postgres write fails checkout.
     ops:
       - id: place-order
         kind: rpc
@@ -129,7 +129,7 @@ nodes:
         response: '{ "order_id": "o_9k2", "total_cents": 4200 }'
         status: [OK, INVALID_ARGUMENT empty cart, ALREADY_EXISTS duplicate idempotency key, UNAVAILABLE database down]
         code: services/orders/grpc/server.go:57
-        doc: Prices the cart, commits the order with its outbox row, then emits OrderPlaced.
+        brief: Prices the cart, commits the order with its outbox row, then emits OrderPlaced.
         formula:
           expr: "total = Σ_i qty_i · price_i · (1 − d) + ship"
           where:
@@ -646,18 +646,17 @@ nodes:
     group: backend
     hitRate: 90%
     at: [3.2, 0]
-    doc: |
-      Answers most product price reads in about half a millisecond.
-      A miss sends a price read to Postgres. Slow cache hits still hold order slots.
+    brief: Redis price cache in front of Postgres, ~0.5 ms a read.
+    doc: A miss reads Postgres. Slow hits still hold orders-svc slots.
   - id: db
     kind: database
     label: Orders DB
     tech: Postgres
     group: backend
     at: [3.2, 1]
+    brief: The orders database; serves price misses and commits every order.
     doc: |
-      Handles price reads on cache misses and commits every successful order.
-      When it refuses a write, the request fails before publication.
+      A refused write fails the request before anything is published.
       Row counts and growth are estimates.
     schema:
       - table: users
@@ -787,18 +786,16 @@ nodes:
     tech: Kafka
     group: backend
     at: [3.2, 2.1]
-    doc: |
-      Holds OrderPlaced for the mailer to read at its own pace.
-      A lagging mailer can fall behind retention. This overview sends the event at commit to show its route.
+    brief: Kafka topic of OrderPlaced events; the mailer reads it at its own pace.
+    doc: A lagging mailer can fall behind retention. This overview sends the event at commit to show its route.
   - id: mailer
     kind: worker
     label: Mailer
     concurrency: 6
     group: backend
     at: [4.35, 2.1]
-    doc: |
-      Reads OrderPlaced and calls the email provider.
-      A provider failure delays the consumer group while it retries the event.
+    brief: Consumes OrderPlaced and sends the confirmation email.
+    doc: A provider failure stalls the consumer group while it retries the event in place.
     ops:
       - id: on-order-placed
         kind: consume
@@ -838,9 +835,8 @@ nodes:
     tech: SendGrid
     latency: 180ms
     at: [5.5, 2.1]
-    doc: |
-      Accepts confirmation emails for delivery to customers.
-      If it fails, checkout can still complete and the mailer retries separately.
+    brief: SendGrid; delivers the confirmation emails.
+    doc: When it fails, checkout still completes and the mailer retries on its own.
     ops:
       - id: send-mail
         kind: http
@@ -871,6 +867,7 @@ edges:
 flows:
   - id: place-order
     label: Place order
+    brief: Price the cart, commit the order and its outbox row, emit OrderPlaced.
     from: web
     rate: 12/s
     traffic: { peak: 35/s, daily: 400k }
@@ -895,6 +892,7 @@ flows:
               - { publish: events, label: OrderPlaced, op: order-placed }
   - id: email
     label: Confirmation email
+    brief: The mailer turns each OrderPlaced into one confirmation email.
     on: events
     by: mailer
     color: 3

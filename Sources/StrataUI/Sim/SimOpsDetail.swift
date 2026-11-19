@@ -49,7 +49,7 @@ struct SimOpDetail: View {
                 backBar
                 header
                 toolbar
-                if let doc = op.doc { SimMarkdown(source: doc, model: model, terms: terms) }
+                SimBriefText(brief: op.brief, detail: op.doc, key: SimBriefKey.op(sim, node: entry.ref.node, op: op.id), model: model, terms: terms)
                 live
                 kindBody.simEnumTables(op, on: entry.node.id, level: entry.inherited ? index.inheritance?.ownerLevel ?? sim.level : sim.level)
                 if let formula = op.formula { SimFormulaSection(formula: formula, model: model, terms: terms, actions: actions) }

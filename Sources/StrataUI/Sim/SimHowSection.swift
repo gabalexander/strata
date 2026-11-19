@@ -17,8 +17,9 @@ struct SimHowSection: View {
     var body: some View {
         SimSection(title: "How it works") {
             ForEach(mechanisms) { mechanism in
-                SimHowCard(mechanism: mechanism, model: model, terms: terms, actions: actions) {
-                    SimHowState.of(sim).open(mechanism, ref: SimHowRef(node: node, op: op, mechanism: mechanism.id), owner: owner)
+                let ref = SimHowRef(node: node, op: op, mechanism: mechanism.id)
+                SimHowCard(mechanism: mechanism, briefKey: SimBriefKey.mechanism(sim, ref), model: model, terms: terms, actions: actions) {
+                    SimHowState.of(sim).open(mechanism, ref: ref, owner: owner)
                 }
             }
         }
@@ -28,6 +29,7 @@ struct SimHowSection: View {
 @MainActor
 private struct SimHowCard: View {
     let mechanism: Mechanism
+    let briefKey: String
     let model: AppModel
     let terms: TermIndex
     let actions: SimActions
@@ -45,9 +47,7 @@ private struct SimHowCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
-            if let summary = mechanism.summary {
-                SimMarkdown(source: summary, model: model, terms: terms, size: 12, lineLimit: 4)
-            }
+            SimBriefText(brief: mechanism.brief, detail: mechanism.summary, key: briefKey, model: model, terms: terms, size: 12)
             Button(action: play) {
                 SimHowThumbnail(mechanism: mechanism)
                     .frame(height: thumbnailHeight)

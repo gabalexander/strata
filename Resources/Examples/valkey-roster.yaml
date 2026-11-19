@@ -65,6 +65,7 @@ nodes:
     how:
       - id: roster
         title: Roster membership with heartbeats
+        brief: Each instance keeps a 15 s key alive with 5 s heartbeats; a key that expires drops its owner.
         summary: |
           Each instance owns one key, `roster:inst:<id>`, that Valkey deletes 15 s after its last write.
           A heartbeat every 5 s pushes that deadline back, so two heartbeats land inside every TTL and

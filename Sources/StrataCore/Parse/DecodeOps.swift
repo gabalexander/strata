@@ -2,7 +2,7 @@ import Foundation
 
 /// Which op fields fit which kinds (docs/manifest.md, Operations: "Fields by kind").
 enum OpFields {
-    static let common: Set<String> = ["id", "kind", "label", "direction", "target", "doc", "code", "risks", "tags",
+    static let common: Set<String> = ["id", "kind", "label", "direction", "target", "brief", "doc", "code", "risks", "tags",
                                       "facts", "inside", "detail", "how", "formula"]
     private static let data: Set<String> = ["query", "tables", "indexes", "access", "tx", "locks"]
     private static let endpoint: Set<String> = ["method", "path", "request", "response", "streaming", "status", "calls"]
@@ -44,6 +44,7 @@ extension Decode {
         op.line = field.line
         op.target = field["target"].id()
         op.access = field["access"].choice(OpAccess.self)
+        op.brief = field["brief"].text()
         op.doc = field["doc"].text()
         op.code = field["code"].textList(orOne: true)
         op.risks = field["risks"].textList(orOne: true)

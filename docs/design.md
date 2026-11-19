@@ -16,7 +16,15 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
    - Any term that has a glossary entry gets a faint dotted underline. Hovering it shows the
      card after 300 ms; clicking pins it.
    - Every control shows what changes, as effect chips plus one sentence.
-   - Narration appears in a strip at the bottom of the stage.
+   - **Brief first, detail on demand.** A node, op, flow, mechanism or level shows its one-line `brief`
+     in the text colour; without one, a long doc, narration, summary or step note shows its first
+     sentence, two lines at most, ending in an ellipsis (docs/manifest.md, Briefs). The rest waits
+     behind a quiet **More ⌄** (11 pt, faint, accent on hover) on its own line, which opens the text in
+     place (a brief stays above it, a first sentence gives way to the whole text) and turns into
+     **Less ⌃**. What is open is remembered per item for the session. A text that is already short
+     shows as it is, with no disclosure. Glossary terms and links work in both forms.
+   - Narration appears in a strip at the bottom of the stage: a scenario's narration, else the level's
+     brief or its narration's first sentence.
 4. **Right-click everything.** Nodes, edges, the canvas, notes, folders, library cards and tokens
    all have context menus with the useful verbs. Every action is also reachable from ⌘K.
 5. **Dense but breathable.** 13 pt UI text, 11 pt labels, 12 pt mono for numbers. Use 8 pt spacing
@@ -66,7 +74,8 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
     node the level is inside that map to this card. **Formula:** an ƒ badge top-right; hovering it shows the typeset formula.
   - **Hover cards:** one at a time, so none covers another. The ƒ badge shows the formula after 120 ms and
     hides the processes card while the pointer is on it. The rest of a card with process chips shows the
-    processes card; the rest of any other card shows its term (300 ms), else its formula.
+    processes card, each process with its brief (two lines at most); the rest of any other card shows its
+    term (300 ms), else its formula, else a term-style card with its label and brief.
   - **Processes:** a node whose deep dive runs several processes lists them as chips under the tech
     badge, and its card is 80 pt tall, centred on its row so edges stay level. Clicking a chip dives in.
   - **Down:** desaturated at 40% opacity with a red "down" pill. **Slow:** a snail glyph in amber. **Failing:** red border pulse.
@@ -122,12 +131,14 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
 
 ## Inspector
 
-- **Nothing selected:** the level's narration under "This level". In a deep dive, "Operations of
+- **Nothing selected:** the level's brief and narration under "This level", brief first. In a deep dive, "Operations of
   orders-svc" comes next: the ops of the node the level is inside, grouped by kind as on that node's
   own level, with a faint line saying how many map to a node here. How it works, Flows and the
   diagram legend follow.
-- **A node:** its header, doc, How it works, formula, actions, enums, data, Operations, live metrics,
-  code, links, your note and parameters.
+- **A node:** its header, brief (doc behind More), How it works, formula, actions, enums, data,
+  Operations, live metrics, code, links, your note and parameters. The op detail leads with the op's
+  brief the same way, a How it works card with its mechanism's brief, and a flow's card shows its brief
+  under the label.
 - **Operations:**
   - A service lists its own ops by kind: Endpoints, Consumes, Queries, Cache, Publishes and Calls.
   - A database, cache or buffer lists every op that talks to it, by table, key pattern, or producer
@@ -154,8 +165,8 @@ inset 14 pt, on `Theme.surface` with radius 12. From the top:
   whose in-window menu lists them (the chosen path always shows).
 - **Sequence diagram** on the left, the **state panel** or the **step detail** on the right.
 - **Transport:** restart, step back, play or pause, step forward, the scrubber, speed.
-- **Step strip:** the current step's label, who talks to whom and its note (three lines at most),
-  with a Step details button. It steps aside while the step detail is open.
+- **Step strip:** the current step's label, who talks to whom and its note (a long note's first
+  sentence, three lines at most), with a Step details button. It steps aside while the step detail is open.
 
 Nothing in the player draws over anything else. Layout math makes room instead of shrinking type below
 the 11–13 pt sizes:
@@ -180,8 +191,8 @@ the 11–13 pt sizes:
 
 **Step detail.** A click on a step's row (or Return, or the step strip, or Step in the state panel's
 header) pauses there and opens the step detail in place of the state panel, 40% of the panel's width
-(320–460 pt). The row keeps an accent outline. The detail never cuts anything short, scrolls when long,
-and its text is selectable:
+(320–460 pt). The row keeps an accent outline. The detail never cuts a command, reply or key short, scrolls
+when long, and its text is selectable; a long note leads with its first sentence and opens with More:
 
 - a bar with ‹ State, `step 6 of 16`, previous and next, and `esc`;
 - `STEP 6 · at 10 ms · +4 ms`, the label, and the participants as chips that select their node;
@@ -192,7 +203,8 @@ and its text is selectable:
   happened to it (set, renewed, deleted, expired), and All keys back to the state panel;
 - the note, the branches that leave after this step (a click switches to them), and the step's `code:`.
 
-Before the first step it shows the summary, the participants, the state at the start and the code.
+Before the first step it shows the brief (the summary behind More), the participants, the state at the
+start and the code.
 ← and → (and the bar's arrows) move it along, and so does playback; Esc or a click on empty diagram
 space closes it, and a second Esc closes the player. It opens on the frame of the click, with no
 animation.

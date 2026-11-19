@@ -70,6 +70,7 @@ struct HowTranscript {
     private func header() -> [String] {
         let place = ([manifest.id] + site.path).joined(separator: " › ")
         var lines = ["\(place) › \(site.owner) · \(mechanism.id): \(mechanism.title)"]
+        if let brief = mechanism.brief { lines.append("  " + flat(brief)) }
         if let summary = mechanism.summary { lines.append("  " + flat(summary)) }
         let cast = mechanism.participants.map { p in
             "\(p.id) = \(p.label)" + (p.node.map { " (\($0))" } ?? p.kind.map { " (\($0.rawValue))" } ?? "")

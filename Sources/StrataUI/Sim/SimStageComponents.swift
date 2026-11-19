@@ -154,7 +154,14 @@ struct StageComponentsCard: View {
 
     /// A rough height, to choose between above and below the card before it is measured.
     static func estimatedHeight(_ node: Node) -> CGFloat {
-        CGFloat(54) + node.components.reduce(0) { $0 + 26 + ($1.binary == nil ? 0 : 15) + ($1.code.isEmpty ? 0 : 15) }
+        CGFloat(54) + node.components.reduce(0) {
+            $0 + 26 + ($1.binary == nil ? 0 : 15) + ($1.code.isEmpty ? 0 : 15) + (processBrief($1) == nil ? 0 : 30)
+        }
+    }
+
+    /// One line on what a process does: its brief, else its doc's short form.
+    static func processBrief(_ component: Node) -> String? {
+        Brief.line(brief: component.brief, detail: component.doc)
     }
 
     var body: some View {
@@ -178,6 +185,16 @@ struct StageComponentsCard: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// Inline markdown without the marks (the card is not interactive): `code` and **bold** as text.
+    static func plain(_ text: String) -> AttributedString {
+        let text = SimBriefPlain.text(text)
+        var parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        for run in parsed.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            parsed[run.range].font = Theme.mono(10.5)
+        }
+        return parsed
+    }
+
     private func row(_ component: Node) -> some View {
         let lit = component.id == highlighted
         let tint = component.simTint
@@ -198,6 +215,11 @@ struct StageComponentsCard: View {
                     Text(component.kind.rawValue).font(Theme.mono(10)).foregroundStyle(Theme.faint)
                 }
                 .frame(height: 20)
+                if let brief = Self.processBrief(component) {
+                    Text(Self.plain(brief)).font(Theme.ui(11)).foregroundStyle(Theme.muted)
+                        .lineLimit(2).truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let binary = component.binary {
                     HStack(spacing: 4) {
                         Image(systemName: "terminal").font(Theme.ui(9, .medium))

@@ -4,7 +4,7 @@ import Foundation
 // (docs/manifest.md, How it works and Formulas).
 
 extension Decode {
-    static let mechanismKeys: Set<String> = ["id", "title", "summary", "code", "participants", "initial", "steps", "branches"]
+    static let mechanismKeys: Set<String> = ["id", "title", "brief", "summary", "code", "participants", "initial", "steps", "branches"]
 
     static func mechanisms(_ field: Field) -> [Mechanism] {
         field.items(named: true).compactMap(mechanism)
@@ -17,6 +17,7 @@ extension Decode {
         guard let id else { return nil }
         var mechanism = Mechanism(id: id, title: title ?? id)
         mechanism.line = field.line
+        mechanism.brief = field["brief"].text()
         mechanism.summary = field["summary"].text()
         mechanism.code = field["code"].textList(orOne: true)
         mechanism.participants = field["participants"].items(required: true, named: true).compactMap(participant)
