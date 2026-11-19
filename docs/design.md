@@ -77,13 +77,28 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
   per column (wider where labels need room) and 150 pt per row. **Tidy layout** (toolbar wand, ⌘K,
   ⌥⌘L) lays out a `manual` level for the session: cards glide to their places over 0.55 s (none with
   reduced motion) and the view fits. A level opens fitted, but never below 62% zoom: a large map
-  opens on its sources at a readable size; ⌘0 fits everything.
+  opens on its sources at a readable size (on the left, or at the top of a vertical map); ⌘0 fits everything.
+- **Top to bottom:** `direction: down` (Layout+Down.swift) runs the same layered layout in a transposed
+  frame. Layers become rows; cards stay landscape, so the spacing differs by axis: 56 pt between
+  cards in a row (wider where a side edge's label sits) and at least 64 pt between rows, more for the
+  pills that stack there, for group bands, and for long sideways S-bends. A store or API with one
+  caller sits beside it in its row; stores shared across rows line the bottom row.
+- **Vertical/horizontal switch:** the toolbar's arrow-down button (lit while the map runs top to
+  bottom), ⌘K and ⌥⌘V run every level of the current map the other way, overriding the manifest's
+  `direction`. Cards glide like Tidy layout and the view fits; the choice is saved per map in
+  `~/.strata/state.json`. A manual level keeps its positions until Tidy layout, which then runs the
+  chosen way.
 - **Edges** (EdgeRouter):
   - Smooth curves at 1.5 pt, `Theme.borderStrong`. An edge leaves the side facing its target,
     crosses each gap between columns with one S-bend (control points mid-gap), and passes other
     columns between their cards, never through one. Edges to a later column leave right and enter
     left; back edges leave left and come back around; edges within a column go straight down, or
     around the side when a card is in the way.
+  - Top to bottom, the router works on the transposed stage: edges leave a card's bottom and enter
+    the next row's top with one S-bend mid-gap, pass other rows between their cards, back edges leave
+    the top and come back around, and edges within a row (a side node's) run straight sideways. Pills
+    stay horizontal text, placed after transposing back. A group's label slides along its top band
+    to a spot no edge crosses.
   - Each edge ending on a side gets its own port, level with where it heads when that is on the
     side, so aligned cards connect with a straight line. Edges through the same gap get their own
     tracks, so parallel and opposite edges run side by side.

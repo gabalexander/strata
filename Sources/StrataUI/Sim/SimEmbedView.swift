@@ -175,6 +175,10 @@ private struct SimEmbedWorkspace: View {
         self.still = still
         let renderer = StageRenderer(level: sim.level)
         renderer.inheritedOps = SimOpsState.of(sim).index.inheritedCounts
+        // The map's vertical/horizontal switch (AppModel.layoutDirections) holds here too.
+        if let direction = model.layoutDirections[sim.manifest.id] {
+            renderer.direct(direction, auto: sim.manifest.layout == .auto, animated: false)
+        }
         _renderer = State(initialValue: renderer)
         terms = SimSessions.terms(for: sim)
     }

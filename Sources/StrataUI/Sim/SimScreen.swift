@@ -128,7 +128,10 @@ private struct SimWorkspace: View {
         self.snapshot = snapshot
         terms = SimSessions.terms(for: sim)
         _arrival = arrival
-        _renderer = State(initialValue: SimSessions.renderer(for: sim))
+        let renderer = SimSessions.renderer(for: sim)
+        // The vertical/horizontal switch covers every level of the map, so a level opened since runs that way too.
+        renderer.direct(SimWorkspace.direction(of: sim, in: model), auto: sim.manifest.layout == .auto, animated: false)
+        _renderer = State(initialValue: renderer)
         _selection = State(initialValue: snapshot?.selectedNode.map(StageSelection.node))
         _tab = State(initialValue: snapshot?.dockTab ?? .controls)
     }
@@ -136,7 +139,29 @@ private struct SimWorkspace: View {
     private var actions: SimActions {
         var actions = SimActions(model: model, sim: sim, fit: viewport.fit, dive: dive)
         actions.tidy = tidyAction
+        actions.flip = flip
         return actions
+    }
+
+    /// Which way the map runs on the stage: the switch's choice for it, else the level's own direction.
+    static func direction(of sim: Simulation, in model: AppModel) -> FlowDirection {
+        model.layoutDirections[sim.manifest.id] ?? sim.level.direction ?? .right
+    }
+
+    /// The vertical/horizontal switch: every level of the map runs the other way from now on (remembered
+    /// across launches), cards glide to their new places, and the view fits. A manual level keeps its
+    /// places until Tidy layout.
+    private func flip() {
+        model.overlays.dismissMenu()
+        let next: FlowDirection = Self.direction(of: sim, in: model) == .down ? .right : .down
+        model.layoutDirections[sim.manifest.id] = next
+        let auto = sim.manifest.layout == .auto
+        if renderer.direct(next, auto: auto, animated: !reduceMotion) {
+            viewport.fit()
+        } else if !auto {
+            model.overlays.toast(next == .down ? "Tidy layout (⌥⌘L) lays this level out top to bottom"
+                                               : "Tidy layout (⌥⌘L) lays this level out left to right")
+        }
     }
 
     /// "Tidy layout" is offered for `layout: manual` levels; an auto layout is already tidy.
@@ -168,7 +193,7 @@ private struct SimWorkspace: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
-                               tidy: tidyAction, still: snapshot != nil)
+                               tidy: tidyAction, flip: flip, still: snapshot != nil)
                         .equatable()
                         .frame(width: columnWidth, height: 44)
                     Rectangle().fill(Theme.border).frame(height: 1)
@@ -378,6 +403,7 @@ private struct SimWorkspace: View {
         }
         if flags == [.command, .option], key == "i" { model.inspectorVisible.toggle(); return true }
         if flags == [.command, .option], key == "l" || event.keyCode == 37 { tidy(); return true }
+        if flags == [.command, .option], key == "v" || event.keyCode == 9 { flip(); return true }
         guard flags == .command || flags == [.command, .shift] && key == "+" else { return false }
         switch key {
         case "r": sim.reset()
@@ -401,6 +427,8 @@ private struct SimToolbar: View, Equatable {
     var parent: (title: String, out: () -> Void)?
     /// "Tidy layout", offered for `layout: manual` levels.
     var tidy: (() -> Void)?
+    /// The vertical/horizontal switch.
+    var flip: (() -> Void)?
     var still = false
 
     /// A selection change re-renders the workspace; the toolbar shows none of it. Its closures act on
@@ -428,6 +456,12 @@ private struct SimToolbar: View, Equatable {
             HStack(spacing: 4) {
                 if let tidy {
                     SimButton(title: "Tidy layout", icon: SimActions.tidyIcon, iconOnly: true, action: tidy)
+                }
+                if let flip {
+                    // Lit while the map runs top to bottom; the toolbar reads the switch itself (see ==).
+                    let down = SimWorkspace.direction(of: sim, in: model) == .down
+                    SimButton(title: down ? "Lay out left to right" : "Lay out top to bottom", icon: SimActions.flipIcon,
+                              iconOnly: true, active: down, action: flip)
                 }
                 if !model.dockVisible {
                     SimButton(title: "Show dock", icon: "rectangle.bottomthird.inset.filled", iconOnly: true) {

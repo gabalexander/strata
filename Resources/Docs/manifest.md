@@ -92,9 +92,10 @@ and logs a diagnostic when events keep generating work at the same timestamp or 
 | `terms` | | local glossary, see [Terms](#terms) |
 | `enums` | | value dictionaries such as status codes, see [Enums](#enums) |
 | `layout` | | `auto` (default: the layout engine places every node; `at` is a hint) or `manual` (use `at` exactly) |
+| `direction` | | `right` (default: flow runs left to right) or `down` (top to bottom); a level's key, so a deep dive can set its own. See [Layout](#layout) |
 | `notes` | | long markdown shown in the sim's About tab |
 | `links` | | `[{label, url}]`, `[{label, note: "path/in/vault.md"}]`, or `[{label, sim: other-id}]` |
-| everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `narration`. The top level is the root diagram |
+| everything a level has | | `nodes`, `edges`, `groups`, `flows`, `controls`, `scenarios`, `narration`, `direction`. The top level is the root diagram |
 
 ### Layout
 
@@ -113,10 +114,33 @@ included, as a whiteboard diagram:
   the rows order each column. Validation warns about hints the layout can't follow, such as a node
   hinted left of a node that calls it.
 
+`direction: down` turns the layout top to bottom, the way an architecture with a request spine reads:
+
+```yaml
+direction: down          # at the top level, or on any inside: level
+```
+
+- Layers become rows from top to bottom, and each row runs left to right. Sources and inbound ports
+  start the top row; outbound ports end the bottom one.
+- A store or external API that only one node calls sits in that node's row, beside it, joined by a
+  level edge: a step and what it talks to read at one height. A node keeps at most two this way (one
+  each side); with more they fan out in the row below.
+- A store or external API called from several rows goes to the bottom row, so shared databases line
+  the bottom.
+- Edges leave a card's bottom and enter the next row's top with one S-bend; edges back up go around.
+  Rows are spaced for the edge labels between them.
+- `at` hints read the same way the level runs: the row (`at[1]`) picks the layer and the column
+  orders it. Validation warns about a node hinted above a node that calls it.
+- Deep dives (`inside:` levels, op `inside:` levels included) run the way their parent runs unless
+  they set `direction` themselves. A `detail:` manifest has its own.
+- The stage's **vertical/horizontal switch** (toolbar, ⌘K, ⌥⌘V) runs every level of a map the
+  other way, overriding `direction`, and the app remembers it per map.
+
 With `layout: manual`, `at` is exact (nodes without one are fitted around the rest). Validation
 warns about overlapping nodes, group regions that overlap or cover other nodes, edges whose straight
 line runs through another node, and more than three crossing edges. **Tidy layout** (toolbar or ⌘K, ⌥⌘L) lays out a manual level automatically for
-the session, using its positions as hints.
+the session, using its positions as hints, in the level's `direction` (or the way the switch says). The
+switch alone leaves a manual level's positions where they are.
 
 ## Levels and deep dives
 

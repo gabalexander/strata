@@ -150,6 +150,12 @@ written as math, `where:` naming every symbol with its unit and its value from c
 Don't hand-place nodes. Leave `layout: auto`, express structure with `groups`, and set `at` only as a
 hint to fix one specific ordering.
 
+Architecture maps with a request spine (a request enters, then flows step by step through services and
+queues) read best top to bottom: set `direction: down` at the top level. The spine runs down the
+middle, a store or API that one step alone calls sits beside that step, and databases shared by
+several steps line the bottom. Deep dives inherit it; give a deep dive `direction: right` if it reads
+better left to right. Keep `direction: right` (the default) for short pipelines and most lessons.
+
 ### 7. Verification
 
 `strata validate` must print nothing. Then read each report as a reviewer and fix what's missing:

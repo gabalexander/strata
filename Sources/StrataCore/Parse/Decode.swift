@@ -1,7 +1,7 @@
 import Foundation
 
 enum Decode {
-    static let levelKeys: Set<String> = ["nodes", "edges", "groups", "flows", "controls", "scenarios", "narration"]
+    static let levelKeys: Set<String> = ["nodes", "edges", "groups", "flows", "controls", "scenarios", "narration", "direction"]
     static let embedKeys: Set<String> = ["view", "scenario", "height", "autoplay"]
 
     static func manifest(_ root: Field, source: ManifestSource, inline: Bool = false) -> Manifest? {
@@ -50,7 +50,26 @@ enum Decode {
         level.controls = field["controls"].items(named: true).compactMap(control)
         level.scenarios = field["scenarios"].items(named: true).compactMap(scenario)
         level.narration = field["narration"].text()
+        level.direction = direction(field["direction"])
         return level
+    }
+
+    /// `direction: right | down`. Other words for the two (vertical, top-down, LR, ...) get a suggestion.
+    static func direction(_ field: Field) -> FlowDirection? {
+        field.scalar { text in
+            if let value = FlowDirection(rawValue: text) { return value }
+            let word = text.lowercased().filter { $0.isLetter }
+            let synonyms: [String: FlowDirection] = [
+                "vertical": .down, "topdown": .down, "toptobottom": .down, "tb": .down, "td": .down, "top": .down,
+                "bottom": .down, "rows": .down, "downward": .down, "downwards": .down,
+                "horizontal": .right, "lefttoright": .right, "leftright": .right, "lr": .right, "ltr": .right,
+                "left": .right, "columns": .right, "across": .right,
+            ]
+            let guess = FlowDirection(rawValue: word) ?? synonyms[word]
+                ?? closestKey(to: text, in: FlowDirection.allCases.map(\.rawValue)).flatMap(FlowDirection.init(rawValue:))
+            let suggestion = guess.map { "; did you mean '\($0.rawValue)'?" } ?? ""
+            throw InvalidValue("expected right (flow left to right) or down (top to bottom)\(suggestion)")
+        }
     }
 
     static func node(_ field: Field) -> Node? {

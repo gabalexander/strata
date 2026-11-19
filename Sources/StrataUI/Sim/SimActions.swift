@@ -10,13 +10,15 @@ struct SimActions {
     let dive: (Node) -> Void
     /// Re-runs auto layout for this level and fits the view ("Tidy layout"); nil where it isn't offered.
     var tidy: (() -> Void)?
+    /// The vertical/horizontal switch for the whole map; nil where it isn't offered.
+    var flip: (() -> Void)?
 
     func palette(selection: StageSelection? = nil) -> [MenuItem] {
         var items = [
             play, command("Reset simulation", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() },
             command("Step simulation", icon: "forward.frame", shortcut: ".") { sim.pauseAndStep() },
             fitItem,
-        ] + (tidyItem.map { [$0] } ?? []) + sim.level.scenarios.map(scenarioItem)
+        ] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? []) + sim.level.scenarios.map(scenarioItem)
             + sim.level.flows.filter { !$0.isConsumer }.map(sendItem)
             + sim.level.nodes.filter(\.canDeepDive).map { node in
                 command("Deep dive into \(node.label)", icon: "square.3.layers.3d") { dive(node) }
@@ -84,7 +86,7 @@ struct SimActions {
             guard let flow = sim.level.flow(id) else { return [] }
             return [.header(flow.label)] + (flow.isConsumer ? [play] : [sendItem(flow), play])
         case nil:
-            var items = [fitItem] + (tidyItem.map { [$0] } ?? [])
+            var items = [fitItem] + (tidyItem.map { [$0] } ?? []) + (flipItem.map { [$0] } ?? [])
                 + [play, command("Reset", icon: "arrow.counterclockwise", shortcut: "⌘R") { sim.reset() }]
             let sources = sim.level.flows.filter { !$0.isConsumer }
             if !sources.isEmpty { items.append(.submenu("Send", icon: "paperplane", sources.map(sendItem))) }
@@ -193,6 +195,14 @@ struct SimActions {
     }
 
     static let tidyIcon = "wand.and.rays"
+
+    private var flipItem: MenuItem? {
+        let down = (model.layoutDirections[sim.manifest.id] ?? sim.level.direction ?? .right) == .down
+        return flip.map { command(down ? "Lay out left to right" : "Lay out top to bottom", icon: SimActions.flipIcon,
+                                  shortcut: "⌥⌘V", action: $0) }
+    }
+
+    static let flipIcon = "arrow.down.square"
 
     private func sendItem(_ flow: Flow) -> MenuItem {
         command("Send \(flow.label)", icon: "paperplane") { sim.send(flow.id) }

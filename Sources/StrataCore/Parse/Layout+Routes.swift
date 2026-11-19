@@ -23,6 +23,18 @@ public struct EdgeRoute: Sendable {
     public var label: CGPoint?
     public var labelWidth: CGFloat = 0
 
+    /// The route mirrored across the diagonal (x and y swapped), label included.
+    var transposed: EdgeRoute {
+        let segments = segments.map { segment -> Segment in
+            switch segment {
+            case .line(let to): .line(to: to.transposed)
+            case .curve(let to, let c1, let c2): .curve(to: to.transposed, control1: c1.transposed, control2: c2.transposed)
+            }
+        }
+        return EdgeRoute(edge: edge, start: start.transposed, segments: segments, tip: tip.transposed,
+                         direction: direction.transposed, label: label?.transposed, labelWidth: labelWidth)
+    }
+
     /// The route as points: lines as they are, curves split into `curveSteps` pieces.
     public func polyline(curveSteps: Int = 12) -> [CGPoint] {
         var points = [start]
@@ -54,6 +66,11 @@ public struct EdgeRoute: Sendable {
 /// - Edges within a column go straight down when nothing is between, otherwise around the side.
 /// - Labels take the spot along their edge that covers no card and no other label, nearest the middle
 ///   of the edge's longest straight run or its middle bend.
+///
+/// A top-to-bottom level (`direction: down`) is routed in the transposed frame, where its rows are
+/// columns, and transposed back: edges leave a card's bottom, cross each gap between rows with one
+/// S-bend, and edges within a row run sideways. Labels stay horizontal text, so they are placed after
+/// transposing back.
 public enum EdgeRouter {
     public struct Card: Sendable {
         public let id: String
@@ -72,7 +89,8 @@ public enum EdgeRouter {
         public let from: String
         public let to: String
         public let label: String?
-        /// Where auto layout reserved this edge's track in each column it passes (stage y), if it did.
+        /// Where auto layout reserved this edge's track in each column it passes (stage y), if it did; in
+        /// each row it passes (stage x) for a top-to-bottom level.
         public let via: [CGFloat]
         public init(id: String, from: String, to: String, label: String?, via: [CGFloat] = []) {
             self.id = id; self.from = from; self.to = to; self.label = label; self.via = via
@@ -100,10 +118,80 @@ public enum EdgeRouter {
         case through(columns: [Int], gaps: [Int], forward: Bool)
     }
 
-    public static func routes(cards: [Card], regions: [Region] = [], edges: [Request]) -> [EdgeRoute] {
+    /// Routed edges, and where each region's label sits (in the order of `regions`).
+    public struct Routing: Sendable {
+        public let routes: [EdgeRoute]
+        public let labels: [CGRect]
+    }
+
+    public static func routes(cards: [Card], regions: [Region] = [], edges: [Request],
+                              direction: FlowDirection = .right) -> [EdgeRoute] {
+        routing(cards: cards, regions: regions, edges: edges, direction: direction).routes
+    }
+
+    public static func routing(cards: [Card], regions: [Region] = [], edges: [Request],
+                               direction: FlowDirection = .right) -> Routing {
+        var labelRects = regions.map(labelRect)
+        var (routes, plans) = geometry(cards: direction == .down ? cards.map { Card(id: $0.id, rect: $0.rect.transposed) } : cards,
+                                       labels: direction == .down ? labelRects.map(\.transposed) : labelRects, edges: edges)
+        if direction == .down {
+            // Loops keep their usual shape, over the card's top right corner.
+            let rects = Dictionary(cards.map { ($0.id, $0.rect) }, uniquingKeysWith: { first, _ in first })
+            let sources = Dictionary(edges.map { ($0.id, $0.from) }, uniquingKeysWith: { first, _ in first })
+            for i in routes.indices {
+                if case .loop = plans[i], let rect = sources[routes[i].edge].flatMap({ rects[$0] }) {
+                    routes[i] = loop(routes[i].edge, rect)
+                } else {
+                    routes[i] = routes[i].transposed
+                }
+            }
+        }
+
+        let lines = routes.map { $0.polyline(curveSteps: 10) }
+        // Top to bottom, edges enter a group through the band that holds its label: the label moves along
+        // the band to where no line crosses it.
+        if direction == .down {
+            for index in regions.indices { labelRects[index] = clearLabel(labelRects[index], in: regions[index].rect, lines: lines) }
+        }
+
+        // 5. Labels, once every line is known: off cards, off other labels, and off other lines when possible.
+        var placed: [CGRect] = []
+        let obstacles = cards.map(\.rect)
+        for index in routes.indices {
+            guard let request = edges.first(where: { $0.id == routes[index].edge }), let text = request.label, !text.isEmpty else { continue }
+            let others = lines.indices.filter { $0 != index }.map { lines[$0] }
+            placeLabel(&routes[index], width: min(maxLabel, CGFloat(LayoutMetrics.pillWidth(text))), plan: plans[index],
+                       obstacles: obstacles, labels: labelRects, lines: others, placed: &placed)
+        }
+        return Routing(routes: routes, labels: labelRects)
+    }
+
+    /// The leftmost spot in the region's top band where `label` crosses no line, or `label` itself.
+    static func clearLabel(_ label: CGRect, in region: CGRect, lines: [[CGPoint]]) -> CGRect {
+        var blocked: [(lo: CGFloat, hi: CGFloat)] = []
+        for line in lines {
+            for (a, b) in zip(line, line.dropFirst()) where max(a.y, b.y) >= label.minY && min(a.y, b.y) <= label.maxY {
+                // The part of the segment inside the band.
+                func x(at y: CGFloat) -> CGFloat { abs(b.y - a.y) < 0.001 ? a.x : a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y) }
+                let top = min(max(label.minY, min(a.y, b.y)), label.maxY), bottom = max(min(label.maxY, max(a.y, b.y)), label.minY)
+                let xs = abs(b.y - a.y) < 0.001 ? [a.x, b.x] : [x(at: top), x(at: bottom)]
+                blocked.append((xs.min()! - 5, xs.max()! + 5))
+            }
+        }
+        let first = region.minX + 8, last = region.maxX - 8 - label.width
+        guard last >= first else { return label }
+        for x in ([first] + blocked.map(\.hi)).sorted() where x >= first && x <= last {
+            if !blocked.contains(where: { $0.hi > x && $0.lo < x + label.width }) {
+                return CGRect(x: x, y: label.minY, width: label.width, height: label.height)
+            }
+        }
+        return label
+    }
+
+    /// Steps 1 to 4 for cards placed left to right: each edge's plan and its drawn route.
+    private static func geometry(cards: [Card], labels labelRects: [CGRect], edges: [Request]) -> ([EdgeRoute], [Plan]) {
         var index: [String: Int] = [:]
         for (i, card) in cards.enumerated() where index[card.id] == nil { index[card.id] = i }
-        let labelRects = regions.map(labelRect)
         let columns = makeColumns(cards, labels: labelRects)
         var columnOf = Array(repeating: 0, count: cards.count)
         for (c, column) in columns.enumerated() { for card in column.cards { columnOf[card] = c } }
@@ -219,8 +307,6 @@ public enum EdgeRouter {
         // 4. Geometry.
         var routes: [EdgeRoute] = []
         var routePlans: [Plan] = []
-        var placed: [CGRect] = []
-        let obstacles = cards.map(\.rect)
         for (e, plan) in plans.enumerated() {
             guard let plan, let u = index[edges[e].from], let v = index[edges[e].to] else { continue }
             let a = cards[u].rect
@@ -274,16 +360,7 @@ public enum EdgeRouter {
             routes.append(route)
             routePlans.append(plan)
         }
-
-        // 5. Labels, once every line is known: off cards, off other labels, and off other lines when possible.
-        let lines = routes.map { $0.polyline(curveSteps: 10) }
-        for index in routes.indices {
-            guard let request = edges.first(where: { $0.id == routes[index].edge }), let text = request.label, !text.isEmpty else { continue }
-            let others = lines.indices.filter { $0 != index }.map { lines[$0] }
-            placeLabel(&routes[index], width: min(maxLabel, CGFloat(LayoutMetrics.pillWidth(text))), plan: routePlans[index],
-                       obstacles: obstacles, labels: labelRects, lines: others, placed: &placed)
-        }
-        return routes
+        return (routes, routePlans)
     }
 
     // MARK: - Columns and gaps
@@ -506,4 +583,14 @@ public enum EdgeRouter {
         route.labelWidth = max(best.width, 24)
         placed.append(CGRect(x: best.center.x - route.labelWidth / 2, y: best.center.y - 8, width: route.labelWidth, height: 16))
     }
+}
+
+extension CGPoint {
+    /// Mirrored across the diagonal: x and y swapped.
+    var transposed: CGPoint { CGPoint(x: y, y: x) }
+}
+
+extension CGRect {
+    /// Mirrored across the diagonal: the frame a top-to-bottom level is routed and laid out in.
+    var transposed: CGRect { CGRect(x: minY, y: minX, width: height, height: width) }
 }

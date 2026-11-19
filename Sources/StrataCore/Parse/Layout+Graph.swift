@@ -1,7 +1,12 @@
 import Foundation
 
-/// The auto layout pipeline (docs/manifest.md, Top level: `layout`). Each step lives in its own file:
-/// layers here, ordering in Layout+Order.swift, coordinates in Layout+Coordinates.swift.
+/// The auto layout pipeline (docs/manifest.md, Layout). Each step lives in its own file: layers here,
+/// ordering in Layout+Order.swift, coordinates in Layout+Coordinates.swift, and what only a top-to-bottom
+/// layout does (side nodes, shared stores at the bottom) in Layout+Down.swift.
+///
+/// The pipeline works in one frame whatever the direction: layers follow each other along x and a
+/// layer's vertices stack along y. A `down` layout runs it with card sizes and gaps swapped (cards are
+/// as wide as they are, so the spacing differs by axis) and transposes the result.
 enum AutoLayout {
     struct Result {
         var positions: [String: GridPoint]
@@ -9,15 +14,33 @@ enum AutoLayout {
         var issues: [DiagramLayout.Issue]
     }
 
-    static func run(_ level: Level) -> Result {
-        var graph = LayeredGraph(level: level)
+    /// `hints` is the direction the level's positions were written for.
+    static func run(_ level: Level, direction: FlowDirection = .right, hints: FlowDirection = .right) -> Result {
+        var graph = LayeredGraph(level: level, direction: direction, hints: hints)
         guard !graph.ids.isEmpty else {
             return Result(positions: graph.placeNotes(cards: [:], regions: []), issues: [])
         }
         graph.breakCycles()
         graph.assignLayers()
+        guard direction == .down else {
+            graph.buildVertices()
+            graph.orderLayers()
+            return graph.coordinates()
+        }
+        // A side node that ordering could not put next to its caller goes back to the next row.
+        let first = graph
+        graph.placeSides()
         graph.buildVertices()
         graph.orderLayers()
+        graph.insertSides()
+        let stranded = graph.strandedSides()
+        if !stranded.isEmpty {
+            graph = first
+            graph.placeSides(except: stranded)
+            graph.buildVertices()
+            graph.orderLayers()
+            graph.insertSides()
+        }
         return graph.coordinates()
     }
 }
@@ -41,15 +64,18 @@ struct LayeredGraph {
         var filler: Int?           // a filler for this group
         var layer: Int
         var group: Int?            // deepest group
-        var height: Double
+        var breadth: Double        // extent across the layer: a card's height in columns, its width in rows
         var isDummy: Bool { link != nil }
         var isFiller: Bool { filler != nil }
     }
 
     let level: Level
+    let direction: FlowDirection
+    let hintDirection: FlowDirection   // the way the level's positions were written
+    let frame: LayoutFrame
     var ids: [String] = []
     var kinds: [NodeKind] = []
-    var hints: [GridPoint?] = []
+    var hints: [GridPoint?] = []   // in this frame: x picks the layer, y orders it
     var heights: [Double] = []     // card heights (taller with component chips)
     var hintColumn: [Int?] = []
     var nodeGroup: [Int?] = []
@@ -67,16 +93,22 @@ struct LayeredGraph {
     var layers: [[Int]] = []       // per layer: vertices top to bottom
     var issues: [DiagramLayout.Issue] = []
     var position: [Int] = []       // index of each vertex within its layer, kept current by ordering
+    /// Top to bottom only (Layout+Down.swift): a side node sits in its caller's row, next to it.
+    var sideOf: [Int: Int] = [:]
+    var flat: Set<Int> = []        // links between a side node and its caller, inside one layer
 
-    init(level: Level) {
+    init(level: Level, direction: FlowDirection = .right, hints hintDirection: FlowDirection = .right) {
         self.level = level
+        self.direction = direction
+        self.hintDirection = hintDirection
+        frame = LayoutFrame(direction)
         let diagram = level.nodes.filter { $0.kind.role != .annotation }
         var index: [String: Int] = [:]
         for node in diagram where index[node.id] == nil {
             index[node.id] = ids.count
             ids.append(node.id)
             kinds.append(node.kind)
-            hints.append(node.at)
+            hints.append(hintDirection == .down ? node.at.map { GridPoint($0.y, $0.x) } : node.at)
             heights.append(LayoutMetrics.cardHeight(for: node))
         }
 
@@ -252,9 +284,12 @@ struct LayeredGraph {
             layer[v] = dagPreds[v].map { layer[$0] + 1 }.max() ?? 0
         }
 
+        // Top to bottom, a node's side nodes move with it, so they never hold it up.
+        let followers = direction == .down ? Set(sideCandidates(preds: dagPreds, succs: dagSuccs).values.joined()) : []
         func range(_ v: Int) -> ClosedRange<Int> {
             let lo = dagPreds[v].map { layer[$0] + 1 }.max() ?? 0
-            let hi = dagSuccs[v].map { layer[$0] - 1 }.min() ?? Int.max / 2
+            let next = followers.isEmpty ? dagSuccs[v] : dagSuccs[v].filter { !followers.contains($0) }
+            let hi = next.map { layer[$0] - 1 }.min() ?? (dagSuccs[v].isEmpty ? Int.max / 2 : lo)
             return lo...max(lo, hi)
         }
 
@@ -268,6 +303,7 @@ struct LayeredGraph {
             && dagPreds[v].allSatisfy({ dagPreds[$0].isEmpty }) {
             layer[v] = range(v).upperBound
         }
+        for v in followers { layer[v] = max(layer[v], dagPreds[v].map { layer[$0] + 1 }.max() ?? 0) }
 
         // Stores called by the same caller share a column (the furthest one).
         let sinks = (0..<n).filter { Self.dataKinds.contains(kinds[$0]) && dagSuccs[$0].isEmpty && !dagPreds[$0].isEmpty }
@@ -300,6 +336,7 @@ struct LayeredGraph {
         for v in 0..<n where kinds[v] == .port && dagSuccs[v].isEmpty && !dagPreds[v].isEmpty {
             layer[v] = max(layer[v], deepest)
         }
+        if direction == .down { sinkSharedStores(deepest: deepest, preds: dagPreds, succs: dagSuccs) }
         for v in isolated {
             if let hint = hintColumn[v], let mates = columns[hint]?.filter({ !isolated.contains($0) }), !mates.isEmpty {
                 layer[v] = mates.map { layer[$0] }.sorted()[mates.count / 2]
@@ -326,17 +363,20 @@ struct LayeredGraph {
         func others(_ count: Int) -> String {
             count == 0 ? ", which sends to it" : count == 1 ? " and 1 other node that send to it" : " and \(count) other nodes that send to it"
         }
+        let down = hintDirection == .down
         for node in behind.keys.sorted() {
             let senders = behind[node]!
             let first = ids[senders[0]]
-            issues.append(DiagramLayout.Issue(node: ids[node], message:
-                "the hint puts '\(ids[node])' left of '\(first)'\(others(senders.count - 1)); auto layout keeps the flow left to right (move the hint, or use layout: manual)"))
+            issues.append(DiagramLayout.Issue(node: ids[node], message: down
+                ? "the hint puts '\(ids[node])' above '\(first)'\(others(senders.count - 1)); auto layout keeps the flow top to bottom (move the hint, or use layout: manual)"
+                : "the hint puts '\(ids[node])' left of '\(first)'\(others(senders.count - 1)); auto layout keeps the flow left to right (move the hint, or use layout: manual)"))
         }
         for node in beside.keys.sorted() where behind[node] == nil {
             let senders = beside[node]!
             let first = ids[senders[0]]
-            issues.append(DiagramLayout.Issue(node: ids[node], message:
-                "'\(ids[node])' shares a hint column with '\(first)'\(others(senders.count - 1)); auto layout puts it further right (move the hint, or use layout: manual)"))
+            issues.append(DiagramLayout.Issue(node: ids[node], message: down
+                ? "'\(ids[node])' shares a hint row with '\(first)'\(others(senders.count - 1)); auto layout puts it further down (move the hint, or use layout: manual)"
+                : "'\(ids[node])' shares a hint column with '\(first)'\(others(senders.count - 1)); auto layout puts it further right (move the hint, or use layout: manual)"))
         }
     }
 
@@ -345,7 +385,7 @@ struct LayeredGraph {
     /// Real vertices, a chain of dummies for every edge spanning more than one layer, and fillers that
     /// hold a group's place in the layers it crosses without a member.
     mutating func buildVertices() {
-        vertices = ids.indices.map { Vertex(node: $0, layer: layer[$0], group: nodeGroup[$0], height: heights[$0]) }
+        vertices = ids.indices.map { Vertex(node: $0, layer: layer[$0], group: nodeGroup[$0], breadth: frame.breadth(heights[$0])) }
         preds = Array(repeating: [], count: vertices.count)
         succs = preds
         chains = []
@@ -374,17 +414,19 @@ struct LayeredGraph {
             var chain = [tail]
             if layer[tail] + 1 < layer[head] {
                 for l in (layer[tail] + 1)..<layer[head] {
-                    vertices.append(Vertex(link: index, layer: l, group: dummyGroup(tail, head, l), height: 0))
+                    vertices.append(Vertex(link: index, layer: l, group: dummyGroup(tail, head, l), breadth: 0))
                     preds.append([]); succs.append([])
                     chain.append(vertices.count - 1)
                 }
             }
             chain.append(head)
+            chains.append(chain)
+            // A side node's link stays inside the layer, out of ordering and alignment.
+            guard !flat.contains(index) else { continue }
             for (a, b) in zip(chain, chain.dropFirst()) {
                 succs[a].append(b)
                 preds[b].append(a)
             }
-            chains.append(chain)
         }
 
         var span: [Int: ClosedRange<Int>] = [:]
@@ -402,13 +444,16 @@ struct LayeredGraph {
         for group in groupIDs.indices.sorted(by: { (-groupPath[$0].count, $0) < (-groupPath[$1].count, $1) }) {
             guard let range = span[group] else { continue }
             for l in range where !present.contains([group, l]) {
-                vertices.append(Vertex(filler: group, layer: l, group: group, height: 0))
+                vertices.append(Vertex(filler: group, layer: l, group: group, breadth: 0))
                 preds.append([]); succs.append([])
                 for ancestor in groupPath[group] { present.insert([ancestor, l]) }
             }
         }
         layers = Array(repeating: [], count: (layer.max() ?? 0) + 1)
-        for (index, vertex) in vertices.enumerated() { layers[vertex.layer].append(index) }
+        // Side nodes join their caller's layer after ordering (insertSides).
+        for (index, vertex) in vertices.enumerated() where vertex.node.map({ sideOf[$0] == nil }) ?? true {
+            layers[vertex.layer].append(index)
+        }
         position = Array(repeating: 0, count: vertices.count)
         for l in layers.indices { reindex(l) }
     }

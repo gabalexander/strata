@@ -198,7 +198,7 @@ import StrataCore
 
 /// The limit holds for release builds (the app); checks usually run as a debug build, which is about
 /// 12× slower here, so they allow 15×.
-private func limit(_ milliseconds: Double) -> Double {
+func limit(_ milliseconds: Double) -> Double {
     #if DEBUG
     milliseconds * 15
     #else
@@ -208,15 +208,15 @@ private func limit(_ milliseconds: Double) -> Double {
 
 // MARK: - Samples
 
-private struct LayoutSample {
+struct LayoutSample {
     let name: String
     let level: Level
     let legacy: Level?
 }
 
-private let layoutHeader = "strata: 1\nid: layout-check\ntitle: Layout check\n"
+let layoutHeader = "strata: 1\nid: layout-check\ntitle: Layout check\n"
 
-private func parsed(_ text: String) -> Manifest? {
+func parsed(_ text: String) -> Manifest? {
     let full = text.hasPrefix("strata:") ? text : layoutHeader + text
     let (manifest, diagnostics) = ManifestParser.parse(full, source: .file(URL(fileURLWithPath: "/tmp/layout-check.yaml")))
     if manifest == nil { print(diagnostics) }
@@ -226,7 +226,7 @@ private func parsed(_ text: String) -> Manifest? {
 /// Every level of every bundled example (with the same text laid out the old way: `layout: manual`
 /// keeps hand positions and fills the rest with the old algorithm), the messy company map, and
 /// generated graphs.
-private func layoutSamples(includeGenerated: Bool = true) throws -> [LayoutSample] {
+func layoutSamples(includeGenerated: Bool = true) throws -> [LayoutSample] {
     var texts: [(String, String)] = []
     let directory = try requiredResource("Examples")
     for url in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -249,7 +249,7 @@ private func layoutSamples(includeGenerated: Bool = true) throws -> [LayoutSampl
     return samples
 }
 
-private func levels(_ level: Level, path: String) -> [(String, Level)] {
+func levels(_ level: Level, path: String) -> [(String, Level)] {
     var result = [(path, level)]
     for node in level.nodes {
         if let inside = node.inside { result += levels(inside, path: "\(path)/\(node.id)") }
@@ -261,11 +261,11 @@ private func levels(_ level: Level, path: String) -> [(String, Level)] {
 // MARK: - Geometry
 
 /// Cards as the stage draws them: 80 pt tall, centred on the row, for a node with component chips.
-private func cardRects(_ level: Level) -> [(id: String, rect: CGRect)] {
+func cardRects(_ level: Level) -> [(id: String, rect: CGRect)] {
     level.nodes.compactMap { node in node.at.map { (node.id, LayoutMetrics.card(for: node, at: $0)) } }
 }
 
-private func groupMembers(_ group: String, in level: Level) -> Set<String> {
+func groupMembers(_ group: String, in level: Level) -> Set<String> {
     var groups: Set<String> = [group]
     var changed = true
     while changed {
@@ -276,7 +276,7 @@ private func groupMembers(_ group: String, in level: Level) -> Set<String> {
 }
 
 /// The regions the stage draws (StageLayout): members' cards, nested regions, and padding.
-private func groupRegions(_ level: Level) -> [String: CGRect] {
+func groupRegions(_ level: Level) -> [String: CGRect] {
     let cards = Dictionary(cardRects(level).map { ($0.id, $0.rect) }, uniquingKeysWith: { a, _ in a })
     func region(_ id: String, _ visited: Set<String>) -> CGRect {
         guard !visited.contains(id) else { return .null }
@@ -295,21 +295,26 @@ private func groupRegions(_ level: Level) -> [String: CGRect] {
     return result
 }
 
-/// The routes the stage draws for a level.
-private func routes(_ level: Level) -> [EdgeRoute] {
+/// The routes the stage draws for a level placed `direction`.
+func routes(_ level: Level, _ direction: FlowDirection = .right) -> [EdgeRoute] {
+    routing(level, direction).routes
+}
+
+func routing(_ level: Level, _ direction: FlowDirection = .right) -> EdgeRouter.Routing {
     let cards = cardRects(level).map { EdgeRouter.Card(id: $0.id, rect: $0.rect) }
     let regions = groupRegions(level)
     let labels = level.groups.compactMap { group in regions[group.id].map { EdgeRouter.Region(rect: $0, label: group.label) } }
     let requests = level.edges.map { edge in
         EdgeRouter.Request(id: edge.id, from: edge.from, to: edge.to, label: edge.label ?? edge.protocol,
-                           via: edge.via.map { $0.y * LayoutMetrics.row + LayoutMetrics.origin })
+                           via: edge.via.map { direction == .down ? $0.x * LayoutMetrics.column + LayoutMetrics.origin
+                                                                  : $0.y * LayoutMetrics.row + LayoutMetrics.origin })
     }
-    return EdgeRouter.routes(cards: cards, regions: labels, edges: requests)
+    return EdgeRouter.routing(cards: cards, regions: labels, edges: requests, direction: direction)
 }
 
-private func routedLines(_ level: Level) -> [(from: String, to: String, points: [CGPoint])] {
+func routedLines(_ level: Level, _ direction: FlowDirection = .right) -> [(from: String, to: String, points: [CGPoint])] {
     let byID = Dictionary(level.edges.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-    return routes(level).compactMap { route in
+    return routes(level, direction).compactMap { route in
         byID[route.edge].map { ($0.from, $0.to, route.polyline(curveSteps: 16)) }
     }
 }
@@ -352,12 +357,12 @@ private func legacyLines(_ level: Level) -> [(from: String, to: String, points: 
     }
 }
 
-private func crossings(_ lines: [(from: String, to: String, points: [CGPoint])]) -> Int {
+func crossings(_ lines: [(from: String, to: String, points: [CGPoint])]) -> Int {
     LayoutQuality.crossings(lines)
 }
 
 /// Edges whose drawn line crosses a card other than their own ends (old cards on the old grid).
-private func throughCards(_ lines: [(from: String, to: String, points: [CGPoint])], _ level: Level, old: Bool = false) -> Int {
+func throughCards(_ lines: [(from: String, to: String, points: [CGPoint])], _ level: Level, old: Bool = false) -> Int {
     let rects = level.nodes.enumerated().map { i, node -> (String, CGRect) in
         let at = node.at ?? GridPoint(Double(i % 5), Double(i / 5))
         return (node.id, old ? CGRect(x: at.x * 220 + 36, y: at.y * 130 + 36, width: 168, height: 64) : LayoutMetrics.card(at: at))
@@ -369,13 +374,13 @@ private func throughCards(_ lines: [(from: String, to: String, points: [CGPoint]
 
 // MARK: - Fixtures
 
-private func chainManifest(_ count: Int) -> String {
+func chainManifest(_ count: Int) -> String {
     let nodes = (0..<count).map { "  - { id: n\($0), kind: \($0 == 0 ? "client" : "service") }" }.joined(separator: "\n")
     let edges = (1..<count).map { "  - { from: n\($0 - 1), to: n\($0), protocol: grpc }" }.joined(separator: "\n")
     return "edges:\n\(edges)\nnodes:\n\(nodes)"
 }
 
-private func treeManifest(depth: Int, grouped: Bool = false) -> String {
+func treeManifest(depth: Int, grouped: Bool = false) -> String {
     var nodes = ["  - { id: t1, kind: client }"], edges: [String] = []
     var groups: [String] = []
     for i in 2..<(1 << depth) {
@@ -389,7 +394,7 @@ private func treeManifest(depth: Int, grouped: Bool = false) -> String {
     return (groups + ["nodes:"] + nodes + ["edges:"] + edges).joined(separator: "\n")
 }
 
-private func fanManifest(_ count: Int) -> String {
+func fanManifest(_ count: Int) -> String {
     let nodes = ["  - { id: src, kind: client }", "  - { id: hub, kind: gateway }"]
         + (0..<count).map { "  - { id: s\($0), kind: service }" }
     let edges = ["  - { from: src, to: hub }"] + (0..<count).map { "  - { from: hub, to: s\($0), protocol: http }" }
@@ -397,7 +402,7 @@ private func fanManifest(_ count: Int) -> String {
 }
 
 /// A layered graph with groups, a few long edges and a back edge, from a fixed seed.
-private func generatedManifest(nodes count: Int, seed: UInt64) -> String {
+func generatedManifest(nodes count: Int, seed: UInt64) -> String {
     var state = seed &* 6364136223846793005 &+ 1442695040888963407
     func next(_ bound: Int) -> Int {
         state = state &* 6364136223846793005 &+ 1442695040888963407
@@ -425,7 +430,7 @@ private func generatedManifest(nodes count: Int, seed: UInt64) -> String {
 
 /// The company map an agent drew: 14 nodes, two groups, Kafka with two consumers, a cron and an
 /// external API. `manual` keeps the agent's scattered positions.
-private func messyManifest(manual: Bool) -> String {
+func messyManifest(manual: Bool) -> String {
     func at(_ x: Int, _ y: Int) -> String { manual ? ", at: [\(x), \(y)]" : "" }
     return """
         strata: 1

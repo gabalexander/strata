@@ -17,6 +17,8 @@ enum LayoutValidation {
             guard let node = nodeFields[id] else { return field }
             return node["at"].present ? node["at"] : node
         }
+        // The author's positions, kept for laying the level out again (DiagramLayout.arranged).
+        for index in level.nodes.indices { level.nodes[index].hint = level.nodes[index].at }
 
         switch mode {
         case .auto:

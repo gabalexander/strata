@@ -42,12 +42,13 @@ public enum LayoutMetrics {
     }
 }
 
-/// Places every node of a level (docs/manifest.md, Top level: `layout`).
+/// Places every node of a level (docs/manifest.md, Layout).
 ///
-/// - `auto`: a layered (Sugiyama) layout. Flow runs left to right: layers by longest path, crossings
-///   reduced by barycenter sweeps and transposition, coordinates aligned with Brandes–Köpf and then
-///   projected so groups stay contiguous and never overlap. `at` is a hint: nodes that share a hint
-///   column prefer one layer, and hint rows order a layer.
+/// - `auto`: a layered (Sugiyama) layout. Flow runs along the level's `direction`, left to right or top to
+///   bottom: layers by longest path, crossings reduced by barycenter sweeps and transposition,
+///   coordinates aligned with Brandes–Köpf and then projected so groups stay contiguous and never
+///   overlap. `at` is a hint: nodes that share a hint column (a hint row, top to bottom) prefer one
+///   layer, and the other coordinate orders a layer.
 /// - `manual`: `at` is exact; nodes without one are fitted around the placed ones.
 public enum DiagramLayout {
     /// A hint auto layout could not follow, reported by validation as a warning.
@@ -56,14 +57,17 @@ public enum DiagramLayout {
         let message: String
     }
 
+    /// Places `level`. Positions already there are hints, read the way the level runs (`level.direction`);
+    /// `direction` lays it out another way instead (the stage's switch), without changing `level.direction`.
     @discardableResult
-    static func place(_ level: inout Level, mode: LayoutMode) -> [Issue] {
+    static func place(_ level: inout Level, mode: LayoutMode, direction: FlowDirection? = nil) -> [Issue] {
+        let hints = level.direction ?? .right
         switch mode {
         case .manual:
-            ManualLayout.fill(&level)
+            ManualLayout.fill(&level, direction: hints)
             return []
         case .auto:
-            let result = AutoLayout.run(level)
+            let result = AutoLayout.run(level, direction: direction ?? hints, hints: hints)
             for index in level.nodes.indices {
                 if let point = result.positions[level.nodes[index].id] { level.nodes[index].at = point }
             }
@@ -75,9 +79,19 @@ public enum DiagramLayout {
     }
 
     /// The level laid out automatically, using its current positions as hints: "Tidy layout" on the stage.
-    public static func tidy(_ level: Level) -> Level {
+    /// `direction` overrides the level's own.
+    public static func tidy(_ level: Level, direction: FlowDirection? = nil) -> Level {
         var copy = level
-        place(&copy, mode: .auto)
+        place(&copy, mode: .auto, direction: direction)
+        return copy
+    }
+
+    /// An auto-laid-out level placed again from the author's hints (`Node.hint`) to run in `direction`: the
+    /// stage's vertical/horizontal switch. In the level's own direction it is the layout parsing made.
+    public static func arranged(_ level: Level, direction: FlowDirection) -> Level {
+        var copy = level
+        for index in copy.nodes.indices { copy.nodes[index].at = copy.nodes[index].hint }
+        place(&copy, mode: .auto, direction: direction)
         return copy
     }
 }
@@ -85,6 +99,18 @@ public enum DiagramLayout {
 /// The original fill for levels where some nodes have no position: unplaced nodes go into columns
 /// by longest path and rows by barycenter, around the nodes that are placed.
 enum ManualLayout {
+    /// With `down`, columns of the fill become rows: positions are transposed, filled, and transposed back.
+    static func fill(_ level: inout Level, direction: FlowDirection) {
+        guard level.nodes.contains(where: { $0.at == nil }) else { return }
+        guard direction == .down else { return fill(&level) }
+        func transpose(_ level: inout Level) {
+            for index in level.nodes.indices { level.nodes[index].at = level.nodes[index].at.map { GridPoint($0.y, $0.x) } }
+        }
+        transpose(&level)
+        fill(&level)
+        transpose(&level)
+    }
+
     static func fill(_ level: inout Level) {
         guard level.nodes.contains(where: { $0.at == nil }) else { return }
         let diagram = level.nodes.filter { $0.kind.role != .annotation }
