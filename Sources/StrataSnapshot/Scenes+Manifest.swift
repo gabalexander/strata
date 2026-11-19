@@ -10,7 +10,8 @@ import StrataCore
 /// `STRATA_SNAP_PRESSURE=bottlenecks` picks the Pressure section (now, bottlenecks, scale, stores,
 /// volumes, capacity) and `STRATA_SNAP_HEAT=1` turns on heat mode.
 /// `STRATA_SNAP_PATH=orders/orders#insert-order` opens a deep-dive level (node ids, `node#op` for an op's
-/// `inside:`), and `STRATA_SNAP_STAGE=1` hides the dock and inspector so the stage fills the frame.
+/// `inside:`), `STRATA_SNAP_STAGE=1` hides the dock and inspector so the stage fills the frame, and
+/// `STRATA_SNAP_TIDY=1` runs "Tidy layout" first.
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -25,7 +26,8 @@ import StrataCore
         print("no level at \(levelPath.joined(separator: "/")) in \(manifest.id)")
         return []
     }
-    let name = (["manifest-\(manifest.id)"] + levelPath).joined(separator: "-").replacingOccurrences(of: "#", with: "_")
+    let name = (["manifest-\(manifest.id)"] + levelPath + (env["STRATA_SNAP_TIDY"] == "1" ? ["tidy"] : []))
+        .joined(separator: "-").replacingOccurrences(of: "#", with: "_")
     return [Scene(name: name, size: CGSize(width: 1400, height: 880)) {
         let model = AppModel(library: Library(manifests: [manifest]),
                              vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
@@ -48,6 +50,7 @@ import StrataCore
                                                       "volumes": .volumes, "capacity": .capacity]
         if let section = env["STRATA_SNAP_PRESSURE"].flatMap({ sections[$0] }) { SimPressureSnapshot.section(sim, section) }
         if env["STRATA_SNAP_HEAT"] == "1" { SimPressureSnapshot.heat(sim) }
+        if env["STRATA_SNAP_TIDY"] == "1" { SimStageSnapshot.tidy(sim) }
         let tab = env["STRATA_SNAP_DOCK"].flatMap { tabs[$0] } ?? (env["STRATA_SNAP_SCENARIO"] == nil ? .controls : .scenarios)
         let options = SimSnapshotOptions(selectedNode: selected, dockTab: tab, previewMenu: false)
         return AnyView(SimScreen(model: model, id: manifest.id, path: levelPath, snapshot: options))

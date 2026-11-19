@@ -529,3 +529,11 @@ extension Node {
         }
     }
 }
+
+/// Offscreen snapshots: a level after "Tidy layout".
+@_spi(Snapshots) @MainActor
+public enum SimStageSnapshot {
+    public static func tidy(_ sim: Simulation) {
+        SimSessions.renderer(for: sim).tidy(animated: false)
+    }
+}
