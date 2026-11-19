@@ -285,7 +285,7 @@ nodes:
                 reply: "(integer) 1"
                 at: 12.4s
                 state: [ { key: "roster:inst:a", value: null } ]
-                note: "`DEL` removes the key at once. Nobody has to wait out a TTL to learn that A is gone."
+                note: "Deleting the key takes effect at once, so nobody sits out a TTL to learn that A is gone."
               - id: announce
                 from: a
                 to: v
@@ -297,11 +297,17 @@ nodes:
               - id: hear
                 from: v
                 to: b
-                label: B receives left:a and rescans
+                label: Valkey pushes left:a to B
+                command: "message roster:events left:a"
+                at: 12.4s
+                note: "B subscribes to `roster:events`, so it hears about the leave at once instead of on its next tick, up to 5 s later."
+              - id: rescan
+                from: b
+                to: v
+                label: B rescans the roster
                 command: "SCAN 0 MATCH roster:inst:* COUNT 100"
                 reply: "0 [roster:inst:b roster:inst:c]"
                 at: 12.4s
-                note: "B subscribes to `roster:events`, so it rescans on the message instead of waiting up to 5 s for its next tick."
               - id: take
                 from: b
                 to: v
