@@ -10,6 +10,7 @@ enum Validate {
         }
         level(&manifest.root, at: root, terms: TermIndex(manifest: manifest), layout: manifest.layout, direction: .right)
         EnumValidation.check(manifest, at: root)
+        JourneyValidation.check(manifest, at: root)
     }
 
     private static func duplicates<T: Identifiable>(_ items: [T], at field: Field) where T.ID == String {

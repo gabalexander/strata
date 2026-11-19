@@ -15,7 +15,7 @@ It is Swift 6.3 with SwiftUI and AppKit, built with SwiftPM and the Command Line
 | `StrataCore` | model, YAML parser, validation, layout, engine, library, vault, glossary. No UI imports | Foundation |
 | `StrataUI` | every view, the theme, overlays, the app model | StrataCore |
 | `StrataApp` | the executable: AppKit delegate, hidden windows, hotkey, menu bar, URL scheme | Core, UI |
-| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `schema`, `paths` | Core |
+| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `journey`, `schema`, `paths` | Core |
 | `StrataSnapshot` | renders scenes with fixture data to PNG, no screen permission needed | Core, UI |
 | `StrataChecks` | assertions, since XCTest is unavailable without Xcode | Core |
 
@@ -27,6 +27,8 @@ Sources/StrataCore/
   Model/Data.swift            table, join and entity lookups shared by the parser, CLI and UI
   Model/Enums.swift           enum lookups, lifecycle order, usage, search; EnumOccurrences finds values in text
   Model/Mechanisms.swift      replays a how-it-works mechanism (state after each step) for the validator, CLI and player
+  Model/Journeys.swift        journeys as written; JourneyReplay.swift replays one (rows and statuses after each step),
+                              JourneyDraft.swift drafts one from flows and transitions, JourneyTime.swift parses `at`
   Model/Components.swift      the processes a node's deep dive runs, listed as chips on its card
   Engine/EngineTypes.swift    CONTRACT: what the engine hands the UI (SimFrame, NodeState, ...)
   Engine/Simulation.swift     engine (public API is the contract)
@@ -34,7 +36,7 @@ Sources/StrataCore/
   Library/Library.swift       manifest library + live reload
   Terms/TermIndex.swift       glossary packs + auto-linking
   Vault/Vault.swift           notes on disk, links, backlinks, search
-  Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter)
+  Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter), JourneyFill (binds into queries)
 Sources/StrataUI/
   Theme/Theme.swift           CONTRACT: colours, type, radii, motion
   Overlay/Overlays.swift      CONTRACT: in-window menus, term cards, toasts, .onRightClick

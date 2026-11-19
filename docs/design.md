@@ -197,6 +197,41 @@ Before the first step it shows the summary, the participants, the state at the s
 space closes it, and a second Esc closes the player. It opens on the frame of the click, with no
 animation.
 
+## Journeys
+
+A journey (docs/manifest.md, Journeys) follows one entity through the map. Playing one keeps the stage in
+view: its panel takes the dock's place, about half the stage column (300–470 pt), and the level's narration
+steps aside. From the top:
+
+- **Header:** the route icon, `Journey · lead · task 5000101`, the title, then restart, previous, play or pause,
+  next, `step 4 of 21`, `esc` and Close. The entity line drops first when narrow.
+- **Status timeline:** every status move so far as a chip (`attempt 3200 CALL_RUNNING`), oldest first, the
+  current step's in the accent; the earliest give way to `+N earlier` when they don't fit. A click jumps to
+  the step that made the move.
+- **Steps** (236 pt, 196 pt below 1060, hidden below 840): numbered rows, the current one lit and kept in view;
+  a dot marks a step that moves a status. A click jumps there.
+- **Step pane:** `STEP 4 OF 21 · 14:32:04.820 · +3 ms`, the label, where it happens and what it talks to as
+  chips that select their node, Dive into (or Go to) when the step is on another level, the op with Op details,
+  then the query formatted with its binds filled in (the op detail's query block, with enum hovers), the Valkey
+  command taken apart, the message or request, the binds, the rows it changed, the status moves with the
+  transition and its `by`, the note, the How it works mechanism and the code. Before the first step it shows
+  the title, the brief, the rows it follows and the keys.
+- **Rows** (30% of the width, 272–400 pt; below 660 pt a Step | Rows switch in the header shows one pane):
+  the entity's row and the related rows as they are after the step, then the other rows touched so far. A
+  card lists the key, the status columns and the columns the journey updates, the rest behind `N more columns`.
+  A cell the step changed sits on an accent tint with its old value struck through above; status codes show
+  their names. While a step changes other rows, an unchanged card folds to its status line. A row not inserted
+  yet is a dashed card that says which step inserts it.
+
+On the stage the route is a highlight like an op's path: the rest dims, the current step's node, the edge it
+came along, the node it talks to and the queue it publishes to light in the accent, and the route so far stays
+in a faint accent. Each node it visited carries a numbered disc on its top-left corner with its latest step,
+the current one filled. A step deeper in the map lights the node that holds it. When the current node is off
+screen the camera glides to it, keeping the zoom.
+
+Space plays (one step every 2.6 s) or pauses, ← and → step, Home and End jump, Esc closes (after an op detail
+the step opened). Every change lands on the frame of the key or click; nothing in the panel lays out per frame.
+
 ## Overlays
 
 All overlays are drawn inside the window (see docs/architecture.md, Hidden mode). Detail that

@@ -33,7 +33,7 @@ Maps of work projects are private:
 2. **Write the manifest**: see [Mapping a real project](#mapping-a-real-project) or [Lessons](#lessons-kind-sim).
 3. **Validate**: `strata validate ~/.strata/sims/<id>.yaml` until it prints nothing (zero errors, zero
    warnings). Messages carry line numbers and the fix.
-4. **Review** the map as a reviewer would: [Verification](#7-verification).
+4. **Review** the map as a reviewer would: [Verification](#8-verification).
 5. **Simulate**: `strata simulate <id> --seconds 30`, then each scenario with `--scenario <id>`. In
    steady state no node should sit above about 70% utilisation unless you mean to show saturation,
    errors should be about 0, and each scenario should show what its `goal` promises.
@@ -71,6 +71,8 @@ Then build:
   with `detail:`.
 - **`ops:`** on every service ([Operations](#operations)), **`schema:`** on the main databases and
   **`entities:`** on the services that load them ([Data](#data)).
+- **`journeys:`**, one per main entity (a lead, an order, a payment), each followed end to end with real
+  ops and sample ids ([Journeys](#journeys)).
 - **Terms** for domain jargon, and the built-in `glossaries:` for the tech (`[kafka, postgres, redis, grpc]`).
 - **Controls** for the real knobs (pool sizes, timeouts, retries, replicas, traffic), with `insights`
   that explain the trade-off *in this system*.
@@ -158,7 +160,14 @@ the spine as real edges and flows so the layout can find it: an external engine 
 path breaks it there. Deep dives inherit it; give a deep dive `direction: right` if it reads
 better left to right. Keep `direction: right` (the default) for short pipelines and most lessons.
 
-### 7. Verification
+### 7. Journeys
+
+For each main entity (the lead, the order, the payment the system exists to move), one journey that follows
+a sample row end to end: every step with the real `node/op`, its binds, the rows it inserts and updates, and
+the status codes it moves, in the order the code runs them. A journey whose steps don't change rows, or whose
+statuses jump without a declared transition, is not done. See [Journeys](#journeys).
+
+### 8. Verification
 
 `strata validate` must print nothing. Then read each report as a reviewer and fix what's missing:
 
@@ -168,6 +177,8 @@ better left to right. Keep `direction: right` (the default) for short pipelines 
 - `strata how <id>`: every mechanism plays from start to end with exact commands and its failure branches
   (`--mechanism <id>` or `--branch <id>` prints just one);
 - `strata enums <id>`: every code has a name, a meaning and its transitions (`--find 3200` looks one up);
+- `strata journey <id>`: each journey reads as a story: the filled queries are the ones the code runs, each
+  row changes when it should, and the status timeline at the end is the lifecycle the team knows;
 - `strata analyze <id>`: the bottleneck and max rates match what the team knows ([Pressure](#pressure)).
 
 When you hand the map over, tell the user what you covered (binaries, mechanisms, formulas, enums)
@@ -211,6 +222,27 @@ pattern, with `code:` pointing at it. `strata schema` lists the fields for each 
   that join. Made-up names and `example.com` emails, never production rows.
 - **Volumes** (`rows`, `growth`) and flow `traffic:` and `slo:` come from the code, configs or the
   user; say in the `doc` that they are estimates, and leave them out rather than invent them.
+
+## Journeys
+
+A journey ties flows, ops, data and enums into one story you can step through on the stage: a lead is
+released, claimed, published, dialled, becomes an attempt, is gated, dispatched and closed, and its status
+codes move on the way. `strata schema` (Journeys) has the format.
+
+1. **Pick the entity and a sample row** in a start state (a lead at 2100, an order about to be placed), or a
+   new id for a row the journey inserts. Make sure its related rows (the attempt it becomes) have sample
+   rows that join, or that a step inserts them.
+2. **Draft it**: `strata journey draft <id> --entity task --id 5000101 > /tmp/journey.yaml` follows the flows
+   that perform the entity's transitions and the queues between them, in order, with statuses in a valid order
+   and fresh ids for inserted rows. Paste it under `journeys:` in the map.
+3. **Finish it against the code**: drop steps that aren't this story and add the ones the map doesn't model
+   (a compliance check, an engine callback); fill `binds` in placeholder order from the code; add the `rows`
+   each step really inserts and updates (a column with `enum:` moves a status by itself); set `at` from the
+   code's timeouts and real gaps (`+16ms`, a clock time for the first step); keep each `note` to two lines;
+   link `how:` to the mechanism a step runs.
+4. **Validate**: `strata validate` until it prints nothing, then read `strata journey <id>` as a reviewer.
+
+Use sample ids that exist in `schema:` rows (or are inserted by a step), never production ids.
 
 ## Pressure
 

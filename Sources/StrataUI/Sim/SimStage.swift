@@ -117,7 +117,10 @@ struct SimStage: View {
         let _ = SimOpsState.of(sim).lit(for: selection)   // a hovered op row repaints a paused stage
         let _ = SimPressureState.of(sim).watch()          // so do heat mode and a pinned blast radius
         GeometryReader { proxy in
-            let camera = viewport.current(renderer.layout, in: proxy.size, compact: compact)
+            let camera = still ? SimJourneyStage.stillCamera(SimJourneyState.of(model).player(for: sim.manifest.id), path: sim.path,
+                                                             viewport: viewport, layout: renderer.layout, size: proxy.size)
+                ?? viewport.current(renderer.layout, in: proxy.size, compact: compact)
+                : viewport.current(renderer.layout, in: proxy.size, compact: compact)
             let canvas = stageCanvas(camera)
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in
@@ -208,7 +211,9 @@ struct SimStage: View {
         .clipped()
         .background(Theme.bg)
         .overlay(alignment: .bottom) {
-            if !compact, let narration = sim.narration ?? sim.level.narration, !narration.isEmpty {
+            // A journey's panel tells the story while it is open, so the level's narration steps aside.
+            if !compact, SimJourneyState.of(model).player(for: sim.manifest.id) == nil,
+               let narration = sim.narration ?? sim.level.narration, !narration.isEmpty {
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: "text.bubble").font(Theme.ui(12)).foregroundStyle(Theme.accent)
                         .padding(.top, 1)
@@ -249,14 +254,21 @@ struct SimStage: View {
 
     private func paint(_ camera: StageCamera) -> some View {
         // An op row's path (SimOpsState) or a pressure overlay (heat, blast radius): the last requested wins.
-        let highlight = compact ? SimOpsState.of(sim).highlight(for: selection)
-            : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim)
+        let highlight = journeyHighlight ?? (compact ? SimOpsState.of(sim).highlight(for: selection)
+            : SimPressureState.of(sim).highlight(for: selection, tabOpen: pressureOpen, sim: sim))
         renderer.hoveredChip = SimComponentsHover.of(sim).chip
         return Canvas(opaque: true) { context, size in
             let frame = sim.frame()
             renderer.draw(context, size: size, camera: camera, frame: frame, selected: selection,
                           hovered: hovered, notes: noteIDs, labels: sim.speed <= 2, highlight: highlight)
         }
+    }
+
+    /// An open journey's route on this level (SimJourneyStage), unless an op row's path is lit.
+    private var journeyHighlight: StageHighlight? {
+        guard !compact, SimOpsState.of(sim).lit(for: selection) == nil,
+              let player = SimJourneyState.of(model).player(for: sim.manifest.id) else { return nil }
+        return SimJourneyStage.highlight(player, path: sim.path, layout: renderer.layout)
     }
 
     private func hit(_ point: CGPoint, _ camera: StageCamera, includeTokens: Bool = true) -> StageSelection? {

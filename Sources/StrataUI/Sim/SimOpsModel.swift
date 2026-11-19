@@ -21,6 +21,8 @@ struct StageHighlight: Equatable, Sendable {
     var edgeTints: [String: StageTint] = [:]
     /// Heat mode tints every node and dims nothing.
     var dimsRest = true
+    /// A journey's numbered markers on the nodes its steps visit (SimJourneyStage).
+    var markers: [StageMarker] = []
 }
 
 /// Inspector groups, in display order.

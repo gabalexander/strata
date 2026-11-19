@@ -190,6 +190,10 @@ private struct SimWorkspace: View {
             let inspectorWidth = model.inspectorVisible ? min(Theme.inspectorWidth, max(175, size.width * 0.34)) : 0
             let columnWidth = max(0, size.width - (model.inspectorVisible ? inspectorWidth + 1 : 0))
             let dockHeight = model.dockVisible ? min(222, max(133, size.height * 0.33)) : 0
+            // An open journey takes the dock's place, a little taller, so the stage stays in view above it.
+            let journey = SimJourneyState.of(model).player(for: sim.manifest.id)
+            let journeyHeight = journey == nil ? 0 : SimJourneyPanel.height(for: size.height - 45)
+            let below = journey != nil ? journeyHeight + 1 : model.dockVisible ? dockHeight + 1 : 0
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     SimToolbar(model: model, sim: sim, pulse: pulse, up: up, parent: detailParent.map { ($0.title, out) },
@@ -198,8 +202,12 @@ private struct SimWorkspace: View {
                         .frame(width: columnWidth, height: 44)
                     Rectangle().fill(Theme.border).frame(height: 1)
                     stage(actions)
-                        .frame(width: columnWidth, height: max(0, size.height - 45 - (model.dockVisible ? dockHeight + 1 : 0)))
-                    if model.dockVisible {
+                        .frame(width: columnWidth, height: max(0, size.height - 45 - below))
+                    if let journey {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                        SimJourneyPanel(model: model, sim: sim, terms: terms, actions: actions, player: journey, select: select,
+                                        width: columnWidth, height: journeyHeight, still: snapshot != nil)
+                    } else if model.dockVisible {
                         Rectangle().fill(Theme.border).frame(height: 1)
                         SimDock(sim: sim, model: model, terms: terms, actions: actions, selection: selection, pulse: pulse,
                                 still: snapshot != nil, select: select, tab: $tab)
@@ -229,6 +237,7 @@ private struct SimWorkspace: View {
             takeFocus()
         }
         .onChange(of: model.vault.revision) { _, _ in updateNotes() }
+        .background { SimJourneyFollower(model: model, sim: sim, viewport: viewport, renderer: renderer) }
         .onChange(of: SimFocus.of(model).request) { _, _ in takeFocus() }
         .onChange(of: SimPressureState.of(sim).tabRequest) { _, _ in
             tab = .pressure
@@ -376,6 +385,9 @@ private struct SimWorkspace: View {
             return true
         }
         if overlaysClear, SimHowState.of(sim).key(event) { return true }
+        // The journey player next; Escape backs out of an op detail it opened first.
+        if overlaysClear, !(event.keyCode == 53 && SimOpsState.of(sim).detail(for: selection) != nil),
+           SimJourneyState.of(model).key(event, manifest: sim.manifest.id) { return true }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.keyCode == 53 {
             if model.overlays.menu != nil { model.overlays.dismissMenu() }

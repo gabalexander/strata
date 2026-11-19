@@ -63,6 +63,7 @@ struct SimInspector: View {
                               still: still, inherited: true)
             }
             SimHowLevelSection(sim: sim, select: select)
+            SimJourneySection(model: model, sim: sim)
             if !sim.level.flows.isEmpty {
                 SimSection(title: "Flows") {
                     ForEach(sim.level.flows) { flow in flowCard(flow, selectable: true) }
