@@ -200,6 +200,7 @@ private struct SimWorkspace: View {
             .overlay(alignment: .center) {
                 if snapshot?.previewMenu == true { SimMenuPreview(items: actions.menu(for: selection)) }
             }
+            .overlay(alignment: .top) { SimEnumDetailHost(model: model, sim: sim, still: snapshot != nil) }
     }
 
     /// The zoom out of a level runs `Theme.gentle`; the next level opens just before it finishes.

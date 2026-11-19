@@ -14,6 +14,7 @@ struct OverlayHost: View {
                     TermCardOverlay(card: card, overlays: overlays, size: geometry.size)
                         .allowsHitTesting(card.pinned)
                 }
+                SimEnumCardLayer(model: model, size: geometry.size)
                 if let menu = overlays.menu, !menu.items.isEmpty {
                     ContextMenuOverlay(menu: menu, overlays: overlays, size: geometry.size)
                         .id(menu.items.map(\.id))

@@ -214,6 +214,7 @@ enum SimDataMenus {
                 state.land(SimCellRef(row: SimRowRef(table: key.to, row: target), column: key.toColumn))
             })
         }
+        items += SimEnumMenus.cell(column, value: value, sim: sim, model: model)
         if items.count > 1 { items.append(.separator) }
         items.append(copy("Copy value", value ?? "NULL", model: model))
         items.append(copy("Copy row as JSON", json(schema, row: cell.row.row), model: model))

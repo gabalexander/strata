@@ -51,7 +51,7 @@ struct SimOpDetail: View {
                 toolbar
                 if let doc = op.doc { SimMarkdown(source: doc, model: model, terms: terms) }
                 live
-                kindBody
+                kindBody.simEnumTables(op, on: entry.node.id, level: sim.level)
                 if !op.risks.isEmpty { risks }
                 if !op.facts.isEmpty { SimSection(title: "Facts") { SimOpsTable(rows: op.facts.map { ($0.key, $0.value) }) } }
                 if !op.code.isEmpty {

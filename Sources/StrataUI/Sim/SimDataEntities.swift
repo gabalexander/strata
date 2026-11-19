@@ -136,7 +136,7 @@ private struct SimEntityCard: View {
                     }
                 }
                 if let object = index.assemble(entity, on: node, root: row) {
-                    let lines = SimDataTree.lines(object, index: index)
+                    let lines = SimDataTree.lines(object, index: index, enums: SimEnumIndex.of(sim))
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(lines) { line in
                             SimDataTreeRow(line: line, hovered: hovered == line.id) { inside in
@@ -240,6 +240,8 @@ struct SimDataTreeLine: Identifiable {
     var type: String?
     var value: String?
     var isNull = false
+    /// The name of an enum value (`paid` for `20`), shown faint after it.
+    var enumName: String?
     var punctuation = ""
     /// The source table's colour.
     let tint: Color
@@ -249,7 +251,7 @@ struct SimDataTreeLine: Identifiable {
 }
 
 enum SimDataTree {
-    static func lines(_ object: SimDataObject, index: SimDataIndex) -> [SimDataTreeLine] {
+    @MainActor static func lines(_ object: SimDataObject, index: SimDataIndex, enums: SimEnumIndex? = nil) -> [SimDataTreeLine] {
         var lines: [SimDataTreeLine] = []
         func rowInfo(_ row: SimRowRef, via key: SimForeignKey?) -> SimDataTreeLine.Info {
             let label = index.table(row.table).map { SimDataText.label($0, row: row.row) } ?? ""
@@ -270,9 +272,15 @@ enum SimDataTree {
                 case .scalar(let value):
                     let column = schema?.column(field.name)
                     let source = ["\(field.table.table).\(field.name)", column?.type].compactMap { $0 }.joined(separator: " · ")
+                    let def = enums?.enumOf(field.table, column: field.name)
+                    let known = value.flatMap { def?.value($0) }
+                    let meaning = known.map { known in
+                        "\(def?.label ?? "") · \(def?.title(known) ?? known.name)" + (known.doc.map { ": " + $0 } ?? "")
+                    }
                     lines.append(.init(id: fieldPath, depth: depth + 1, key: field.name, value: SimDataText.literal(value, column: column),
-                                       isNull: value == nil, tint: fieldTint, cell: field.cell,
-                                       info: .init(source: source, detail: column?.note)))
+                                       isNull: value == nil, enumName: known.flatMap { $0.name == $0.value ? nil : $0.name },
+                                       tint: fieldTint, cell: field.cell,
+                                       info: .init(source: source, detail: column?.note ?? meaning)))
                 case .one(let nested):
                     if let nested {
                         emit(nested, key: field.name, via: field.key, depth: depth + 1, path: fieldPath, comma: false)
@@ -376,11 +384,12 @@ private struct SimDataTreeRow: View {
         }
         if let type = line.type { run(type, line.tint, bold: true) }
         if let value = line.value { run(value, line.isNull ? Theme.faint : Theme.text, italic: line.isNull) }
+        if let name = line.enumName { run(" · \(name)", Theme.faint) }
         if !line.punctuation.isEmpty { run(line.punctuation, Theme.faint) }
         return result
     }
 
     private var accessibility: String {
-        [line.key, line.type, line.value].compactMap { $0 }.joined(separator: " ")
+        [line.key, line.type, line.value, line.enumName].compactMap { $0 }.joined(separator: " ")
     }
 }

@@ -24,6 +24,7 @@ struct SimDataGrid: View {
 
     @State private var hovered: SimCellRef?
     @State private var moreRight = false
+    @Environment(\.simEnums) private var enums
 
     var body: some View {
         Group {
@@ -79,7 +80,7 @@ struct SimDataGrid: View {
         }
         .padding(.horizontal, 8)
         .frame(height: Self.rowHeight)
-        .frame(maxWidth: .infinity, alignment: SimDataText.isNumeric(column) ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: SimDataText.isNumeric(column) && column.enumRef == nil ? .trailing : .leading)
         .background(Theme.raised)
         .overlay(alignment: .trailing) { if !last { Rectangle().fill(Theme.border).frame(width: 1) } }
     }
@@ -95,8 +96,11 @@ struct SimDataGrid: View {
         let focused = focus == cell
         let dimmed = dimsOthers && join != nil && !joined
         let tint: Color = focused || lit ? Theme.accent : dimmed ? Theme.muted.opacity(0.7) : Theme.text
+        let enumDef = enums?.index.enumOf(ref, column: column.name)
         let content = HStack(spacing: 0) {
-            if let value {
+            if let value, let enumDef {
+                SimEnumValueLabel(literal: value, shown: display(value), def: enumDef, tint: tint, weight: focused ? .semibold : .regular)
+            } else if let value {
                 Text(display(value))
                     .font(Theme.mono(11, focused ? .semibold : .regular))
                     .foregroundStyle(tint)
@@ -109,7 +113,7 @@ struct SimDataGrid: View {
         .fixedSize()
         .padding(.horizontal, 8)
         .frame(height: Self.rowHeight)
-        .frame(maxWidth: .infinity, alignment: SimDataText.isNumeric(column) ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: SimDataText.isNumeric(column) && column.enumRef == nil ? .trailing : .leading)
         .background(origin ? Theme.accent.opacity(0.15) : joined ? Theme.accent.opacity(0.07) : hovered == cell && isKey ? Theme.hover : .clear)
         .overlay(alignment: .trailing) { if !last { Rectangle().fill(Theme.border).frame(width: 1) } }
         .overlay(alignment: .leading) {
@@ -123,6 +127,10 @@ struct SimDataGrid: View {
                     .onHover { hovered = $0 ? cell : (hovered == cell ? nil : hovered) }
                     .accessibilityLabel("\(column.name) \(value ?? "NULL")")
                     .accessibilityHint(focused ? "Clears the joined rows" : "Shows the rows this row joins to")
+            } else if let enums, let enumDef, let value {
+                content
+                    .simEnumHover(enums, enumID: enumDef.id, literal: value, key: "cell.\(ref.id).\(row).\(column.name)")
+                    .accessibilityLabel("\(column.name) \(value) \(enumDef.value(value)?.name ?? "")")
             } else {
                 content.accessibilityLabel("\(column.name) \(value ?? "NULL")")
             }
@@ -146,8 +154,11 @@ struct SimDataGrid: View {
         schema.columns.reduce(0) { total, column in
             let glyphs = CGFloat((column.pk ? 1 : 0) + (column.ref != nil ? 1 : 0)) * 11
             let header = CGFloat(column.name.count) * 6.0 + glyphs
+            let enumDef = enums?.index.enumOf(ref, column: column.name)
             let values = rows.map { row in
-                schema.simDataValue(row, column.name).map { CGFloat(display($0).count) * 6.6 } ?? 4 * 6.3
+                schema.simDataValue(row, column.name).map { value in
+                    CGFloat(enumDef.map { SimEnumValueLabel.estimatedCharacters(value, shown: display(value), def: $0) } ?? display(value).count) * 6.6
+                } ?? 4 * 6.3
             }.max() ?? 0
             return total + max(header, values) + 17
         }

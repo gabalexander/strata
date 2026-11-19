@@ -70,7 +70,8 @@ MainActor.assumeIsolated {
     do {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
-        let scenes = (shellScenes() + simScenes() + opsScenes() + pressureScenes() + dataScenes() + notesScenes() + manifestScenes()).filter { scene in
+        let scenes = (shellScenes() + simScenes() + opsScenes() + pressureScenes() + dataScenes() + notesScenes() + manifestScenes()
+            + enumScenes()).filter { scene in
             filter.map { scene.name.contains($0) } ?? true
         }
         guard !scenes.isEmpty else { throw SnapshotError.noScenes(filter ?? "") }

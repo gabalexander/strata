@@ -174,6 +174,7 @@ struct SimDataTableView: View {
                     Text(column.name).font(Theme.mono(11.5, column.pk ? .semibold : .regular)).foregroundStyle(Theme.text)
                         .lineLimit(1).layoutPriority(1)
                     if let type = column.type { Text(type).font(Theme.mono(10.5)).foregroundStyle(Theme.muted).lineLimit(1) }
+                    if let id = column.enumRef { SimEnumColumnChip(enumID: id) }
                     Spacer(minLength: 4)
                     if column.unique { flag("unique") }
                     if let nullable = column.nullable { flag(nullable ? "null" : "not null") }

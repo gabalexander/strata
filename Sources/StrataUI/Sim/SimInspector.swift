@@ -45,6 +45,7 @@ struct SimInspector: View {
             .overlay { SimOpsDetailHost(model: model, sim: sim, terms: terms, actions: actions, selection: selection, select: select, pulse: pulse, still: still) }
         }
         .background(Theme.surface)
+        .simEnumScope(model: model, sim: sim)
     }
 
     private func live<Content: View>(@ViewBuilder _ content: @escaping () -> Content) -> some View {
@@ -109,6 +110,7 @@ struct SimInspector: View {
                     SimSection(title: "Actions") { SimActionButtons(items: items) }
                 }
             }
+            SimEnumInspectorRow(model: model, sim: sim, node: node)
             SimDataSections(model: model, sim: sim, terms: terms, node: node, selection: selection, select: select, pulse: pulse, still: still)
             SimOpsSection(model: model, sim: sim, actions: actions, node: node, selection: selection, pulse: pulse, still: still)
             if node.kind != .note {
