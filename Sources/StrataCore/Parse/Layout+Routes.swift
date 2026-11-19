@@ -450,28 +450,36 @@ public enum EdgeRouter {
             return CGPoint(x: points[i - 1].x + (points[i].x - points[i - 1].x) * t, y: points[i - 1].y + (points[i].y - points[i - 1].y) * t)
         }
 
-        var best: (score: CGFloat, center: CGPoint, width: CGFloat)?
+        // Cheap terms first (distance from the preferred spot, truncation, cards, labels) for spots
+        // every 4 pt; then other lines only for the dozen best.
+        var candidates: [(score: CGFloat, center: CGPoint, width: CGFloat)] = []
         let margin: CGFloat = min(14, total / 4)
         var s = margin
         while s <= total - margin {
             let p = point(at: s)
-            // The widest pill here that stays off cards.
             var left = width / 2, right = width / 2
             for r in obstacles where r.minY < p.y + 10 && r.maxY > p.y - 10 {
                 if r.maxX <= p.x + 1 { left = min(left, p.x - r.maxX - 4) }
                 else if r.minX >= p.x - 1 { right = min(right, r.minX - p.x - 4) }
                 else { left = -1; right = -1 }
             }
-            let fit = max(0, min(left, right)) * 2
-            var score = abs(s - preferred) * 0.6 + (width - min(width, fit)) * 12
+            let fit = min(width, max(0, min(left, right)) * 2)
+            var score = abs(s - preferred) * 0.6 + (width - fit) * 12
             if fit < min(width, 34) { score += 2_000 }
-            let rect = CGRect(x: p.x - min(width, fit) / 2, y: p.y - 8, width: min(width, fit), height: 16)
+            let rect = CGRect(x: p.x - fit / 2, y: p.y - 8, width: fit, height: 16)
             for other in placed where other.insetBy(dx: -3, dy: -2).intersects(rect) { score += 900 }
             for label in labels where label.intersects(rect) { score += 300 }
-            let pill = rect.insetBy(dx: -2, dy: -1)
+            candidates.append((score, p, fit))
+            s += 4
+        }
+        candidates.sort { ($0.score, $0.center.x, $0.center.y) < ($1.score, $1.center.x, $1.center.y) }
+        var best: (score: CGFloat, center: CGPoint, width: CGFloat)?
+        for candidate in candidates.prefix(12) {
+            var score = candidate.score
+            let pill = CGRect(x: candidate.center.x - candidate.width / 2 - 2, y: candidate.center.y - 9,
+                              width: candidate.width + 4, height: 18)
             for (line, box) in zip(lines, boxes) where box.intersects(pill) && LayoutQuality.polyline(line, crosses: pill) { score += 45 }
-            if best.map({ score < $0.score }) ?? true { best = (score, p, min(width, fit)) }
-            s += 3
+            if best.map({ score < $0.score }) ?? true { best = (score, candidate.center, candidate.width) }
         }
         guard let best else { return }
         route.label = best.center

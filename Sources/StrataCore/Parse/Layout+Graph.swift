@@ -65,6 +65,7 @@ struct LayeredGraph {
     var chains: [[Int]] = []       // per link: vertices from tail to head
     var layers: [[Int]] = []       // per layer: vertices top to bottom
     var issues: [DiagramLayout.Issue] = []
+    var position: [Int] = []       // index of each vertex within its layer, kept current by ordering
 
     init(level: Level) {
         self.level = level
@@ -358,7 +359,7 @@ struct LayeredGraph {
         // spans its layer, instead of detouring around it: only nodes must keep out of other groups.
         func dummyGroup(_ tail: Int, _ head: Int, _ l: Int) -> Int? {
             let common = commonGroup(nodeGroup[tail], nodeGroup[head])
-            for end in [head, tail] {
+            for end in [tail, head] {
                 guard let deepest = nodeGroup[end] else { continue }
                 for group in groupPath[deepest].reversed() where cover[group]?.contains(l) == true {
                     if group == common || common.map({ groupPath[group].contains($0) }) ?? true { return group }
@@ -406,6 +407,12 @@ struct LayeredGraph {
         }
         layers = Array(repeating: [], count: (layer.max() ?? 0) + 1)
         for (index, vertex) in vertices.enumerated() { layers[vertex.layer].append(index) }
+        position = Array(repeating: 0, count: vertices.count)
+        for l in layers.indices { reindex(l) }
+    }
+
+    mutating func reindex(_ l: Int) {
+        for (index, v) in layers[l].enumerated() { position[v] = index }
     }
 
     /// Groups that have at least one real member, directly or through a nested group.
