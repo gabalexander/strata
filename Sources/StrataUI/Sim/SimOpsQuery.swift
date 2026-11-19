@@ -41,11 +41,12 @@ enum SimOpsQueryCache {
     }
 }
 
-/// Which ops show their query as written instead of formatted, per session.
+/// Which queries show as written instead of formatted, per session: ops by `OpRef`, How it works steps
+/// by their own key.
 @MainActor
 @Observable
 final class SimOpsQueryMode {
-    private(set) var raw: Set<OpRef> = []
+    private(set) var raw: Set<AnyHashable> = []
 
     private static let stores = NSMapTable<Simulation, SimOpsQueryMode>.weakToStrongObjects()
 
@@ -56,7 +57,7 @@ final class SimOpsQueryMode {
         return store
     }
 
-    func setRaw(_ ref: OpRef, _ on: Bool) {
+    func setRaw(_ ref: AnyHashable, _ on: Bool) {
         if on { raw.insert(ref) } else { raw.remove(ref) }
     }
 }
@@ -68,7 +69,8 @@ struct SimOpsQueryBlock: View {
     let title: String
     let source: String
     let formatted: SimOpsQueryCache.Formatted
-    let ref: OpRef
+    /// What the raw / formatted choice is remembered under: the op, or the How it works step.
+    let ref: AnyHashable
     let sim: Simulation
     let overlays: Overlays
     var still = false

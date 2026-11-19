@@ -88,6 +88,7 @@ nodes:
             reply: OK
             at: 0s
             state: [ { key: "roster:inst:a", value: "10.0.1.7:7070", ttl: 15s } ]
+            code: internal/roster/roster.go:52
             note: "`NX` refuses to overwrite a live key, so two processes can't both claim the name `a`. `PX 15000` makes Valkey delete the key 15 000 ms after this write unless something renews it."
           - id: list
             from: a

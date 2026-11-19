@@ -15,6 +15,10 @@ import StrataCore
 /// `inside:`), `STRATA_SNAP_STAGE=1` hides the dock and inspector so the stage fills the frame, and
 /// `STRATA_SNAP_TIDY=1` runs "Tidy layout" first. `STRATA_SNAP_DIRECTION=down` (or `right`) flips the level
 /// with the stage's vertical/horizontal switch, and `STRATA_SNAP_SIZE=2400x1600` renders a larger frame.
+/// `STRATA_SNAP_HOW=node/mechanism` (or `node/op/mechanism`) opens that How it works player, paused at
+/// `STRATA_SNAP_HOW_STEP` (a step id, or its 1-based number in the path; the start by default) on the
+/// path of `STRATA_SNAP_HOW_BRANCH`, with that step's detail open (`STRATA_SNAP_HOW_DETAIL=0` keeps the
+/// state panel instead).
 @MainActor func manifestScenes() -> [Scene] {
     let env = ProcessInfo.processInfo.environment
     guard let path = env["STRATA_SNAP_MANIFEST"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
@@ -31,8 +35,11 @@ import StrataCore
     }
     let direction = env["STRATA_SNAP_DIRECTION"].flatMap(FlowDirection.init(rawValue:))
     let name = (["manifest-\(manifest.id)"] + levelPath + (env["STRATA_SNAP_TIDY"] == "1" ? ["tidy"] : [])
-                + (direction.map { [$0.rawValue] } ?? []))
-        .joined(separator: "-").replacingOccurrences(of: "#", with: "_")
+                + (direction.map { [$0.rawValue] } ?? [])
+                + (env["STRATA_SNAP_HOW"].map { ["how", $0, env["STRATA_SNAP_HOW_BRANCH"] ?? "", env["STRATA_SNAP_HOW_STEP"] ?? "",
+                                                 env["STRATA_SNAP_HOW_DETAIL"] == "0" ? "state" : ""] } ?? [])
+                    .filter { !$0.isEmpty })
+        .joined(separator: "-").replacingOccurrences(of: "#", with: "_").replacingOccurrences(of: "/", with: "_")
     // STRATA_SNAP_SIZE=WxH sets both; STRATA_SNAP_H only the height.
     let height = Double(env["STRATA_SNAP_H"] ?? "").map { max(400, min(4000, $0)) } ?? 880
     let dimensions = (env["STRATA_SNAP_SIZE"] ?? "").split(separator: "x").compactMap { Double($0) }
@@ -64,6 +71,11 @@ import StrataCore
             SimStageSnapshot.direct(sim, direction)
         }
         if env["STRATA_SNAP_TIDY"] == "1" { SimStageSnapshot.tidy(sim) }
+        if let how = env["STRATA_SNAP_HOW"]?.split(separator: "/").map(String.init), how.count >= 2 {
+            SimHowSnapshot.open(sim, node: how[0], op: how.count > 2 ? how[1] : nil, mechanism: how[how.count - 1],
+                                branch: env["STRATA_SNAP_HOW_BRANCH"], step: env["STRATA_SNAP_HOW_STEP"] ?? "0")
+            if env["STRATA_SNAP_HOW_STEP"] != nil, env["STRATA_SNAP_HOW_DETAIL"] != "0" { SimHowSnapshot.inspect(sim) }
+        }
         let tab = env["STRATA_SNAP_DOCK"].flatMap { tabs[$0] } ?? (env["STRATA_SNAP_SCENARIO"] == nil ? .controls : .scenarios)
         let options = SimSnapshotOptions(selectedNode: selected, dockTab: tab, previewMenu: false)
         return AnyView(SimScreen(model: model, id: manifest.id, path: levelPath, snapshot: options))

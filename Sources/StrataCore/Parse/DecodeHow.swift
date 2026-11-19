@@ -46,7 +46,7 @@ extension Decode {
 
     /// A step of the main sequence or of a branch. `defaultID` names it when `id` is left out.
     static func mechStep(_ field: Field, defaultID: String) -> MechStep? {
-        guard field.mapping(["id", "from", "to", "label", "command", "reply", "note", "at", "state"]) else { return nil }
+        guard field.mapping(["id", "from", "to", "label", "command", "reply", "note", "at", "state", "code"]) else { return nil }
         let id = field["id"].id() ?? defaultID
         let from = field["from"].id(required: true)
         let to = field["to"].id(required: true)
@@ -60,6 +60,7 @@ extension Decode {
         step.note = field["note"].text()
         step.at = field["at"].duration()
         step.state = field["state"].items().compactMap(stateEntry)
+        step.code = field["code"].textList(orOne: true)
         return step
     }
 

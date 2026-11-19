@@ -46,6 +46,7 @@ private func specFence(containing marker: String) throws -> String {
             check(roster.steps[0].state == [StateEntry(key: "roster:inst:a", value: "1", ttl: 15)], "state with ttl")
             check(roster.steps[2].note?.contains("Two heartbeats") == true, "note")
             check(roster.code == ["internal/roster/roster.go:40"], "code")
+            check(roster.steps[0].code == ["internal/roster/roster.go:52"] && roster.steps[1].code.isEmpty, "a step's code")
             let crash = roster.branches.first
             check(crash?.id == "crash" && crash?.after == "hb1" && crash?.steps.map(\.id) == ["expire", "take"], "branch")
             check(crash?.steps[0].state == [StateEntry(key: "roster:inst:a", value: nil)], "value: null deletes")

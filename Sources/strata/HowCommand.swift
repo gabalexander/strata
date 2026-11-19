@@ -105,6 +105,7 @@ struct HowTranscript {
             }
             lines.append(indent + "state: " + state(frame))
             if let note = frame.step.note { lines.append(indent + "note: " + flat(note)) }
+            if !frame.step.code.isEmpty { lines.append(indent + "code: " + frame.step.code.joined(separator: ", ")) }
         }
         return lines
     }

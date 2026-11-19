@@ -54,7 +54,8 @@ private struct SimHowCard: View {
                     .padding(.vertical, 6)
                     .background(Theme.bg.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(hovered ? Theme.accent.opacity(0.4) : Theme.border))
-                    .overlay {
+                    .overlay(alignment: .top) {
+                        // Below the participants' names, so it never covers one.
                         Image(systemName: "play.fill")
                             .font(Theme.ui(13, .bold)).foregroundStyle(Theme.bg)
                             .frame(width: 34, height: 34)
@@ -62,6 +63,7 @@ private struct SimHowCard: View {
                             .shadow(color: .black.opacity(0.45), radius: 6, y: 2)
                             .opacity(hovered ? 1 : 0.92)
                             .scaleEffect(hovered ? 1.06 : 1)
+                            .padding(.top, 20)
                     }
                     .contentShape(Rectangle())
             }
@@ -97,6 +99,7 @@ private struct SimHowCard: View {
 @MainActor
 struct SimHowThumbnail: View {
     let mechanism: Mechanism
+    static let labelFont = NSFont.systemFont(ofSize: 9, weight: .medium)
 
     var body: some View {
         Canvas { context, size in
@@ -108,13 +111,22 @@ struct SimHowThumbnail: View {
                 xs[participant.id] = participants.count == 1 ? size.width / 2
                     : left + (right - left) * CGFloat(index) / CGFloat(participants.count - 1)
             }
+            // Each name gets the room up to halfway to its neighbours, cut short with an ellipsis (or left
+            // out when there is hardly any room), so names never run into each other.
+            let spacing = participants.count > 1 ? (right - left) / CGFloat(participants.count - 1) : size.width
             for (index, participant) in participants.enumerated() {
                 guard let x = xs[participant.id] else { continue }
                 var line = Path()
                 line.move(to: CGPoint(x: x, y: 13))
                 line.addLine(to: CGPoint(x: x, y: size.height))
                 context.stroke(line, with: .color(Theme.borderStrong), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
-                let label = context.resolve(Text(participant.label).font(Theme.ui(9, .medium)).foregroundStyle(Theme.muted))
+                let end = participants.count > 1 && (index == 0 || index == participants.count - 1)
+                let room = participants.count == 1 ? size.width - 8 : end ? spacing / 2 + 5 : spacing - 6
+                guard room >= 16 else { continue }
+                let name = TextFit.ellipsize(participant.label, width: Double(room)) {
+                    Double(SimHowMeasure.width($0, SimHowThumbnail.labelFont))
+                }
+                let label = context.resolve(Text(name).font(Theme.ui(9, .medium)).foregroundStyle(Theme.muted))
                 let anchor: UnitPoint = index == 0 && participants.count > 1 ? .leading : index == participants.count - 1 && participants.count > 1 ? .trailing : .center
                 let shift: CGFloat = anchor == .leading ? -8 : anchor == .trailing ? 8 : 0
                 context.draw(label, at: CGPoint(x: x + shift, y: 6), anchor: anchor)
@@ -165,9 +177,10 @@ struct SimHowThumbnail: View {
         return offsets.map { 20 + $0 * scale }
     }
 
+    /// At least room for the play button under the names; at most 110.
     static func height(_ mechanism: Mechanism) -> CGFloat {
         let rows = rows(Array(mechanism.steps.prefix(12)), height: .infinity)
-        return min(110, (rows.last ?? 20) + 6)
+        return min(110, max(44, (rows.last ?? 20) + 6))
     }
 }
 

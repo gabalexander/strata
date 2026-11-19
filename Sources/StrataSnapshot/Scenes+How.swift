@@ -49,6 +49,43 @@ import StrataCore
         howScene("how-checkout-relay", size: size, manifest: "checkout", path: ["orders"], selected: "relay") { sim in
             SimHowSnapshot.open(sim, node: "relay", mechanism: "relay-cycle", branch: "crash", step: 5, progress: 0.8)
         },
+        // The step detail: a click on a step shows all of it beside the diagram.
+        howScene("how-step-detail", size: size, selected: "scheduler") { sim in
+            SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", step: 1)
+            SimHowSnapshot.inspect(sim)
+        },
+        howScene("how-step-detail-start", size: size, selected: "scheduler") { sim in
+            SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", step: 0)
+            SimHowSnapshot.inspect(sim)
+        },
+        howScene("how-step-detail-fcall", size: size, selected: "scheduler") { sim in
+            SimHowSnapshot.open(sim, node: "scheduler", op: "fenced-write", mechanism: "fence", step: 1)
+            SimHowSnapshot.inspect(sim)
+        },
+        howScene("how-step-detail-sql", size: size, manifest: "checkout", path: ["orders"], selected: "relay") { sim in
+            SimHowSnapshot.open(sim, node: "relay", mechanism: "relay-cycle", step: 1)
+            SimHowSnapshot.inspect(sim)
+        },
+        // Long keys, multi-line SQL, six participants and long labels (a synthetic sweep), wide and narrow.
+        howScene("how-long-detail", size: size, manifest: longStepsID, selected: "sweeper") { sim in
+            SimHowSnapshot.open(sim, node: "sweeper", mechanism: "sweep", step: "lock")
+            SimHowSnapshot.inspect(sim)
+        },
+        howScene("how-long-detail-sql-narrow", size: CGSize(width: 1100, height: 800), manifest: longStepsID, selected: "sweeper") { sim in
+            SimHowSnapshot.open(sim, node: "sweeper", mechanism: "sweep", step: "list")
+            SimHowSnapshot.inspect(sim)
+        },
+        howScene("how-long-state-narrow", size: CGSize(width: 1000, height: 760), manifest: longStepsID, selected: "sweeper") { sim in
+            SimHowSnapshot.open(sim, node: "sweeper", mechanism: "sweep", step: "lock")
+        },
+        howScene("how-long-hover", size: size, manifest: longStepsID, selected: "sweeper") { sim in
+            SimHowSnapshot.open(sim, node: "sweeper", mechanism: "sweep", step: "lose")
+            SimHowSnapshot.hover(sim, step: 4)
+        },
+        howScene("how-long-branch", size: size, manifest: longStepsID, selected: "sweeper") { sim in
+            SimHowSnapshot.open(sim, node: "sweeper", mechanism: "sweep", branch: "valkey-down", step: 2, progress: 0.5)
+        },
+        howDetailKeysScene(size: size),
     ]
 }
 
@@ -96,11 +133,28 @@ import StrataCore
     }
 }
 
+/// The real window: → twice, Return opens the detail on step 2, then → moves it along to step 3.
+@MainActor private func howDetailKeysScene(size: CGSize) -> Scene {
+    Scene(name: "how-player-detail-keys", size: size, hosted: true) {
+        let manifest = howManifest("valkey-roster")
+        let model = howModel(manifest)
+        model.open(.sim(manifest.id, path: []))
+        model.sidebarVisible = false
+        let sim = Simulation(manifest: manifest)
+        sim.playing = false
+        model.sessions[AppModel.sessionKey(manifest.id, [])] = sim
+        SimHowSnapshot.open(sim, node: "scheduler", mechanism: "roster", step: 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { howPress([124, 124, 36, 124]) }
+        return AnyView(RootView(model: model, fixtureEntries: model.library.entries, fixtureNotes: [:]))
+    }
+}
+
+/// Arrow keys (123, 124) and Return (36), sent through the window like typed keys.
 @MainActor private func howPress(_ keys: [UInt16]) {
     guard let window = NSApp.windows.last else { return }
     for key in keys {
-        let arrow = String(UnicodeScalar(key == 124 ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)!)
-        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
+        let arrow = key == 36 ? "\r" : String(UnicodeScalar(key == 124 ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)!)
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: key == 36 ? [] : [.numericPad, .function],
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                            context: nil, characters: arrow, charactersIgnoringModifiers: arrow,
                                            isARepeat: false, keyCode: key) else { continue }
@@ -144,7 +198,15 @@ private func formulaSamples() -> [(title: String, formula: Formula)] {
     ]
 }
 
+private let longStepsID = "how-long-steps"
+
 private func howManifest(_ id: String) -> Manifest {
+    if id == longStepsID {
+        guard let manifest = ManifestParser.parse(longStepsSource, source: .file(URL(fileURLWithPath: "/snapshots/how-long-steps.yaml"))).0 else {
+            fatalError("the long steps fixture does not parse")
+        }
+        return manifest
+    }
     guard let url = StrataResources.url("Examples/\(id).yaml"), let text = try? String(contentsOf: url, encoding: .utf8),
           let manifest = ManifestParser.parse(text, source: .bundled(url)).0 else { fatalError("missing example \(id)") }
     return manifest
@@ -154,3 +216,127 @@ private func howManifest(_ id: String) -> Manifest {
     AppModel(library: Library(manifests: [manifest]),
              vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
 }
+
+/// A synthetic sweep with the kind of steps that used to collide: six participants, keys of 60+
+/// characters, multi-line SQL with a subquery, a gRPC call, a JSON payload, long labels and branches.
+private let longStepsSource = #"""
+strata: 1
+id: how-long-steps
+title: Nightly sweep
+category: How it works
+nodes:
+  - id: sweeper
+    kind: service
+    label: sweeper
+    tech: Go
+    how:
+      - id: sweep
+        title: The nightly sweep, its lock and its claims
+        summary: |
+          Every minute both sweeper pods try one Valkey lock. Whoever gets it closes the jobs whose
+          deadline passed and tells the broker; the other pod waits for the next minute. Nobody deletes
+          the lock: its 15 s expiry frees it.
+        code: internal/sweep/controller.go:120
+        participants:
+          - { id: a, label: sweeper pod A, node: sweeper }
+          - { id: b, label: sweeper pod B, node: sweeper }
+          - { id: v, label: Valkey, node: cache }
+          - { id: pg, label: jobs Postgres, node: db }
+          - { id: reg, label: owner-registry, node: owners }
+          - { id: bus, label: event broker, node: broker }
+        initial:
+          - { key: "app:jobs-scheduler-eu:locks:generation", value: "1800000000000000000" }
+          - { key: "app:jobs-scheduler-eu:daily:full-sweep:done:2026-11-19", value: "1", ttl: 780m }
+        steps:
+          - { id: epoch, from: a, to: v, label: A checks the lock store's generation, command: "GET app:jobs-scheduler-eu:locks:generation",
+              reply: '"1800000000000000000"', at: 0s }
+          - id: lock
+            from: a
+            to: v
+            label: A takes the sweep lock for this minute
+            command: "SET app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19 1801234500000 NX PX 15000"
+            reply: OK
+            at: 1ms
+            state: [ { key: "app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19", value: "1801234500000", ttl: 15s } ]
+            note: "The value records when A took it. `NX` lets only one pod win; `PX 15000` frees the lock by itself if A dies holding it."
+            code: internal/sweep/lock.go:88
+          - { id: lose, from: b, to: v, label: B tries the same minute and gets nothing,
+              command: "SET app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19 1801234500004 NX PX 15000", reply: (nil), at: 4ms }
+          - id: list
+            from: a
+            to: pg
+            label: find the jobs still running after their deadline (last 6 hours, full pass)
+            command: |
+              SELECT j.id, j.created_at, l.worker_id, l.expires_at IS NULL
+              FROM public.jobs j
+              JOIN public.leases l ON l.job_id = j.id
+              WHERE j.state = ?
+                AND j.created_at >= ?
+                AND EXISTS (SELECT 1 FROM job_groups g WHERE g.id = j.group_id AND g.shard < (SELECT shard_limit FROM public.sweep_config))
+              ORDER BY j.updated_at
+              LIMIT ?
+            reply: "2 rows: job 4120 (worker w-3, lease expired), job 4121 (worker w-9, lease expired)"
+            at: 10ms
+            note: "Parameters: state running, the cutoff six hours back, and a page of 500."
+          - { id: owners, from: a, to: reg, label: ask who holds each job, command: "OwnerRegistry/GetOwners{job_ids: [4120, 4121], include_released: false}",
+              reply: "{ owners: [WORKER_A, WORKER_B] }", at: 14ms }
+          - id: close
+            from: a
+            to: pg
+            label: mark 4120 closed, drop its lease
+            command: |
+              BEGIN;
+              UPDATE public.jobs SET state = ?, closed_at = now() WHERE id = ? AND state = ?;
+              UPDATE public.leases SET released_at = now() WHERE job_id = ?;
+              COMMIT;
+            reply: UPDATE 1, UPDATE 1, COMMIT
+            at: 20ms
+          - { id: publish, from: a, to: bus, label: announce the closed job,
+              command: 'basic.publish exchange=jobs routing_key=jobs.closed.v1 {"job_id": 4120, "state": "closed", "reason": "deadline"}',
+              reply: basic.ack, at: 25ms }
+          - { id: lapse, from: v, to: v, label: "the lock's 15 s run out", at: 15s,
+              state: [ { key: "app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19", value: null } ] }
+        branches:
+          - id: valkey-down
+            label: Valkey does not answer, so nobody sweeps this minute
+            after: epoch
+            steps:
+              - { from: a, to: v, label: SET waits a second and fails, command: "SET app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19 1801234500000 NX PX 15000",
+                  reply: "(error) i/o timeout", at: 1s }
+              - { from: a, to: a, label: nothing swept this minute, at: 1s }
+          - id: race
+            label: A worker finishes the job during the sweep
+            after: list
+            steps:
+              - { from: a, to: pg, label: the guarded update finds the job closed, command: "UPDATE public.jobs SET state = ? WHERE id = ? AND state = ?", reply: UPDATE 0, at: 20ms }
+          - id: crash
+            label: Pod A dies halfway
+            after: close
+            steps:
+              - { from: a, to: a, label: A dies, at: 1s }
+          - id: owners-down
+            label: owner-registry is down
+            after: list
+            steps:
+              - { from: a, to: reg, label: GetOwners fails, command: "OwnerRegistry/GetOwners{job_ids: [4120, 4121]}", reply: UNAVAILABLE, at: 14ms }
+          - id: publish-fails
+            label: The broker refuses the closed job's event
+            after: close
+            steps:
+              - { from: a, to: bus, label: the publish is nacked, command: "basic.publish exchange=jobs routing_key=jobs.closed.v1", reply: basic.nack, at: 25ms }
+          - id: slow
+            label: The sweep runs past the lock's 15 s
+            after: lock
+            steps:
+              - { from: v, to: v, label: the lock lapses mid-sweep, at: 15s,
+                  state: [ { key: "app:jobs-scheduler-eu:locks:sweep:nightly-full-sweep:2026-11-19", value: null } ] }
+  - { id: cache, kind: cache, label: Valkey, tech: Valkey 8 }
+  - { id: db, kind: database, label: jobs db, tech: Postgres 16 }
+  - { id: owners, kind: service, label: owner-registry, tech: gRPC }
+  - { id: broker, kind: queue, label: event broker, tech: RabbitMQ }
+edges:
+  - { from: sweeper, to: cache }
+  - { from: sweeper, to: db }
+  - { from: sweeper, to: owners }
+  - { from: sweeper, to: broker }
+"""#

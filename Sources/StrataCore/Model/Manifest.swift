@@ -654,6 +654,7 @@ public struct MechStep: Sendable, Identifiable {
     public var note: String?             // markdown, shown beside the step
     public var at: Double?               // seconds since the start (for timelines like heartbeats)
     public var state: [StateEntry] = []  // state changes this step causes
+    public var code: [String] = []       // where the code takes this step, e.g. "internal/lock.go:88"
     public var line: Int?
     public init(id: String, from: String, to: String, label: String) { self.id = id; self.from = from; self.to = to; self.label = label }
 }

@@ -55,14 +55,16 @@ final class SimHowState {
         player = nil
     }
 
-    /// Escape closes; Space plays or pauses; ← and → step; Home restarts. False when no player is open
-    /// or the key isn't one of these.
+    /// Escape closes the step detail, then the player; Return opens or closes the step detail; Space
+    /// plays or pauses; ← and → step (the detail moves along); Home restarts. False when no player is
+    /// open or the key isn't one of these.
     func key(_ event: NSEvent) -> Bool {
         guard let player else { return false }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         guard flags.isEmpty else { return false }
         switch event.keyCode {
-        case 53: close()
+        case 53: if player.inspecting { player.closeInspector() } else { close() }
+        case 36, 76: if !event.isARepeat { player.inspecting ? player.closeInspector() : player.inspect(player.shown) }
         case 49: if !event.isARepeat { player.toggle() }
         case 123: player.step(-1)
         case 124: player.step(1)
@@ -187,6 +189,8 @@ final class SimHowPlayer {
     private(set) var anchor: Date?
     /// The step the notes and the step list show. Updated when playback crosses a step, never per frame.
     private(set) var shown: Int = -1
+    /// The step detail is open beside the diagram. It shows `shown`, so it moves with stepping and playback.
+    private(set) var inspecting = false
     var speed: Double = 1 {
         didSet { if let anchor { cursor = schedule.advance(cursor, by: Date().timeIntervalSince(anchor) * oldValue); self.anchor = Date() } }
     }
@@ -252,6 +256,17 @@ final class SimHowPlayer {
         shown = schedule.current(at: clamped)
     }
 
+    /// Opens the step detail on step `index` (-1: the start), paused there.
+    func inspect(_ index: Int) {
+        anchor = nil
+        seek(to: Double(index))
+        inspecting = true
+    }
+
+    func closeInspector() {
+        if inspecting { inspecting = false }
+    }
+
     func restart() {
         seek(to: -1)
         if anchor == nil { play() }
@@ -293,6 +308,30 @@ public enum SimHowSnapshot {
         state.player?.seek(to: Double(step - 1) + progress)
     }
 
+    /// Opens the player paused at a step named by its id, or by its 1-based number in the path (0: the start).
+    public static func open(_ sim: Simulation, node: String, op: String? = nil, mechanism: String, branch: String? = nil,
+                            step: String) {
+        open(sim, node: node, op: op, mechanism: mechanism, branch: branch, step: 0)
+        guard let player = SimHowState.of(sim).player else { return }
+        let number = Int(step) ?? (player.playback.frames.firstIndex { $0.step.id == step }.map { $0 + 1 } ?? 0)
+        player.seek(to: Double(number - 1))
+    }
+
+    /// Rows drawn as hovered when a player's diagram first appears, by player.
+    static var hovered: [ObjectIdentifier: Int] = [:]
+
+    /// Draws the open player's row `step` (1-based) as the pointer resting on it.
+    public static func hover(_ sim: Simulation, step: Int) {
+        guard let player = SimHowState.of(sim).player else { return }
+        hovered[ObjectIdentifier(player)] = step - 1
+    }
+
+    /// Opens the open player's step detail on the step it shows, as a click on that step would.
+    public static func inspect(_ sim: Simulation) {
+        guard let player = SimHowState.of(sim).player else { return }
+        player.inspect(player.shown)
+    }
+
     /// Shows the formula card of `node` as a hover after the delay would, once the stage is laid out.
     public static func hoverFormula(_ sim: Simulation, node: String) {
         SimFormulaStage.requested[ObjectIdentifier(sim)] = node
@@ -308,7 +347,7 @@ public enum SimHowSnapshot {
         for key in keys where !order.contains(key) { order.append(key) }
         let palette = [Theme.token(5), Theme.token(1), Theme.token(3), Theme.token(2), Theme.token(4), Theme.token(6)]
         let colors = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, palette[$0 % palette.count]) })
-        return AnyView(SimHowStatePanel(player: player, keyColors: colors, still: true)
+        return AnyView(SimHowStatePanel(player: player, keyColors: colors, width: 330, still: true)
             .background(Theme.surface)
             .foregroundStyle(Theme.text))
     }

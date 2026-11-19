@@ -142,9 +142,66 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
     the steps that name it, else its performer or every edge into its peer.
   - Clicking a row opens the op detail over the inspector; Back or Esc returns.
 
+## How it works
+
+A mechanism (docs/manifest.md, How it works) plays in a panel over the stage column and the dock,
+inset 14 pt, on `Theme.surface` with radius 12. From the top:
+
+- **Header:** the title (up to two lines), the owner, the stats (dropped first when narrow), code
+  buttons, `esc` and Close.
+- **Path:** the main sequence and one chip per branch, with where each leaves on one line when they
+  fit, else without that on up to two lines; the branches past those wait behind a "+N more" chip
+  whose in-window menu lists them (the chosen path always shows).
+- **Sequence diagram** on the left, the **state panel** or the **step detail** on the right.
+- **Transport:** restart, step back, play or pause, step forward, the scrubber, speed.
+- **Step strip:** the current step's label, who talks to whom and its note (three lines at most),
+  with a Step details button. It steps aside while the step detail is open.
+
+Nothing in the player draws over anything else. Layout math makes room instead of shrinking type below
+the 11–13 pt sizes:
+
+- **Participants:** header boxes spread evenly. When neighbours don't fit side by side, boxes alternate
+  between two tiers with a short lifeline down from the upper one. When even that is tight, boxes go
+  compact: a tinted edge for the kind icon, and the name on up to two lines in place of the subtitle.
+  Past that, names end in an ellipsis.
+- **Rows:** text is measured once per path and width, never per frame. A label wraps onto a second line
+  and its row grows to fit; past two lines it ends in an ellipsis. `command → reply` shares one line
+  when both fit, else the reply gets its own line, so a long command never hides it. A command is
+  shortened to one line: SQL loses its line breaks and ends in an ellipsis, a Valkey command keeps its
+  verb and arguments and cuts its keys in the middle between segments (`app:…:nightly-sweep`).
+- **Expandable:** a label or chip that lost text shows the expand glyph at its end (accent on the
+  current or hovered row). Hovering a row lights it, shows the link pointer and a small "Details ›" where that end
+  of the row is empty.
+- **Deadlines:** a TTL's dashed line labels itself at the right edge only where no step's text is,
+  dropping the key's name first (it is cut in the middle anyway).
+- **State panel:** each key on its own line, cut in the middle between segments to the panel's width,
+  its value below (one line, cut at the end) with the TTL beside it and the bar under both. A row that
+  lost text shows a chevron; a click shows the whole key and value.
+
+**Step detail.** A click on a step's row (or Return, or the step strip, or Step in the state panel's
+header) pauses there and opens the step detail in place of the state panel, 40% of the panel's width
+(320–460 pt). The row keeps an accent outline. The detail never cuts anything short, scrolls when long,
+and its text is selectable:
+
+- a bar with ‹ State, `step 6 of 16`, previous and next, and `esc`;
+- `STEP 6 · at 10 ms · +4 ms`, the label, and the participants as chips that select their node;
+- the command: SQL formatted one clause per line with the Formatted | Raw toggle, copy and enum hovers
+  (the op detail's query block); a Valkey command taken apart into verb, keys (each on its own line,
+  wrapping between segments), script and arguments, with copy; anything else verbatim, with copy;
+- the reply, coloured by what it means; each key the step changed with its value, TTL and what
+  happened to it (set, renewed, deleted, expired), and All keys back to the state panel;
+- the note, the branches that leave after this step (a click switches to them), and the step's `code:`.
+
+Before the first step it shows the summary, the participants, the state at the start and the code.
+← and → (and the bar's arrows) move it along, and so does playback; Esc or a click on empty diagram
+space closes it, and a second Esc closes the player. It opens on the frame of the click, with no
+animation.
+
 ## Overlays
 
-All overlays are drawn inside the window (see docs/architecture.md, Hidden mode).
+All overlays are drawn inside the window (see docs/architecture.md, Hidden mode). Detail that
+belongs to a panel opens as a pane inside it (the op detail over the inspector, the step detail
+beside the sequence diagram), never as a card over what it explains.
 
 - **Context menu:**
   - `Theme.overlay` with a hairline border, radius 8, and a 0 12 32 black-45% shadow.

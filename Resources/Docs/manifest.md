@@ -566,6 +566,7 @@ command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases 
           reply: OK
           at: 0s
           state: [ { key: "roster:inst:a", value: "1", ttl: 15s } ]
+          code: internal/roster/roster.go:52
         - { id: hb1, from: a, to: v, label: heartbeat 1, command: "PEXPIRE roster:inst:a 15000", reply: "1", at: 5s,
             state: [ { key: "roster:inst:a", value: "1", ttl: 15s } ] }
         - { id: hb2, from: a, to: v, label: heartbeat 2, command: "PEXPIRE roster:inst:a 15000", reply: "1", at: 10s,
@@ -583,6 +584,11 @@ command, its reply, and how the state (keys, TTLs, rows) changes. Failure cases 
 - `from: v, to: v` is a self-step: an expiry, a timer, internal work.
 - `at` builds a timeline, `command` and `reply` are shown verbatim, and `state` changes the
   state panel. `value: null` deletes a key, and `ttl` counts down while playing.
+- `code:` on a step (one path or a list) says where the code takes it; the step detail links it.
+- Write commands and replies in full: the diagram shortens them to one line (a long Valkey key is cut
+  in the middle), and clicking a step opens its detail with everything: the SQL formatted one clause
+  per line, a Valkey command split into verb, keys and arguments, the reply, every state change and
+  the note.
 - Participants with `node:` link to the diagram.
 - An operation can have `how:` too.
 - Step `id`s default to `s1`, `s2`, … (`<branch>-s1`, … in a branch). Validation checks that participants
