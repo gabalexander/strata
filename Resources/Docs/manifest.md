@@ -123,6 +123,11 @@ Any node can have its own level inside it:
 - `kind: port` nodes stand for the outside world inside a deep dive (who calls in, what it calls out to).
 - `rate: parent` makes a flow follow the measured request rate of the node you drilled into
   (5/s when opened directly).
+- **Processes.** The `service`, `worker`, `cron` and `function` nodes of an `inside:` level are the
+  processes the node runs. Its card lists them as chips (`api · worker · scheduler`, then `+N` when
+  they don't fit) and is 16 pt taller. Clicking a chip dives in with that process selected; hovering
+  the card lists each with its `tech`, `binary` and `code`. A repo that builds several binaries
+  (`cmd/api`, `cmd/worker`, `cmd/scheduler`) is one node with one process node per binary inside.
 
 ## Nodes
 
@@ -137,6 +142,7 @@ Any node can have its own level inside it:
     Owns the order lifecycle...
   term: grpc            # glossary term shown when hovering the node
   code: services/orders # or a list; relative to `repo`, `path:line` allowed
+  binary: cmd/orders    # the executable it runs as (a `cmd/*` main package, a Procfile entry)
   icon: shippingbox     # SF Symbol override
   links: [...]
   inside: {...}         # a nested level (deep dive)
@@ -277,6 +283,14 @@ names its buffer in `topic` or `target`). Override with `direction: in|out`.
 | `storage` (S3, GCS, blob) | `key` (object key pattern), `path`, `method`, `access`, `ttl`, `payload` |
 | any kind | `doc`, `code`, `risks`, `tags`, `facts` (a map of extra facts, kept in order), `inside` / `detail` |
 
+**Queries.** `query` is the SQL exactly as the code runs it, copied verbatim from the sqlc `.sql` file,
+the ORM call or the raw SQL string: every statement of a transaction, never shortened. Write it as a `|`
+block, one clause per line. The op detail formats it anyway (major clauses on their own lines, `AND`
+under `WHERE`, subqueries indented, keywords in upper case) and shows each statement of a
+multi-statement query as its own numbered block, with `BEGIN` and `COMMIT` as markers. A toggle shows
+the query as written. `search` queries that read as SQL are shown the same way; JSON bodies are
+re-indented.
+
 `code`, `risks`, `tags`, `tables` and `indexes` take one string or a list. `status` items may be bare
 numbers (`[201, 409]`). `payload`, `request` and `response` take text, or a YAML mapping or list that
 is shown as JSON. A field another kind uses (`query` on a `publish`) is a warning.
@@ -315,6 +329,9 @@ Validation checks:
 - `calls` and step or flow `op` references resolve. It's a warning when they don't line up: `calls`
   should name an inbound op on the target, and a step should name the op it performs (the caller's
   outbound op to that target, or the target's inbound op);
+- a `sql` op has a `query`, and the query is whole: a warning names one that looks elided (`...`,
+  `…`, `<query>`, `TODO`), and a statement that isn't (a `SELECT` without `FROM` that computes
+  nothing, an `UPDATE` without `SET`, an `INSERT` without `INTO`, a description in words);
 - an op that no flow or step names is fine. It still documents the code.
 
 `strata ops <file|id>` lists every op per level and node, with the flows that name it.
