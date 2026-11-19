@@ -15,7 +15,7 @@ It is Swift 6.3 with SwiftUI and AppKit, built with SwiftPM and the Command Line
 | `StrataCore` | model, YAML parser, validation, layout, engine, library, vault, glossary. No UI imports | Foundation |
 | `StrataUI` | every view, the theme, overlays, the app model | StrataCore |
 | `StrataApp` | the executable: AppKit delegate, hidden windows, hotkey, menu bar, URL scheme | Core, UI |
-| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `schema`, `paths` | Core |
+| `strata` | CLI for agents and scripts: `validate`, `list`, `new`, `open`, `simulate`, `ops`, `data`, `enums`, `analyze`, `how`, `ask`, `schema`, `paths` | Core |
 | `StrataSnapshot` | renders scenes with fixture data to PNG, no screen permission needed | Core, UI |
 | `StrataChecks` | assertions, since XCTest is unavailable without Xcode | Core |
 
@@ -36,6 +36,7 @@ Sources/StrataCore/
   Terms/TermIndex.swift       glossary packs + auto-linking
   Vault/Vault.swift           notes on disk, links, backlinks, search
   Support/                    Paths, Config, Fixtures, SQLFormat (the op query formatter)
+  Ask/                        Ask the map: digest, prompt, links, claude discovery, runner, stream parser, history
 Sources/StrataUI/
   Theme/Theme.swift           CONTRACT: colours, type, radii, motion
   Overlay/Overlays.swift      CONTRACT: in-window menus, term cards, toasts, .onRightClick
@@ -59,8 +60,50 @@ Everything lives under `~/.strata/` (`STRATA_HOME` overrides it):
 - `vault/`: markdown notes;
 - `config.yaml`;
 - `state.json`: window and UI state (the open route, and each map's vertical/horizontal switch).
+- `ask/`: Ask history, one JSON Lines file per map (`<id>.jsonl`), and `settings.json` (the in-app
+  switch and the maps whose privacy notice was seen). The directory is 0700.
 
 Nothing about a work project goes into this repo.
+
+## Ask the map
+
+The dock's Ask tab and `strata ask <id> "question"` answer questions about a map with the user's own
+Claude Code CLI, never an API key of Strata's.
+
+- **Finding `claude`.** A GUI app's PATH is minimal, so `ClaudeLocator` tries `ask.claude` from
+  config.yaml, then `zsh -lc 'command -v claude'` (then `-lic`, for a PATH set in .zshrc), then the
+  installers' locations (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin`,
+  npm, volta, bun, pnpm, nvm). The child gets the login shell's PATH, so a Node-based install finds `node`.
+- **The run.** `claude -p --output-format stream-json --verbose --include-partial-messages
+  --append-system-prompt <prompt> --tools Read,Grep,Glob --allowedTools Read Grep Glob
+  --disallowedTools Bash Edit Write NotebookEdit WebFetch WebSearch Agent Task --strict-mcp-config
+  --no-session-persistence --disable-slash-commands [--add-dir <repo>] [--model <ask.model>]`, with the
+  message on stdin. The working directory is the map's `repo:` when it is on this machine, else an
+  empty temporary directory. No model flag unless `ask: { model: … }` sets one: the user's Claude Code
+  default applies. Stop kills the process (SIGTERM, then SIGKILL); 90 s without output or 5 minutes in
+  all stops it as timed out.
+- **The message.** `AskDigest` renders the whole manifest as compact text with the ids the answer's
+  links use: every level, node, op (kind, target, tables, the full query), mechanism (steps with
+  commands), enum (values, transitions), table (columns, sample rows), flow, control and scenario. It
+  fits a 150 KB budget (about 37k tokens) by tiers that cut the least important detail first (sample
+  rows, then long docs and payloads, mechanism steps, queries, and finally op details outside the level
+  on screen) and says what it cut; the selected node keeps everything and the level on screen keeps
+  one tier more. Then the manifest's path (Claude can Grep it for what was cut), whether the repo is
+  on this machine, where the user is, a recent exchange for follow-ups, and the question.
+  `strata ask <id> --digest` prints it and sends nothing.
+- **Links.** The system prompt teaches `strata:node/…`, `op/…`, `how/…`, `enum/<id>/<value>`,
+  `table/…`, `level/…`, `flow/…` and `scenario/…` (AskLinks.swift). Links resolve against the manifest
+  (exact path first, then the shallowest level with the id); the UI maps each target to its action
+  (SimAskNav.swift), and a link that doesn't resolve renders as plain text.
+- **Streaming.** `AskStream` reads stream-json: text deltas append to the answer, a new assistant
+  turn after tool use replaces it (the answer is the last turn), tool uses become the status line,
+  and the `result` line, exit status, stderr and rate-limit events become a calm failure (not
+  installed, not logged in, usage limit, overloaded, timed out) that says what to do.
+- **Privacy.** Maps are private work maps. Ask sends the digest and the question to Claude under the
+  user's own Claude Code account, and the app says so the first time on each map. "Turn Ask off" in
+  the tab, or `ask: { enabled: false }` in config.yaml (which also hides the tab), stops it, and
+  `strata ask` honours both. History stays in `~/.strata/ask`. Claude gets read-only tools only, no
+  MCP servers, and no saved session.
 
 ## Hidden mode
 

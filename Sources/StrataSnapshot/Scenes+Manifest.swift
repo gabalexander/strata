@@ -8,7 +8,7 @@ import StrataCore
 /// `STRATA_SNAP_OP` opens that operation's detail in the inspector (and selects its node). In a deep
 /// dive, `STRATA_SNAP_OP=../op` opens an op of the node it is inside, from the overview unless
 /// `STRATA_SNAP_SELECT` names a node. `STRATA_SNAP_H=1400` renders a taller frame (default 880).
-/// `STRATA_SNAP_DOCK=pressure` opens that dock tab (controls, try, pressure, log, glossary, about);
+/// `STRATA_SNAP_DOCK=pressure` opens that dock tab (controls, try, pressure, log, glossary, ask, about);
 /// `STRATA_SNAP_PRESSURE=bottlenecks` picks the Pressure section (now, bottlenecks, scale, stores,
 /// volumes, capacity) and `STRATA_SNAP_HEAT=1` turns on heat mode.
 /// `STRATA_SNAP_PATH=orders/orders#insert-order` opens a deep-dive level (node ids, `node#op` for an op's
@@ -46,9 +46,10 @@ import StrataCore
     let height = Double(env["STRATA_SNAP_H"] ?? "").map { max(400, min(4000, $0)) } ?? 880
     let dimensions = (env["STRATA_SNAP_SIZE"] ?? "").split(separator: "x").compactMap { Double($0) }
     let size = dimensions.count == 2 ? CGSize(width: dimensions[0], height: dimensions[1]) : CGSize(width: 1400, height: height)
-    // A hover card is drawn by the real overlay host, so that render hosts the whole window.
+    // A hover card is drawn by the real overlay host, and the Ask tab's field is an AppKit view:
+    // only a hosted render (the whole window) draws them.
     let hover = env["STRATA_SNAP_HOVER"]
-    return [Scene(name: name, size: size, hosted: hover != nil) {
+    return [Scene(name: name, size: size, hosted: hover != nil || env["STRATA_SNAP_DOCK"] == "ask") {
         let model = AppModel(library: Library(manifests: [manifest]),
                              vault: Vault(root: FileManager.default.temporaryDirectory.appendingPathComponent("strata-snap-vault")))
         if env["STRATA_SNAP_STAGE"] == "1" {
@@ -66,7 +67,7 @@ import StrataCore
         let selected = env["STRATA_SNAP_SELECT"] ?? op?.first.flatMap { $0 == InheritedOps.ownerKey ? nil : $0 }
         if let op, op.count == 2 { SimOpsSnapshot.open(sim, node: op[0], op: op[1], from: selected) }
         let tabs: [String: SimDockTab] = ["controls": .controls, "try": .scenarios, "scenarios": .scenarios, "pressure": .pressure,
-                                          "log": .log, "glossary": .glossary, "about": .about]
+                                          "log": .log, "glossary": .glossary, "ask": .ask, "about": .about]
         let sections: [String: SimPressureSection] = ["now": .now, "bottlenecks": .bottlenecks, "scale": .scale, "stores": .stores,
                                                       "volumes": .volumes, "capacity": .capacity]
         if let section = env["STRATA_SNAP_PRESSURE"].flatMap({ sections[$0] }) { SimPressureSnapshot.section(sim, section) }

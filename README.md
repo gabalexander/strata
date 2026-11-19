@@ -76,6 +76,19 @@ There are ten built-in lessons:
 
 ![A note with a callout, a code block and an embedded live simulator](docs/images/notes.png)
 
+### Ask the map
+
+Ask a map a question in the simulator's Ask tab (⌘L): "what happens if Valkey is down for 30 s?",
+"who writes call.status?", "why would a lead stay in 3100?". The answer streams in a few lines, and
+every node, operation, mechanism, enum value and table it mentions is a link that selects or opens it.
+When the map's repo is on this Mac, Claude can read the code to confirm.
+
+Ask runs your own Claude Code (`claude`) headless with read-only tools, under your Claude Code account:
+the question and the map leave your Mac. The app says so the first time on each map, and you can turn
+Ask off in the tab or with `ask: { enabled: false }` in `~/.strata/config.yaml` (`ask: { model: haiku }`
+picks a model). History stays in `~/.strata/ask`. From a terminal or an agent:
+`strata ask checkout "who writes orders.status?"`.
+
 ### Private by default
 
 - Strata's windows are excluded from screen sharing and screen recording.
@@ -99,6 +112,7 @@ strata new checkout --kind architecture   # starter manifest in ~/.strata/sims/c
 strata validate checkout                  # errors and warnings with line numbers and suggestions
 strata simulate checkout --seconds 30     # headless metrics per flow and node
 strata open checkout                      # show it in the app
+strata ask checkout "what if Postgres is down for 30 s?"   # ask Claude about the map
 strata schema                             # the full format reference
 ```
 
@@ -144,6 +158,7 @@ scenarios:
 | ⌘\\, ⌘⌥I, ⌘J | sidebar, inspector, simulator dock |
 | Space, `.`, ⌘R, ⌘0 | play/pause, step, reset, fit (in a simulator) |
 | ⌥⌘L, ⌥⌘V | tidy a manual layout; run the map top to bottom or left to right (in a simulator) |
+| ⌘L | ask the map (in a simulator) |
 | ⌘⇧E | edit or read a note |
 
 ## Build from source

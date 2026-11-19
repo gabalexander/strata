@@ -79,6 +79,8 @@ Then build:
   storm, consumer lag, a cache flush, a bad deploy (`fail <node> 30%`). Each has a `goal` question and
   `say` narration at each step.
 - **Optionally a note**: `~/.strata/vault/Maps/<project>.md` with an overview, a ```strata embed and `[[links]]`.
+- **Ids and briefs feed Ask**: the app's Ask tab answers questions from the map and cites nodes, ops, mechanisms,
+  enum values and tables by id, so short, stable ids and a one-line summary on every node and op make its answers better.
 
 ## Briefs and docs
 

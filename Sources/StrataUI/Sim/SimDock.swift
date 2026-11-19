@@ -7,6 +7,7 @@ import StrataCore
     case pressure = "Pressure"
     case log = "Log"
     case glossary = "Glossary"
+    case ask = "Ask"
     case about = "About"
 
     var icon: String {
@@ -16,6 +17,7 @@ import StrataCore
         case .pressure: "gauge.with.dots.needle.67percent"
         case .log: "list.bullet.rectangle"
         case .glossary: "text.book.closed"
+        case .ask: "sparkle.magnifyingglass"
         case .about: "info.circle"
         }
     }
@@ -44,12 +46,12 @@ struct SimDock: View, Equatable {
         }
     }
 
-    private var logSelection: StageSelection? { tab == .log ? selection : nil }
+    private var logSelection: StageSelection? { tab == .log || tab == .ask ? selection : nil }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 3) {
-                ForEach(SimDockTab.allCases, id: \.self) { item in
+                ForEach(SimDockTab.allCases.filter { $0 != .ask || !SimAskState.offInConfig(model) }, id: \.self) { item in
                     Button { tab = item } label: {
                         Label(item.rawValue, systemImage: item.icon)
                             .font(Theme.ui(11, .medium))
@@ -72,6 +74,8 @@ struct SimDock: View, Equatable {
             Rectangle().fill(Theme.border).frame(height: 1)
             if tab == .pressure {
                 SimPressureTab(sim: sim, model: model, pulse: pulse, still: still, select: select)
+            } else if tab == .ask {
+                SimAskTab(sim: sim, model: model, selection: selection, still: still, select: select)
             } else {
                 scrollable
             }
@@ -87,7 +91,7 @@ struct SimDock: View, Equatable {
                 switch tab {
                 case .controls: controls
                 case .scenarios: scenarios
-                case .pressure: EmptyView()
+                case .pressure, .ask: EmptyView()
                 case .log: SimLive(sim: sim, pulse: nil) { logContent }
                 case .glossary: glossary
                 case .about: about

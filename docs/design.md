@@ -41,7 +41,7 @@ Use `Theme` (Sources/StrataUI/Theme/Theme.swift) for every colour, font and radi
 │  tree     │                                               │ metrics,     │
 │ Sims      │  narration strip ─────────────────────────────│ params,      │
 │  by cat.  ├───────────────────────────────────────────────┤ actions,     │
-│ Maps      │ dock: Controls · Try this · Log · Glossary    │ your note    │
+│ Maps      │ dock: Controls · Try this · Log · Glossary·Ask│ your note    │
 └───────────┴───────────────────────────────────────────────┴──────────────┘
 ```
 
@@ -208,6 +208,36 @@ start and the code.
 ← and → (and the bar's arrows) move it along, and so does playback; Esc or a click on empty diagram
 space closes it, and a second Esc closes the player. It opens on the frame of the click, with no
 animation.
+
+## Ask
+
+The dock's Ask tab (⌘L, or "Ask the map…" in ⌘K) answers questions about the map in place: what breaks
+if a store is down, who writes a column, why a status sticks. It runs the user's own Claude Code
+(docs/architecture.md, Ask the map).
+
+- **Field:** the app's own text field on `Theme.raised` in a radius 8 box, an accent sparkle on the
+  left, `⌘L` faint on the right until focused, then Ask (Return) or, while an answer streams, an
+  amber Stop. The tab is taller than the others (up to 440 pt) and stays the open tab across the
+  levels of a map, so a link that dives keeps the answer in view.
+- **Before the first question** on a map: a one-line notice in a faint warn box says the question and
+  the map go to Claude under the user's Claude Code account, with Got it and Turn Ask off. Asking
+  counts as seen. "Try asking" chips below are questions made from the map, about the selected node
+  when there is one.
+- **The answer** streams into a card: the question in 13 pt semibold, the model and seconds faint on
+  the right, a copy button when done, then the answer as markdown (paragraphs, bullets, numbered
+  lists, headings, code). Every `strata:` link that resolves is an accent link; one that doesn't is
+  plain text. While it runs, a pulsing accent dot and one muted line say what Claude is reading
+  ("Reading internal/pacing.go") or "Writing…".
+- **Links** select a node, open an op's detail over the inspector, open the How it works player at
+  the mechanism, open the enum detail on its value, open a table in its database's Data section,
+  dive into a level, select a flow or run a scenario. A target on another level opens that level with
+  its node selected.
+- **Beside the answer** when there is room (else under it): "Ask next" chips and "Earlier", the map's
+  previous questions, each a row that expands to its answer, with Clear history.
+- **Failures** are calm: a faint warn box with a title, what to do ("Run `claude` once in a terminal
+  to log in") and Try again. Stopped answers keep what streamed, marked "Stopped."
+- **Off** (Turn Ask off): the tab says what Ask would send and offers Turn Ask on. `ask: { enabled:
+  false }` in config.yaml hides the tab and the ⌘K entry.
 
 ## Overlays
 
