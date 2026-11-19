@@ -3,8 +3,8 @@ import Foundation
 /// Places a level and reports layout problems as warnings:
 ///
 /// - `auto`: hints (`at`) the layout could not follow;
-/// - `manual`: overlapping nodes, edges whose straight line runs through another node, and more than
-///   a few crossing edges.
+/// - `manual`: overlapping nodes, group regions that overlap or cover other nodes, edges whose straight
+///   line runs through another node, and more than a few crossing edges.
 enum LayoutValidation {
     static let crossingLimit = 3
 
@@ -37,6 +37,11 @@ enum LayoutValidation {
                     "edge \(edge.replacingOccurrences(of: "->", with: " → ")) runs straight through '\(node)'; move one of them, or remove layout: manual",
                     .warning)
             }
+            var groupFields: [String: Field] = [:]
+            for (group, location) in zip(level.groups, field["groups"].items(named: true)) { groupFields[group.id] = location }
+            for problem in LayoutQuality.groupProblems(level) {
+                (groupFields[problem.group] ?? field).diagnose(problem.message, .warning)
+            }
             let crossings = LayoutQuality.straightCrossings(level)
             if crossings > crossingLimit {
                 (field["edges"].present ? field["edges"] : field).diagnose(
@@ -63,6 +68,48 @@ public enum LayoutQuality {
             for b in placed[(i + 1)...] where a.at != b.at {
                 if LayoutMetrics.card(at: a.at!).insetBy(dx: 1, dy: 1).intersects(LayoutMetrics.card(at: b.at!)) {
                     result.append((a.id, b.id))
+                }
+            }
+        }
+        return result
+    }
+
+    /// Group regions (as the stage draws them) that overlap another group's region or cover a node
+    /// that is not a member. Nested groups may contain each other.
+    public static func groupProblems(_ level: Level) -> [(group: String, message: String)] {
+        let rects = cards(level)
+        var children: [String: [String]] = [:]
+        for group in level.groups { if let parent = group.parent { children[parent, default: []].append(group.id) } }
+        func members(_ id: String, _ seen: Set<String> = []) -> Set<String> {
+            guard !seen.contains(id) else { return [] }
+            var result = Set(level.nodes.filter { $0.group == id }.map(\.id))
+            for child in children[id] ?? [] { result.formUnion(members(child, seen.union([id]))) }
+            return result
+        }
+        func ancestors(_ id: String) -> Set<String> {
+            var result: Set<String> = [], current = level.groups.first { $0.id == id }?.parent
+            while let parent = current, result.insert(parent).inserted { current = level.groups.first { $0.id == parent }?.parent }
+            return result
+        }
+        var regions: [(id: String, rect: CGRect, members: Set<String>)] = []
+        for group in level.groups {
+            let inside = members(group.id)
+            let bounds = inside.compactMap { rects[$0] }.reduce(CGRect.null) { $0.union($1) }
+            guard !bounds.isNull else { continue }
+            let rect = CGRect(x: bounds.minX - LayoutMetrics.groupSide, y: bounds.minY - LayoutMetrics.groupTop,
+                              width: bounds.width + LayoutMetrics.groupSide * 2,
+                              height: bounds.height + LayoutMetrics.groupTop + LayoutMetrics.groupBottom)
+            regions.append((group.id, rect, inside))
+        }
+        var result: [(String, String)] = []
+        for (i, a) in regions.enumerated() {
+            let covered = level.nodes.filter { !a.members.contains($0.id) && rects[$0.id].map { a.rect.insetBy(dx: 2, dy: 2).intersects($0) } == true }
+            if let node = covered.first {
+                result.append((a.id, "group '\(a.id)' covers '\(node.id)', which is not in it; move them apart, or remove layout: manual"))
+            }
+            for b in regions[(i + 1)...] where !ancestors(a.id).contains(b.id) && !ancestors(b.id).contains(a.id) {
+                if a.rect.insetBy(dx: 1, dy: 1).intersects(b.rect) {
+                    result.append((b.id, "groups '\(a.id)' and '\(b.id)' overlap; move their nodes apart, or remove layout: manual"))
                 }
             }
         }

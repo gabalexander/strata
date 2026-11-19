@@ -146,9 +146,11 @@ import StrataCore
         },
         CheckCase(name: "layout warns about manual overlaps, edges through nodes, crossings and contradictory hints") {
             let manual = ManifestParser.parse(messyManifest(manual: true), source: .file(URL(fileURLWithPath: "/tmp/messy.yaml"))).1
-            check(manual.contains { $0.message.contains("overlap") } == false, "unexpected overlap warning: \(manual)")
+            check(manual.contains { $0.message.contains("overlap; move one of them") } == false, "unexpected node overlap warning: \(manual)")
             check(manual.contains { $0.message.contains("runs straight through") }, "missing edge-through-node warning")
             check(manual.contains { $0.message.contains("consider layout: auto") }, "missing crossings warning")
+            check(manual.contains { $0.message.contains("groups 'services' and 'data' overlap") || $0.message.contains("covers") },
+                  "missing group warning: \(manual)")
             let overlap = ManifestParser.parse(layoutHeader + """
                 layout: manual
                 nodes: [{id: a, kind: service, at: [0, 0]}, {id: b, kind: service, at: [0.3, 0.2]}]

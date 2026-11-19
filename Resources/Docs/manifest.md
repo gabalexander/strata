@@ -114,8 +114,8 @@ included, as a whiteboard diagram:
   hinted left of a node that calls it.
 
 With `layout: manual`, `at` is exact (nodes without one are fitted around the rest). Validation
-warns about overlapping nodes, edges whose straight line runs through another node, and more than
-three crossing edges. **Tidy layout** (toolbar or ⌘K, ⌥⌘L) lays out a manual level automatically for
+warns about overlapping nodes, group regions that overlap or cover other nodes, edges whose straight
+line runs through another node, and more than three crossing edges. **Tidy layout** (toolbar or ⌘K, ⌥⌘L) lays out a manual level automatically for
 the session, using its positions as hints.
 
 ## Levels and deep dives
